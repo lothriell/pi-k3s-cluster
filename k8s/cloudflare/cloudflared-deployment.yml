@@ -1,0 +1,161 @@
+# =============================================================================
+# Cloudflared Tunnel Deployment
+# =============================================================================
+# Cloudflare Tunnel (formerly Argo Tunnel) creates an encrypted outbound-only
+# connection from your cluster to Cloudflare's edge network. This lets you
+# expose services to the internet WITHOUT opening any inbound ports on your
+# router/firewall.
+#
+# Architecture:
+#   [Internet] --> [Cloudflare Edge] <--tunnel-- [cloudflared pod] --> [K8s Service]
+#
+#   - cloudflared makes an outbound connection to Cloudflare (no port forwarding)
+#   - Cloudflare proxies incoming requests through the tunnel
+#   - 2 replicas for high availability (if one pod dies, the other handles traffic)
+#   - The tunnel config maps public hostnames to internal K8s Services
+#
+# Prerequisites:
+#   1. Install cloudflared CLI on your local machine:
+#        brew install cloudflared    (macOS)
+#        sudo apt install cloudflared  (Debian/Ubuntu)
+#
+#   2. Authenticate with Cloudflare:
+#        cloudflared tunnel login
+#
+#   3. Create a tunnel:
+#        cloudflared tunnel create pi-cluster
+#      This outputs a tunnel ID (UUID) and creates a credentials file at:
+#        ~/.cloudflared/<TUNNEL-ID>.json
+#
+#   4. Create the K8s secret from the credentials file:
+#        kubectl create secret generic cloudflared-credentials \
+#          -n cloudflare \
+#          --from-file=credentials.json=$HOME/.cloudflared/<TUNNEL-ID>.json
+#
+#   5. Configure DNS (for each hostname you want to expose):
+#        cloudflared tunnel route dns pi-cluster grafana.yourdomain.com
+#        cloudflared tunnel route dns pi-cluster gitea.yourdomain.com
+#
+#   6. Update the ConfigMap (cloudflared-config.yml) with your tunnel ID and
+#      hostnames, then apply both files:
+#        kubectl apply -f cloudflared-config.yml
+#        kubectl apply -f cloudflared-deployment.yml
+#
+# =============================================================================
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared
+  namespace: cloudflare
+  labels:
+    app: cloudflared
+spec:
+  # Two replicas for high availability. Cloudflare load-balances between them.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cloudflared
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # During updates, keep at least 1 replica running at all times
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: cloudflared
+    spec:
+      # Schedule on ARM64 nodes (all Pi CM5 nodes are ARM64)
+      nodeSelector:
+        kubernetes.io/arch: arm64
+
+      containers:
+        - name: cloudflared
+          # The official Cloudflare image supports linux/arm64
+          image: cloudflare/cloudflared:latest
+          args:
+            - tunnel
+            # Use the config file mounted from the ConfigMap
+            - --config
+            - /etc/cloudflared/config.yml
+            # Metrics endpoint for Prometheus scraping (optional)
+            - --metrics
+            - 0.0.0.0:2000
+            - run
+
+          # Liveness probe -- cloudflared exposes a /ready endpoint on the
+          # metrics port. If it becomes unhealthy, K8s will restart the pod.
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: 2000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+
+          # Readiness probe -- same as liveness. Pod will not receive traffic
+          # until it is ready.
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 2000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          # Resource limits -- cloudflared is lightweight
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+
+          # Mount the tunnel config and credentials
+          volumeMounts:
+            # Tunnel configuration (hostnames, ingress rules)
+            - name: config
+              mountPath: /etc/cloudflared/config.yml
+              subPath: config.yml
+              readOnly: true
+            # Tunnel credentials (authentication with Cloudflare)
+            - name: credentials
+              mountPath: /etc/cloudflared/credentials.json
+              subPath: credentials.json
+              readOnly: true
+
+      volumes:
+        # ConfigMap containing the tunnel config (ingress rules, etc.)
+        - name: config
+          configMap:
+            name: cloudflared-config
+        # Secret containing the tunnel credentials JSON file
+        - name: credentials
+          secret:
+            secretName: cloudflared-credentials
+
+---
+# ---------------------------------------------------------------------------
+# Optional: Service for Prometheus metrics scraping
+# ---------------------------------------------------------------------------
+# If you want Prometheus to scrape cloudflared metrics, uncomment this
+# Service and add a ServiceMonitor or scrape config.
+# ---------------------------------------------------------------------------
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: cloudflared-metrics
+#   namespace: cloudflare
+#   labels:
+#     app: cloudflared
+# spec:
+#   selector:
+#     app: cloudflared
+#   ports:
+#     - name: metrics
+#       port: 2000
+#       targetPort: 2000
+#       protocol: TCP

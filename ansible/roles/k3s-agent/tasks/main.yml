@@ -1,0 +1,48 @@
+---
+# K3s agent (worker) installation tasks
+
+- name: Check if K3s agent is already installed
+  ansible.builtin.stat:
+    path: /usr/local/bin/k3s
+  register: k3s_agent_binary
+
+- name: Download and install K3s in agent mode joining the server
+  ansible.builtin.shell: |
+    curl -sfL https://get.k3s.io | \
+      INSTALL_K3S_VERSION="{{ k3s_version }}" \
+      K3S_URL="{{ k3s_server_url }}" \
+      K3S_TOKEN="{{ hostvars[groups['k3s_server'][0]]['k3s_node_token'] }}" \
+      sh -s - agent
+  args:
+    creates: /usr/local/bin/k3s
+  when: not k3s_agent_binary.stat.exists
+  notify: restart k3s-agent
+  tags: [k3s, install]
+
+- name: Ensure K3s agent service is enabled and running
+  ansible.builtin.systemd:
+    name: k3s-agent
+    enabled: true
+    state: started
+    daemon_reload: true
+  tags: [k3s, service]
+
+- name: Wait for K3s agent service to be active
+  ansible.builtin.systemd:
+    name: k3s-agent
+  register: k3s_agent_status
+  retries: 15
+  delay: 10
+  until: k3s_agent_status.status.ActiveState == "active"
+  tags: [k3s]
+
+- name: Verify this node has joined the cluster
+  ansible.builtin.command: >
+    k3s kubectl get node {{ inventory_hostname }}
+  register: node_joined
+  retries: 15
+  delay: 10
+  until: node_joined.rc == 0
+  changed_when: false
+  delegate_to: "{{ groups['k3s_server'][0] }}"
+  tags: [k3s, verify]

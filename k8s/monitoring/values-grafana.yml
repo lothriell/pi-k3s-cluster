@@ -1,0 +1,131 @@
+# =============================================================================
+# Helm Values: grafana/grafana
+# =============================================================================
+# Tuned for Raspberry Pi CM5 (ARM64, 16GB RAM per node).
+#
+# Install with:
+#   helm repo add grafana https://grafana.github.io/helm-charts
+#   helm repo update
+#   helm install grafana grafana/grafana \
+#     -n monitoring \
+#     -f values-grafana.yml
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Admin credentials
+# ---------------------------------------------------------------------------
+# TODO CHANGEME -- change this password immediately after first login!
+# You can also set it via: --set adminPassword="your-secure-password"
+adminUser: admin
+adminPassword: admin
+
+# ---------------------------------------------------------------------------
+# Resources -- keep Grafana lightweight on the Pi.
+# ---------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 300m
+    memory: 256Mi
+
+# ---------------------------------------------------------------------------
+# Persistence -- store dashboards and settings across restarts.
+# ---------------------------------------------------------------------------
+persistence:
+  enabled: true
+  size: 5Gi
+  # Uses default StorageClass (K3s local-path-provisioner).
+  # storageClassName: ""
+
+# ---------------------------------------------------------------------------
+# Node selector -- ensure scheduling on ARM64 nodes.
+# ---------------------------------------------------------------------------
+nodeSelector:
+  kubernetes.io/arch: arm64
+
+# ---------------------------------------------------------------------------
+# Datasources -- pre-configure Prometheus so it is ready on first login.
+# The URL points to the Prometheus server Service within the monitoring
+# namespace (ClusterIP, no external access needed).
+# ---------------------------------------------------------------------------
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        # This DNS name resolves inside the cluster:
+        #   <service-name>.<namespace>.svc.cluster.local
+        url: http://prometheus-server.monitoring.svc.cluster.local
+        access: proxy
+        isDefault: true
+        editable: true
+
+# ---------------------------------------------------------------------------
+# Dashboard providers -- tell Grafana where to find dashboard JSON files.
+# ---------------------------------------------------------------------------
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: default
+        orgId: 1
+        folder: ""
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/default
+
+# ---------------------------------------------------------------------------
+# Dashboards -- auto-import community dashboards by ID from grafana.com.
+#
+#   15757 = "Kubernetes / Views / Global" -- a great overview dashboard.
+#   1860  = "Node Exporter Full" -- per-node hardware metrics.
+#
+# Grafana downloads these on startup. No manual import needed.
+# Browse more at https://grafana.com/grafana/dashboards/
+# ---------------------------------------------------------------------------
+dashboards:
+  default:
+    kubernetes-global:
+      gnetId: 15757
+      revision: 37
+      datasource: Prometheus
+    node-exporter:
+      gnetId: 1860
+      revision: 37
+      datasource: Prometheus
+
+# ---------------------------------------------------------------------------
+# Ingress -- expose Grafana through Traefik (K3s default ingress controller).
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    # Uncomment the lines below once cert-manager is working to get
+    # automatic TLS certificates from Let's Encrypt:
+    # cert-manager.io/cluster-issuer: letsencrypt-production
+  hosts:
+    # TODO CHANGEME -- replace with your actual domain
+    - grafana.yourdomain.com
+  # Uncomment to enable TLS (requires cert-manager):
+  # tls:
+  #   - secretName: grafana-tls
+  #     hosts:
+  #       - grafana.yourdomain.com
+
+# ---------------------------------------------------------------------------
+# Grafana configuration overrides (grafana.ini)
+# ---------------------------------------------------------------------------
+grafana.ini:
+  server:
+    # TODO CHANGEME -- set to your actual Grafana URL
+    root_url: http://grafana.yourdomain.com
+  # Disable analytics/telemetry to save bandwidth on a Pi
+  analytics:
+    check_for_updates: false
+    reporting_enabled: false

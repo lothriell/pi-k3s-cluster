@@ -1,0 +1,51 @@
+---
+# Playbook 05: Deploy Gitea self-hosted Git service
+# Deploys via Helm from localhost using a custom values file.
+# Values file should be placed at ../helm-values/gitea-values.yaml before running.
+#
+# Usage: ansible-playbook playbooks/05-deploy-gitea.yml
+
+- name: Deploy Gitea to the K3s cluster
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+
+  vars:
+    gitea_values: "{{ playbook_dir }}/../../k8s/gitea/values-gitea.yml"
+
+  tasks:
+    # -- Gitea -----------------------------------------------------------------
+
+    - name: Deploy Gitea via Helm
+      ansible.builtin.command: >
+        helm upgrade --install gitea
+        gitea/gitea
+        --namespace gitea
+        --values {{ gitea_values }}
+        --wait
+        --timeout 10m
+      register: gitea_deploy
+      changed_when: "'STATUS: deployed' in gitea_deploy.stdout"
+      tags: [gitea]
+
+    - name: Wait for Gitea pods to be ready
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Ready pods
+        --all --namespace gitea
+        --timeout=300s
+      changed_when: false
+      tags: [gitea]
+
+    # -- Summary ---------------------------------------------------------------
+
+    - name: Show Gitea pod status
+      ansible.builtin.command: kubectl get pods -n gitea -o wide
+      register: gitea_pods
+      changed_when: false
+      tags: [verify]
+
+    - name: Display Gitea pods
+      ansible.builtin.debug:
+        var: gitea_pods.stdout_lines
+      tags: [verify]

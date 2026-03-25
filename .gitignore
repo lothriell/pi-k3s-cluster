@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+
+# Claude Code
+.claude/
+
+# Ansible
+*.retry
+*.pyc
+__pycache__/
+
+# Vagrant
+.vagrant/
+
+# Logs
+*.log
+
+# Secrets (never commit these)
+secrets/
+*.pem
+*.key
+tunnel-credentials.json
+.env
+
+# Kubeconfig copies
+kubeconfig
+kubeconfig.*

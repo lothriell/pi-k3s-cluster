@@ -1,0 +1,91 @@
+# =============================================================================
+# Example ArgoCD Application -- deploy a workload from a Gitea repo
+# =============================================================================
+# An "Application" is ArgoCD's core concept. It defines:
+#   - WHERE to find the Kubernetes manifests (a Git repo + path)
+#   - WHERE to deploy them (which cluster + namespace)
+#   - HOW to keep them in sync (manual or automatic)
+#
+# This example watches a repo in your local Gitea and automatically deploys
+# any Kubernetes manifests it finds there. When you push changes to the repo,
+# ArgoCD will detect them and apply the updated manifests to your cluster.
+#
+# How to use:
+#   1. Create a repo in Gitea (e.g., "my-app") with Kubernetes YAML files.
+#   2. Update the placeholder values below (repo URL, path, namespace).
+#   3. Apply this manifest:
+#        kubectl apply -f example-app.yml
+#   4. Open the ArgoCD UI to see your app appear and sync.
+# =============================================================================
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  # The name of this Application as it will appear in the ArgoCD UI.
+  # Choose something descriptive.
+  name: example-app
+  # Applications must live in the argocd namespace so the ArgoCD controller
+  # can find and manage them.
+  namespace: argocd
+spec:
+  # ---------------------------------------------------------------------------
+  # Project -- ArgoCD projects are a way to group applications and control
+  # access. "default" is the built-in project that allows deploying to any
+  # namespace and cluster. Fine for a learning setup.
+  # ---------------------------------------------------------------------------
+  project: default
+
+  # ---------------------------------------------------------------------------
+  # Source -- WHERE ArgoCD should look for Kubernetes manifests.
+  # ---------------------------------------------------------------------------
+  source:
+    # TODO CHANGEME -- the Git repo URL in your Gitea instance.
+    # Use the in-cluster URL so ArgoCD can reach Gitea directly.
+    # Replace <your-username> and <your-repo> with real values.
+    repoURL: http://gitea-http.gitea.svc.cluster.local:3000/CHANGEME/CHANGEME.git
+
+    # The Git branch to watch. ArgoCD will deploy whatever is on this branch.
+    targetRevision: main
+
+    # The path within the repo where Kubernetes manifests live.
+    # "." means the root of the repo. You could also use a subdirectory
+    # like "k8s/" or "manifests/" if your repo is organized that way.
+    path: .
+
+  # ---------------------------------------------------------------------------
+  # Destination -- WHERE ArgoCD should deploy the manifests.
+  # ---------------------------------------------------------------------------
+  destination:
+    # "https://kubernetes.default.svc" means the local cluster (the one
+    # ArgoCD is running on). You would change this if deploying to a
+    # remote cluster.
+    server: https://kubernetes.default.svc
+
+    # TODO CHANGEME -- the namespace where your app will be deployed.
+    # Make sure this namespace exists, or enable auto-creation below.
+    namespace: CHANGEME
+
+  # ---------------------------------------------------------------------------
+  # Sync Policy -- HOW ArgoCD keeps the cluster in sync with Git.
+  # ---------------------------------------------------------------------------
+  syncPolicy:
+    # Automated sync means ArgoCD will apply changes automatically when it
+    # detects a new commit. Without this, you would have to click "Sync"
+    # manually in the UI every time.
+    automated:
+      # Prune: if you DELETE a manifest file from Git, ArgoCD will also
+      # delete the corresponding resource from the cluster. Without this,
+      # removed files would leave orphaned resources running.
+      prune: true
+
+      # Self-heal: if someone manually changes a resource in the cluster
+      # (e.g., with kubectl edit), ArgoCD will revert it back to match
+      # what is in Git. This is the core GitOps principle -- Git is the
+      # single source of truth.
+      selfHeal: true
+
+    # Sync options control additional behaviors during sync.
+    syncOptions:
+      # Automatically create the target namespace if it does not exist.
+      # This saves you from having to run "kubectl create namespace" first.
+      - CreateNamespace=true

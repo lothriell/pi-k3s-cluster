@@ -1,0 +1,261 @@
+# =============================================================================
+#  *** HEAVY ALTERNATIVE -- GitLab on Raspberry Pi CM5 ***
+# =============================================================================
+#
+#  WARNING: GitLab is resource-hungry. Even with this stripped-down config,
+#  it will consume a LARGE portion of your cluster resources:
+#
+#    - Minimum 8GB RAM dedicated to GitLab pods
+#    - Significant CPU usage during Git operations and CI pipelines
+#    - Needs fast storage (M.2 NVMe drives strongly recommended)
+#    - First boot can take 10-15 minutes on ARM64
+#
+#  RECOMMENDATION: Use Gitea instead (see ../gitea/values-gitea.yml).
+#  Gitea provides 90% of the features at 10% of the resource cost.
+#  Only use GitLab if you specifically need its CI/CD, container registry,
+#  or enterprise features.
+#
+#  If you still want GitLab, make sure you have:
+#    1. M.2 NVMe drives on your CM5 IO boards (SD cards will be painful)
+#    2. At least one node with 8GB+ RAM available for GitLab
+#    3. Patience -- ARM64 GitLab is slower than x86
+#
+#  Install with:
+#    helm repo add gitlab https://charts.gitlab.io/
+#    helm repo update
+#    helm install gitlab gitlab/gitlab \
+#      -n gitlab --create-namespace \
+#      -f values-gitlab.yml \
+#      --timeout 600s
+#
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Global settings
+# ---------------------------------------------------------------------------
+global:
+  # TODO CHANGEME -- your domain. GitLab will be at gitlab.yourdomain.com
+  hosts:
+    domain: yourdomain.com
+    https: false
+    # Disable the automatic external IP detection (we use MetalLB/Traefik)
+    externalIP: ""
+
+  # -- Ingress: use Traefik (K3s default) instead of GitLab's bundled nginx
+  ingress:
+    enabled: true
+    class: traefik
+    annotations:
+      kubernetes.io/ingress.class: traefik
+    configureCertmanager: false
+    # Uncomment once cert-manager is working:
+    # tls:
+    #   enabled: true
+
+  # -- Reduce resource usage by disabling internal TLS between components
+  #    (fine for a home lab behind Cloudflare Tunnel)
+  workhorse:
+    tls:
+      enabled: false
+
+  # -- Container registry: disabled to save resources
+  registry:
+    enabled: false
+
+  # -- GitLab Pages: disabled to save resources
+  pages:
+    enabled: false
+
+  # -- Grafana bundled with GitLab: disabled (we have our own)
+  grafana:
+    enabled: false
+
+  # -- Use the smallest viable Redis config
+  redis:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+  # -- Use the smallest viable PostgreSQL config
+  psql:
+    # Use the bundled PostgreSQL. For even better performance, consider
+    # running PostgreSQL outside the cluster on bare metal.
+    password: {}
+
+  # Timezone
+  time_zone: UTC
+
+  # -- Node selector applied globally to all GitLab sub-charts
+  nodeSelector:
+    kubernetes.io/arch: arm64
+
+# ---------------------------------------------------------------------------
+# Bundled NGINX ingress controller -- DISABLED (we use Traefik from K3s)
+# ---------------------------------------------------------------------------
+nginx-ingress:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# Bundled cert-manager -- DISABLED (we install our own)
+# ---------------------------------------------------------------------------
+certmanager:
+  install: false
+
+# ---------------------------------------------------------------------------
+# Bundled Prometheus -- DISABLED (we have our own in the monitoring namespace)
+# ---------------------------------------------------------------------------
+prometheus:
+  install: false
+
+# ---------------------------------------------------------------------------
+# Container Registry -- DISABLED to save resources
+# ---------------------------------------------------------------------------
+registry:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# GitLab Runner (CI/CD) -- DISABLED to save resources.
+# Enable later if you need CI/CD pipelines.
+# ---------------------------------------------------------------------------
+gitlab-runner:
+  install: false
+
+# ---------------------------------------------------------------------------
+# GitLab Webservice (Rails app) -- the main UI and API.
+# This is the heaviest component.
+# ---------------------------------------------------------------------------
+gitlab:
+  webservice:
+    # Single replica to save resources
+    replicaCount: 1
+    minReplicas: 1
+    maxReplicas: 1
+    resources:
+      requests:
+        cpu: 300m
+        memory: 2Gi
+      limits:
+        cpu: "1"
+        memory: 4Gi
+    workerProcesses: 2
+    workhorse:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 300m
+          memory: 256Mi
+
+  # -- Sidekiq: processes background jobs (emails, webhooks, etc.)
+  sidekiq:
+    replicas: 1
+    minReplicas: 1
+    maxReplicas: 1
+    resources:
+      requests:
+        cpu: 200m
+        memory: 1Gi
+      limits:
+        cpu: 500m
+        memory: 2Gi
+
+  # -- Gitaly: handles Git repository storage and access
+  gitaly:
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+    persistence:
+      enabled: true
+      size: 20Gi
+      # IMPORTANT: Use fast storage (M.2 NVMe). Uncomment and set:
+      # storageClass: "longhorn"
+
+  # -- GitLab Shell: handles SSH Git operations
+  gitlab-shell:
+    replicaCount: 1
+    minReplicas: 1
+    maxReplicas: 1
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
+  # -- Toolbox: used for backups and rake tasks. Minimal resources.
+  toolbox:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 512Mi
+
+  # -- Migrations job
+  migrations:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+
+  # -- KAS (Kubernetes Agent Server) -- disabled to save resources
+  kas:
+    enabled: false
+
+# ---------------------------------------------------------------------------
+# Bundled PostgreSQL
+# ---------------------------------------------------------------------------
+postgresql:
+  install: true
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  persistence:
+    size: 10Gi
+
+# ---------------------------------------------------------------------------
+# Bundled Redis
+# ---------------------------------------------------------------------------
+redis:
+  install: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ---------------------------------------------------------------------------
+# Bundled MinIO (object storage) -- keep it small, only used for uploads/artifacts
+# ---------------------------------------------------------------------------
+minio:
+  install: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  persistence:
+    size: 10Gi

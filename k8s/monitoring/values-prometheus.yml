@@ -1,0 +1,110 @@
+# =============================================================================
+# Helm Values: prometheus-community/prometheus
+# =============================================================================
+# Tuned for Raspberry Pi CM5 (ARM64, 16GB RAM per node).
+#
+# Install with:
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm repo update
+#   helm install prometheus prometheus-community/prometheus \
+#     -n monitoring \
+#     -f values-prometheus.yml
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Alertmanager -- disabled to save resources. Enable later when you need
+# alert routing (email, Slack, PagerDuty, etc.).
+# ---------------------------------------------------------------------------
+alertmanager:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# Pushgateway -- not needed for a basic monitoring setup. It is used to
+# push metrics from short-lived batch jobs; you can enable it later.
+# ---------------------------------------------------------------------------
+prometheus-pushgateway:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# Node Exporter -- collects hardware/OS metrics from every node.
+# Runs as a DaemonSet (one pod per node). Keep it lightweight.
+# ---------------------------------------------------------------------------
+prometheus-node-exporter:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+  # Tolerate ARM64 taints if any are set on your Pi nodes
+  tolerations:
+    - key: "node.kubernetes.io/arch"
+      operator: "Equal"
+      value: "arm64"
+      effect: "NoSchedule"
+
+# ---------------------------------------------------------------------------
+# kube-state-metrics -- exposes cluster-level metrics (deployment status,
+# pod phases, etc.). Single replica is fine.
+# ---------------------------------------------------------------------------
+kube-state-metrics:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+# ---------------------------------------------------------------------------
+# Prometheus Server -- the core metrics database.
+# ---------------------------------------------------------------------------
+server:
+  # -- How long to keep metrics. 7 days is plenty for a home lab.
+  retention: "7d"
+
+  # -- Resource requests/limits sized for a Pi with 16GB RAM.
+  #    Prometheus is the heaviest component; 512Mi limit gives headroom.
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # -- Persistent storage so metrics survive pod restarts.
+  persistentVolume:
+    enabled: true
+    size: 10Gi
+    # Uses the default StorageClass (K3s ships with local-path-provisioner).
+    # If you add Longhorn later, set storageClass: "longhorn".
+    storageClass: ""
+
+  # -- Global scrape settings. 30s is a good balance between freshness and
+  #    CPU usage on resource-constrained nodes.
+  global:
+    scrape_interval: 30s
+    evaluation_interval: 30s
+
+  # -- Node affinity is not strictly required since all nodes are ARM64,
+  #    but this makes the intent explicit.
+  nodeSelector:
+    kubernetes.io/arch: arm64
+
+# ---------------------------------------------------------------------------
+# ConfigMap reload sidecar -- watches for config changes and triggers a
+# reload without restarting the pod. Very lightweight.
+# ---------------------------------------------------------------------------
+configmapReload:
+  prometheus:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+      limits:
+        cpu: 50m
+        memory: 32Mi

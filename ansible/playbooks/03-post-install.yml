@@ -1,0 +1,78 @@
+---
+# Playbook 03: Post-install verification and Helm setup
+# Runs on localhost using the kubeconfig fetched during K3s installation.
+# Verifies kubectl connectivity, installs Helm, adds chart repos, and
+# creates the namespaces needed by subsequent playbooks.
+#
+# Usage: ansible-playbook playbooks/03-post-install.yml
+
+- name: Post-install setup - kubectl verification and Helm bootstrap
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: true
+
+  tasks:
+    # -- Verify kubectl can reach the cluster ----------------------------------
+
+    - name: Verify kubectl can list cluster nodes
+      ansible.builtin.command: kubectl get nodes -o wide
+      register: kubectl_nodes
+      changed_when: false
+      tags: [verify]
+
+    - name: Display cluster nodes
+      ansible.builtin.debug:
+        var: kubectl_nodes.stdout_lines
+      tags: [verify]
+
+    # -- Install Helm if not already present -----------------------------------
+
+    - name: Check if Helm is already installed
+      ansible.builtin.command: helm version --short
+      register: helm_check
+      ignore_errors: true
+      changed_when: false
+      tags: [helm]
+
+    - name: Download and install Helm
+      ansible.builtin.shell: |
+        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      when: helm_check.rc != 0
+      tags: [helm]
+
+    # -- Add Helm chart repositories -------------------------------------------
+
+    - name: Add Helm chart repositories
+      ansible.builtin.command: "helm repo add {{ item.name }} {{ item.url }}"
+      loop:
+        - { name: prometheus-community, url: "https://prometheus-community.github.io/helm-charts" }
+        - { name: grafana,              url: "https://grafana.github.io/helm-charts" }
+        - { name: gitea,                url: "https://dl.gitea.com/charts/" }
+        - { name: jetstack,             url: "https://charts.jetstack.io" }
+        - { name: metallb,              url: "https://metallb.github.io/metallb" }
+        - { name: argo,                url: "https://argoproj.github.io/argo-helm" }
+      register: helm_repo_add
+      changed_when: "'has been added' in helm_repo_add.stdout"
+      tags: [helm, repos]
+
+    - name: Update all Helm chart repositories
+      ansible.builtin.command: helm repo update
+      changed_when: false
+      tags: [helm, repos]
+
+    # -- Create Kubernetes namespaces ------------------------------------------
+
+    - name: Create namespaces for cluster services
+      ansible.builtin.command: "kubectl create namespace {{ item }}"
+      loop:
+        - monitoring
+        - gitea
+        - cert-manager
+        - metallb-system
+        - cloudflare
+        - argocd
+      register: ns_result
+      changed_when: ns_result.rc == 0
+      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+      tags: [namespaces]

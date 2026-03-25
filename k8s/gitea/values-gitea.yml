@@ -1,0 +1,161 @@
+# =============================================================================
+# Helm Values: gitea/gitea
+# =============================================================================
+# Lightweight self-hosted Git service, tuned for Raspberry Pi CM5 (ARM64).
+# Uses built-in SQLite instead of PostgreSQL to keep the footprint minimal.
+#
+# Install with:
+#   helm repo add gitea https://dl.gitea.com/charts/
+#   helm repo update
+#   helm install gitea gitea/gitea \
+#     -n gitea \
+#     -f values-gitea.yml
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Container image -- the official Gitea image supports linux/arm64.
+# ---------------------------------------------------------------------------
+image:
+  rootless: true
+
+# ---------------------------------------------------------------------------
+# Resources -- sized for a Pi node with 16GB RAM.
+# ---------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# Node selector -- schedule on ARM64 nodes.
+# ---------------------------------------------------------------------------
+nodeSelector:
+  kubernetes.io/arch: arm64
+
+# ---------------------------------------------------------------------------
+# Persistence -- stores Git repos, LFS objects, and Gitea data.
+# ---------------------------------------------------------------------------
+persistence:
+  enabled: true
+  size: 10Gi
+  # Uses default StorageClass (K3s local-path-provisioner).
+  # storageClassName: ""
+
+# ---------------------------------------------------------------------------
+# Database -- use SQLite instead of PostgreSQL.
+# SQLite is simpler, lighter, and perfectly fine for a small team / learning
+# environment. No separate database pod needed.
+# ---------------------------------------------------------------------------
+postgresql:
+  enabled: false
+
+postgresql-ha:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# Redis / Memcached -- disable to save resources.
+# Gitea can run fine without an external cache for small installations.
+# ---------------------------------------------------------------------------
+redis-cluster:
+  enabled: false
+
+redis:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# Gitea application configuration (app.ini)
+# ---------------------------------------------------------------------------
+gitea:
+  config:
+    # Database: SQLite file stored on the persistent volume.
+    database:
+      DB_TYPE: sqlite3
+      PATH: /data/gitea/gitea.db
+
+    # Cache: use in-memory cache instead of external Redis/Memcached.
+    cache:
+      ADAPTER: memory
+      INTERVAL: 60
+      HOST: ""
+
+    # Session: store sessions on the filesystem (no Redis needed).
+    session:
+      PROVIDER: file
+      PROVIDER_CONFIG: /data/gitea/sessions
+
+    # Queue: use a level-DB based queue (no Redis needed).
+    queue:
+      TYPE: level
+      CONN_STR: /data/gitea/queues
+
+    # Server settings
+    server:
+      # TODO CHANGEME -- set to your actual domain
+      ROOT_URL: http://gitea.yourdomain.com
+      DOMAIN: gitea.yourdomain.com
+      SSH_DOMAIN: gitea.yourdomain.com
+      # SSH on a non-standard port to avoid conflicts with host SSH
+      SSH_PORT: 2222
+      SSH_LISTEN_PORT: 2222
+      LFS_START_SERVER: true
+
+    # Reduce background task frequency to save CPU cycles on the Pi
+    cron:
+      ENABLED: true
+      RUN_AT_START: false
+    "cron.repo_health_check":
+      SCHEDULE: "@every 72h"
+    "cron.resync_all_sshkeys":
+      SCHEDULE: "@every 72h"
+
+    # Limit resource-heavy features
+    indexer:
+      REPO_INDEXER_ENABLED: false
+
+    # Logging: keep it quiet
+    log:
+      LEVEL: Warn
+
+  # -- Gitea Actions (CI/CD runner) -- disabled by default to save resources.
+  #    Enable later when you want CI/CD pipelines.
+  #    See: https://docs.gitea.com/usage/actions/overview
+  actions:
+    enabled: false
+
+# ---------------------------------------------------------------------------
+# Ingress -- expose Gitea through Traefik (K3s default ingress controller).
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    # Uncomment once cert-manager is working:
+    # cert-manager.io/cluster-issuer: letsencrypt-production
+  hosts:
+    # TODO CHANGEME -- replace with your actual domain
+    - host: gitea.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+
+  # Uncomment to enable TLS (requires cert-manager):
+  # tls:
+  #   - secretName: gitea-tls
+  #     hosts:
+  #       - gitea.yourdomain.com
+
+# ---------------------------------------------------------------------------
+# Service -- ClusterIP is fine when using Ingress. NodePort for SSH access.
+# ---------------------------------------------------------------------------
+service:
+  http:
+    type: ClusterIP
+    port: 3000
+  ssh:
+    type: NodePort
+    port: 2222
+    # TODO CHANGEME -- pick a NodePort that does not conflict with other services
+    nodePort: 30022

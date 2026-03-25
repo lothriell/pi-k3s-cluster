@@ -1,0 +1,97 @@
+---
+# K3s server (control plane) installation tasks
+
+- name: Check if K3s is already installed
+  ansible.builtin.stat:
+    path: /usr/local/bin/k3s
+  register: k3s_binary
+
+- name: Download and install K3s in server mode
+  ansible.builtin.shell: |
+    curl -sfL https://get.k3s.io | \
+      INSTALL_K3S_VERSION="{{ k3s_version }}" \
+      sh -s - server \
+        --disable servicelb \
+        --write-kubeconfig-mode 644 \
+        --tls-san "{{ k3s_server_ip }}"
+  args:
+    creates: /usr/local/bin/k3s
+  when: not k3s_binary.stat.exists
+  notify: restart k3s
+  tags: [k3s, install]
+
+- name: Ensure K3s service is enabled and running
+  ansible.builtin.systemd:
+    name: k3s
+    enabled: true
+    state: started
+    daemon_reload: true
+  tags: [k3s, service]
+
+- name: Wait for K3s to be ready (node-token must exist)
+  ansible.builtin.wait_for:
+    path: /var/lib/rancher/k3s/server/node-token
+    timeout: 120
+  tags: [k3s]
+
+- name: Wait for K3s API server to respond
+  ansible.builtin.command: k3s kubectl get nodes
+  register: k3s_ready
+  retries: 30
+  delay: 10
+  until: k3s_ready.rc == 0
+  changed_when: false
+  tags: [k3s]
+
+- name: Read node token for agent registration
+  ansible.builtin.slurp:
+    src: /var/lib/rancher/k3s/server/node-token
+  register: k3s_node_token_raw
+  tags: [k3s, token]
+
+- name: Store node token as fact for agent nodes to consume
+  ansible.builtin.set_fact:
+    k3s_node_token: "{{ k3s_node_token_raw.content | b64decode | trim }}"
+  tags: [k3s, token]
+
+- name: Fetch kubeconfig from server to local machine
+  ansible.builtin.fetch:
+    src: /etc/rancher/k3s/k3s.yaml
+    dest: /tmp/k3s-kubeconfig.yaml
+    flat: true
+  tags: [k3s, kubeconfig]
+
+- name: Ensure local ~/.kube directory exists
+  ansible.builtin.file:
+    path: "{{ lookup('env', 'HOME') }}/.kube"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  become: false
+  tags: [k3s, kubeconfig]
+
+- name: Copy kubeconfig to local ~/.kube/config with correct server IP
+  ansible.builtin.copy:
+    src: /tmp/k3s-kubeconfig.yaml
+    dest: "{{ lookup('env', 'HOME') }}/.kube/config"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  tags: [k3s, kubeconfig]
+
+- name: Replace 127.0.0.1 with actual server IP in local kubeconfig
+  ansible.builtin.replace:
+    path: "{{ lookup('env', 'HOME') }}/.kube/config"
+    regexp: 'https://127\.0\.0\.1:6443'
+    replace: "https://{{ k3s_server_ip }}:6443"
+  delegate_to: localhost
+  become: false
+  tags: [k3s, kubeconfig]
+
+- name: Clean up temporary kubeconfig
+  ansible.builtin.file:
+    path: /tmp/k3s-kubeconfig.yaml
+    state: absent
+  delegate_to: localhost
+  become: false
+  tags: [k3s, kubeconfig]

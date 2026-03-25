@@ -1,0 +1,155 @@
+# =============================================================================
+# Helm Values: argo/argo-cd
+# =============================================================================
+# ArgoCD is a GitOps continuous delivery tool for Kubernetes. It watches your
+# Git repositories (in this case, repos hosted on your local Gitea instance)
+# and automatically deploys changes to your cluster whenever you push new
+# commits. Think of it as the bridge between "code in Git" and "running on
+# your cluster."
+#
+# These values are tuned for a Raspberry Pi CM5 cluster (ARM64, 16 GB RAM per
+# node). We run single replicas of everything because this is a learning
+# cluster, not a production HA setup.
+#
+# Install with:
+#   helm repo add argo https://argoproj.github.io/argo-helm
+#   helm repo update
+#   helm install argocd argo/argo-cd \
+#     -n argocd \
+#     -f values-argocd.yml
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Global settings
+# ---------------------------------------------------------------------------
+global:
+  # Schedule all ArgoCD pods on ARM64 nodes (your Raspberry Pi CM5 modules).
+  nodeSelector:
+    kubernetes.io/arch: arm64
+
+# ---------------------------------------------------------------------------
+# ArgoCD Server -- the API server and web UI.
+# This is what you interact with in the browser and via the argocd CLI.
+# ---------------------------------------------------------------------------
+server:
+  # Run in insecure mode (no TLS). TLS is terminated at the ingress layer
+  # by Traefik or Cloudflare Tunnel, so ArgoCD itself does not need to
+  # handle certificates.
+  extraArgs:
+    - --insecure
+
+  # Single replica -- sufficient for a learning cluster.
+  replicas: 1
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # -- Ingress: expose the ArgoCD UI through Traefik (K3s default ingress).
+  ingress:
+    enabled: true
+    annotations:
+      kubernetes.io/ingress.class: traefik
+      # Uncomment once cert-manager is set up:
+      # cert-manager.io/cluster-issuer: letsencrypt-production
+    hosts:
+      # TODO CHANGEME -- replace with your actual domain
+      - argocd.yourdomain.com
+    paths:
+      - /
+    pathType: Prefix
+
+    # Uncomment to enable TLS (requires cert-manager):
+    # tls:
+    #   - secretName: argocd-tls
+    #     hosts:
+    #       - argocd.yourdomain.com
+
+# ---------------------------------------------------------------------------
+# Controller -- the brain of ArgoCD.
+# It watches your Git repos for changes and reconciles the desired state
+# (what is in Git) with the live state (what is running in the cluster).
+# ---------------------------------------------------------------------------
+controller:
+  replicas: 1
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# Repo Server -- clones Git repositories and generates Kubernetes manifests.
+# It supports plain YAML, Helm charts, Kustomize, and more.
+# ---------------------------------------------------------------------------
+repoServer:
+  replicas: 1
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# Redis -- ArgoCD uses Redis for caching. The bundled Redis is fine for a
+# small cluster. Keep it lightweight.
+# ---------------------------------------------------------------------------
+redis:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# ---------------------------------------------------------------------------
+# ApplicationSet Controller -- handles ApplicationSet resources which can
+# generate multiple Applications from templates. Keep it lightweight.
+# ---------------------------------------------------------------------------
+applicationSet:
+  replicas: 1
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# ---------------------------------------------------------------------------
+# Dex -- an identity provider for SSO (Single Sign-On).
+# Disabled because we use ArgoCD's built-in admin account. Enable this later
+# if you want to integrate with OAuth providers (GitHub, Google, etc.).
+# ---------------------------------------------------------------------------
+dex:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# Notifications Controller -- sends alerts (Slack, email, etc.) when apps
+# change state. Disabled to save resources on this learning cluster.
+# Enable when you want deployment notifications.
+# ---------------------------------------------------------------------------
+notifications:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# ArgoCD configuration (argocd-cm ConfigMap entries)
+# ---------------------------------------------------------------------------
+configs:
+  params:
+    # Run the server in insecure mode (matches the --insecure flag above).
+    # This tells ArgoCD not to redirect HTTP to HTTPS, since TLS is handled
+    # by Traefik / Cloudflare Tunnel in front of it.
+    server.insecure: true

@@ -1,0 +1,115 @@
+# =============================================================================
+# cert-manager ClusterIssuers -- Let's Encrypt with Cloudflare DNS-01
+# =============================================================================
+# cert-manager automatically obtains and renews TLS certificates from
+# Let's Encrypt. We use the DNS-01 challenge method with Cloudflare, which
+# means cert-manager proves you own the domain by creating a DNS TXT record
+# via the Cloudflare API -- no need to expose port 80 to the internet.
+#
+# Prerequisites:
+#   1. Install cert-manager:
+#        helm repo add jetstack https://charts.jetstack.io
+#        helm repo update
+#        helm install cert-manager jetstack/cert-manager \
+#          -n cert-manager \
+#          --set crds.enabled=true \
+#          --set nodeSelector."kubernetes\.io/arch"=arm64
+#
+#   2. Create a Cloudflare API token:
+#        - Go to https://dash.cloudflare.com/profile/api-tokens
+#        - Create a token with permissions:
+#            Zone / Zone / Read
+#            Zone / DNS / Edit
+#        - Scope it to your specific zone (domain)
+#
+#   3. Create the Kubernetes secret containing the token:
+#        kubectl create secret generic cloudflare-api-token-secret \
+#          -n cert-manager \
+#          --from-literal=api-token=YOUR_CLOUDFLARE_API_TOKEN
+#
+#   4. Apply this file:
+#        kubectl apply -f cluster-issuer.yml
+#
+#   5. TEST with the staging issuer first! Staging issues fake certs but
+#      does not have rate limits. Once it works, switch to production.
+#
+# =============================================================================
+
+---
+# ---------------------------------------------------------------------------
+# STAGING Issuer -- use this first for testing!
+# ---------------------------------------------------------------------------
+# Let's Encrypt staging has generous rate limits and issues fake certificates.
+# Your browser will show a warning, but it proves the whole flow works before
+# you hit production rate limits (5 duplicate certs per week).
+#
+# To use: add this annotation to your Ingress:
+#   cert-manager.io/cluster-issuer: letsencrypt-staging
+# ---------------------------------------------------------------------------
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    # Staging endpoint -- fake certs, no rate limits
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+
+    # TODO CHANGEME -- your email for Let's Encrypt notifications
+    # (expiry warnings, policy changes, etc.)
+    email: you@yourdomain.com
+
+    # Secret where cert-manager stores the ACME account private key
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+
+    # DNS-01 solver using Cloudflare
+    solvers:
+      - dns01:
+          cloudflare:
+            # TODO CHANGEME -- your Cloudflare email (the one you log in with)
+            email: you@yourdomain.com
+            # Reference to the secret created in step 3 above
+            apiTokenSecretRef:
+              name: cloudflare-api-token-secret
+              key: api-token
+        # Optional: restrict this solver to specific domains
+        # selector:
+        #   dnsZones:
+        #     - yourdomain.com
+
+---
+# ---------------------------------------------------------------------------
+# PRODUCTION Issuer -- use after staging works!
+# ---------------------------------------------------------------------------
+# Issues real, trusted certificates. Subject to rate limits:
+#   - 5 duplicate certificates per week
+#   - 50 certificates per registered domain per week
+#
+# To use: add this annotation to your Ingress:
+#   cert-manager.io/cluster-issuer: letsencrypt-production
+# ---------------------------------------------------------------------------
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-production
+spec:
+  acme:
+    # Production endpoint -- real trusted certs
+    server: https://acme-v02.api.letsencrypt.org/directory
+
+    # TODO CHANGEME -- same email as above
+    email: you@yourdomain.com
+
+    # Separate account key for production (do not share with staging)
+    privateKeySecretRef:
+      name: letsencrypt-production-account-key
+
+    solvers:
+      - dns01:
+          cloudflare:
+            # TODO CHANGEME -- your Cloudflare email
+            email: you@yourdomain.com
+            apiTokenSecretRef:
+              name: cloudflare-api-token-secret
+              key: api-token

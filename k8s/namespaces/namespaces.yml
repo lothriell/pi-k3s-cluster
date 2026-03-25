@@ -1,0 +1,59 @@
+# =============================================================================
+# Kubernetes Namespaces for Raspberry Pi CM5 K3s Cluster
+# =============================================================================
+# Namespaces provide logical isolation between workloads. Each service gets
+# its own namespace so you can manage resources, RBAC, and network policies
+# independently.
+#
+# Apply with:
+#   kubectl apply -f namespaces.yml
+# =============================================================================
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    name: monitoring
+    # Purpose: Prometheus, Grafana, and other observability tools
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gitea
+  labels:
+    name: gitea
+    # Purpose: Gitea self-hosted Git service
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+  labels:
+    name: cert-manager
+    # Purpose: Automated TLS certificate management via Let's Encrypt
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: metallb-system
+  labels:
+    name: metallb-system
+    # Purpose: MetalLB bare-metal load balancer (gives Services external IPs)
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cloudflare
+  labels:
+    name: cloudflare
+    # Purpose: Cloudflared tunnel for exposing services to the internet
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd
+  labels:
+    name: argocd
+    # Purpose: ArgoCD GitOps continuous deployment

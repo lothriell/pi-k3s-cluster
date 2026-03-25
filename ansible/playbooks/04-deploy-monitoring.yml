@@ -1,0 +1,75 @@
+---
+# Playbook 04: Deploy monitoring stack (Prometheus + Grafana)
+# Deploys via Helm from localhost using custom values files.
+# Values files should be placed under ../helm-values/ before running.
+#
+# Usage: ansible-playbook playbooks/04-deploy-monitoring.yml
+
+- name: Deploy monitoring stack to the K3s cluster
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+
+  vars:
+    prometheus_values: "{{ playbook_dir }}/../../k8s/monitoring/values-prometheus.yml"
+    grafana_values: "{{ playbook_dir }}/../../k8s/monitoring/values-grafana.yml"
+
+  tasks:
+    # -- Prometheus ------------------------------------------------------------
+
+    - name: Deploy Prometheus via Helm
+      ansible.builtin.command: >
+        helm upgrade --install prometheus
+        prometheus-community/prometheus
+        --namespace monitoring
+        --values {{ prometheus_values }}
+        --wait
+        --timeout 10m
+      register: prometheus_deploy
+      changed_when: "'STATUS: deployed' in prometheus_deploy.stdout"
+      tags: [prometheus]
+
+    - name: Wait for Prometheus pods to be ready
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Ready pods
+        --all --namespace monitoring
+        --timeout=300s
+      changed_when: false
+      tags: [prometheus]
+
+    # -- Grafana ---------------------------------------------------------------
+
+    - name: Deploy Grafana via Helm
+      ansible.builtin.command: >
+        helm upgrade --install grafana
+        grafana/grafana
+        --namespace monitoring
+        --values {{ grafana_values }}
+        --wait
+        --timeout 10m
+      register: grafana_deploy
+      changed_when: "'STATUS: deployed' in grafana_deploy.stdout"
+      tags: [grafana]
+
+    - name: Wait for Grafana pods to be ready
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Ready pods
+        -l app.kubernetes.io/name=grafana
+        --namespace monitoring
+        --timeout=300s
+      changed_when: false
+      tags: [grafana]
+
+    # -- Summary ---------------------------------------------------------------
+
+    - name: Show monitoring pod status
+      ansible.builtin.command: kubectl get pods -n monitoring -o wide
+      register: monitoring_pods
+      changed_when: false
+      tags: [verify]
+
+    - name: Display monitoring pods
+      ansible.builtin.debug:
+        var: monitoring_pods.stdout_lines
+      tags: [verify]

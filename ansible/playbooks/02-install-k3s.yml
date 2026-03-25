@@ -1,0 +1,23 @@
+---
+# Playbook 02: Install K3s on all cluster nodes
+# Play 1 installs K3s in server mode on the control plane node.
+# Play 2 installs K3s in agent mode on all worker nodes, using the
+# node token retrieved from the server in Play 1.
+#
+# Usage: ansible-playbook playbooks/02-install-k3s.yml
+
+- name: Install K3s server (control plane)
+  hosts: k3s_server
+  become: true
+  gather_facts: true
+
+  roles:
+    - role: ../roles/k3s-server
+
+- name: Install K3s agents (worker nodes)
+  hosts: k3s_agents
+  become: true
+  gather_facts: true
+
+  roles:
+    - role: ../roles/k3s-agent

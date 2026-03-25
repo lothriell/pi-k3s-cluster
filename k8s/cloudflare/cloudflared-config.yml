@@ -1,0 +1,90 @@
+# =============================================================================
+# Cloudflared Tunnel Configuration (ConfigMap)
+# =============================================================================
+# This ConfigMap defines which public hostnames map to which internal K8s
+# services. When a request arrives at Cloudflare for one of these hostnames,
+# cloudflared routes it to the corresponding service inside your cluster.
+#
+# How it works:
+#   [User visits grafana.yourdomain.com]
+#     --> Cloudflare edge receives the request
+#     --> Routes it through the tunnel to your cloudflared pod
+#     --> cloudflared matches the hostname to an ingress rule below
+#     --> Forwards to the K8s Service (e.g., grafana.monitoring:80)
+#     --> Response flows back the same way
+#
+# Apply with:
+#   kubectl apply -f cloudflared-config.yml
+#
+# After changing this file, restart the cloudflared pods to pick up changes:
+#   kubectl rollout restart deployment/cloudflared -n cloudflare
+#
+# =============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflared-config
+  namespace: cloudflare
+data:
+  config.yml: |
+    # -----------------------------------------------------------------------
+    # Tunnel ID -- the UUID you got when you ran:
+    #   cloudflared tunnel create pi-cluster
+    # -----------------------------------------------------------------------
+    # TODO CHANGEME -- replace with your actual tunnel ID
+    tunnel: 00000000-0000-0000-0000-000000000000
+
+    # Path to the credentials file (mounted from the K8s Secret)
+    credentials-file: /etc/cloudflared/credentials.json
+
+    # -----------------------------------------------------------------------
+    # Ingress rules -- map public hostnames to internal K8s services.
+    #
+    # Format:
+    #   - hostname: <public hostname>
+    #     service: <protocol>://<service-name>.<namespace>.svc.cluster.local:<port>
+    #
+    # The service URL uses Kubernetes internal DNS:
+    #   <service-name>.<namespace>.svc.cluster.local
+    #
+    # Rules are evaluated top-to-bottom. The first matching rule wins.
+    # The last rule MUST be a catch-all (no hostname) that returns 404.
+    # -----------------------------------------------------------------------
+    ingress:
+      # -- Grafana (monitoring dashboards)
+      # TODO CHANGEME -- replace hostname with your actual domain
+      - hostname: grafana.yourdomain.com
+        service: http://grafana.monitoring.svc.cluster.local:80
+        # Optional: pass original IP headers to Grafana
+        originRequest:
+          noTLSVerify: true
+
+      # -- Gitea (self-hosted Git)
+      # TODO CHANGEME -- replace hostname with your actual domain
+      - hostname: gitea.yourdomain.com
+        service: http://gitea-http.gitea.svc.cluster.local:3000
+        originRequest:
+          noTLSVerify: true
+
+      # -- ArgoCD (GitOps continuous deployment)
+      # TODO CHANGEME -- replace hostname with your actual domain
+      - hostname: argocd.yourdomain.com
+        service: http://argocd-server.argocd.svc.cluster.local:80
+        originRequest:
+          noTLSVerify: true
+
+      # -----------------------------------------------------------------------
+      # Add more services here as you deploy them. Examples:
+      #
+      # - hostname: wiki.yourdomain.com
+      #   service: http://wiki.default.svc.cluster.local:3000
+      #
+      # - hostname: home.yourdomain.com
+      #   service: http://home-assistant.default.svc.cluster.local:8123
+      # -----------------------------------------------------------------------
+
+      # -- Catch-all rule (REQUIRED, must be last)
+      # Any request that does not match a hostname above gets a 404.
+      # This prevents unexpected traffic from reaching your cluster.
+      - service: http_status:404
