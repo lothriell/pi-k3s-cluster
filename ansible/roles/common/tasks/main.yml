@@ -1,6 +1,14 @@
 ---
 # Common node preparation tasks for Raspberry Pi CM5 running Ubuntu 24.04 ARM64
 
+- name: Disable unattended-upgrades (we manage updates via Ansible)
+  ansible.builtin.systemd:
+    name: unattended-upgrades
+    enabled: false
+    state: stopped
+  failed_when: false
+  tags: [packages]
+
 - name: Update apt cache and upgrade all packages
   ansible.builtin.apt:
     update_cache: true
