@@ -35,16 +35,13 @@ spec:
     # TODO CHANGEME -- adjust this range to match YOUR local network.
     #
     # Rules for choosing your range:
-    #   1. Must be on the same subnet as your Pi nodes (e.g., 192.168.1.x)
+    #   1. Must be on the same subnet as your Pi nodes (10.69.0.x)
     #   2. Must NOT overlap with your router's DHCP range
     #   3. Must NOT include IPs already assigned to other devices
     #
-    # Example: if your router is 192.168.1.1 and DHCP hands out .100-.199,
-    # then .200-.220 is a safe range for MetalLB.
-    #
-    # If your network is 10.0.0.x, change this to something like:
-    #   - 10.0.0.200-10.0.0.220
-    - 192.168.1.200-192.168.1.220
+    # Pi nodes use 10.0.0.11-153, reserved range up to .160
+    # MetalLB gets .155-.160 (adjust if you need more)
+    - 10.0.0.100-10.0.0.110
 
 ---
 # ---------------------------------------------------------------------------

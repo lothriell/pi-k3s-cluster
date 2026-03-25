@@ -22,11 +22,11 @@
 
 # Node addresses (adjust to match your network)
 # These should match the hostnames/IPs in ansible/inventory/hosts.yml
-PI_1 := pi-k3s-1
-PI_2 := pi-k3s-2
-PI_3 := pi-k3s-3
-PI_4 := pi-k3s-4
-PI_USER := ubuntu
+PI_1 := rpi-k3s-1
+PI_2 := rpi-k3s-2
+PI_3 := rpi-k3s-3
+PI_4 := rpi-k3s-4
+PI_USER := ansible
 
 # Ansible flags
 ANSIBLE_PLAYBOOK := ansible-playbook
@@ -56,6 +56,14 @@ all: prepare k3s post-install metallb monitoring gitea argocd ## Full cluster bu
 # =============================================================================
 # Provisioning Stages
 # =============================================================================
+
+.PHONY: bootstrap
+bootstrap: ## Create 'ansible' service account on all nodes (run once, uses your personal account)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/00-bootstrap-user.yml --ask-become-pass
+
+.PHONY: shell
+shell: ## Setup zsh + oh-my-posh + eza on all nodes (for myuser user)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/00-setup-shell.yml
 
 .PHONY: prepare
 prepare: ## Prepare nodes (packages, config, networking)
@@ -135,17 +143,17 @@ ping: ## Test Ansible connectivity to all nodes
 # =============================================================================
 
 .PHONY: ssh-1
-ssh-1: ## SSH into pi-k3s-1 (server)
+ssh-1: ## SSH into rpi-k3s-1 (server)
 	ssh $(PI_USER)@$(PI_1)
 
 .PHONY: ssh-2
-ssh-2: ## SSH into pi-k3s-2 (agent)
+ssh-2: ## SSH into rpi-k3s-2 (agent)
 	ssh $(PI_USER)@$(PI_2)
 
 .PHONY: ssh-3
-ssh-3: ## SSH into pi-k3s-3 (agent)
+ssh-3: ## SSH into rpi-k3s-3 (agent)
 	ssh $(PI_USER)@$(PI_3)
 
 .PHONY: ssh-4
-ssh-4: ## SSH into pi-k3s-4 (agent)
+ssh-4: ## SSH into rpi-k3s-4 (agent)
 	ssh $(PI_USER)@$(PI_4)

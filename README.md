@@ -6,10 +6,10 @@ Lightweight Kubernetes (K3s) cluster running on 4x Raspberry Pi CM5 modules, ful
 
 | Node | Hostname | Role | Specs |
 |------|----------|------|-------|
-| CM5 #1 | `pi-k3s-1` | K3s Server (control plane) | 16GB RAM, 32GB eMMC |
-| CM5 #2 | `pi-k3s-2` | K3s Agent (worker) | 16GB RAM, 32GB eMMC |
-| CM5 #3 | `pi-k3s-3` | K3s Agent (worker) | 16GB RAM, 32GB eMMC |
-| CM5 #4 | `pi-k3s-4` | K3s Agent (worker) | 16GB RAM, 32GB eMMC |
+| CM5 #1 | `rpi-k3s-1` | K3s Server (control plane) | 16GB RAM, 32GB eMMC |
+| CM5 #2 | `rpi-k3s-2` | K3s Agent (worker) | 16GB RAM, 32GB eMMC |
+| CM5 #3 | `rpi-k3s-3` | K3s Agent (worker) | 16GB RAM, 32GB eMMC |
+| CM5 #4 | `rpi-k3s-4` | K3s Agent (worker) | 16GB RAM, 32GB eMMC |
 
 - **OS:** Ubuntu 24.04 LTS (64-bit ARM)
 - **Network:** Static IPs assigned via UniFi Gateway

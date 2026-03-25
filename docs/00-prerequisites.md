@@ -15,10 +15,10 @@ Before we install anything, here is the big picture:
 
 ```
 ┌──────────────────┐         SSH          ┌─────────────────┐
-│                  │ ───────────────────►  │  pi-k3s-1       │
-│  Your Mac        │ ───────────────────►  │  pi-k3s-2       │
-│  (workstation)   │ ───────────────────►  │  pi-k3s-3       │
-│                  │ ───────────────────►  │  pi-k3s-4       │
+│                  │ ───────────────────►  │  rpi-k3s-1       │
+│  Your Mac        │ ───────────────────►  │  rpi-k3s-2       │
+│  (workstation)   │ ───────────────────►  │  rpi-k3s-3       │
+│                  │ ───────────────────►  │  rpi-k3s-4       │
 └──────────────────┘                       └─────────────────┘
    "control machine"                         "managed nodes"
 ```
@@ -58,7 +58,7 @@ You should see something like `Homebrew 4.x.x`.
 Run this single command to install everything you need:
 
 ```bash
-brew install ansible kubectl helm k9s age sops
+brew install ansible kubectl helm k9s age sops gh
 ```
 
 This will take a few minutes. When it finishes, verify each tool is available:
@@ -70,6 +70,7 @@ helm version
 k9s version
 age --version
 sops --version
+gh --version
 ```
 
 ### What each tool does
@@ -82,6 +83,7 @@ sops --version
 | **k9s** | A terminal UI that lets you browse your Kubernetes cluster interactively, like a file manager for your cluster. |
 | **age** | A simple file encryption tool -- you will use it to encrypt secrets (passwords, API keys) before committing them to git. |
 | **sops** | Works with age to encrypt/decrypt only the *values* in YAML files, so you can safely store secrets in your repository. |
+| **gh** | GitHub CLI -- lets you create repos, pull requests, and manage GitHub from the terminal. |
 
 ---
 
@@ -123,14 +125,14 @@ For each Pi, run `ssh-copy-id`. Replace the IP addresses with your actual Pi
 IPs (you will set these up in [02-network-setup.md](02-network-setup.md)):
 
 ```bash
-ssh-copy-id ubuntu@192.168.1.101
-ssh-copy-id ubuntu@192.168.1.102
-ssh-copy-id ubuntu@192.168.1.103
-ssh-copy-id ubuntu@192.168.1.104
+ssh-copy-id myuser@10.0.0.11
+ssh-copy-id myuser@10.0.0.12
+ssh-copy-id myuser@10.0.0.13
+ssh-copy-id myuser@10.0.0.14
 ```
 
 Each time you will be asked for the password. If you have not changed it yet,
-the default Ubuntu password is `ubuntu` (you will be forced to change it on
+the default password is the one you set during flash (you will be forced to change it on
 first login -- see [01-flash-ubuntu.md](01-flash-ubuntu.md)).
 
 ### What just happened?
@@ -146,15 +148,58 @@ instead of a password.
 Test that passwordless SSH works to every node:
 
 ```bash
-ssh ubuntu@192.168.1.101 "hostname"
-ssh ubuntu@192.168.1.102 "hostname"
-ssh ubuntu@192.168.1.103 "hostname"
-ssh ubuntu@192.168.1.104 "hostname"
+ssh myuser@10.0.0.11 "hostname"
+ssh myuser@10.0.0.12 "hostname"
+ssh myuser@10.0.0.13 "hostname"
+ssh myuser@10.0.0.14 "hostname"
 ```
 
-Each command should print the hostname of that Pi (e.g., `pi-k3s-1`) and
+Each command should print the hostname of that Pi (e.g., `rpi-k3s-1`) and
 return you to your Mac's prompt with no password prompt. If any of them ask for
 a password, go back to Step 4 for that node.
+
+---
+
+## Step 6 -- Create the Ansible service account
+
+We use a dedicated `ansible` user on each Pi for all automation. This keeps your
+personal `myuser` account separate from what the automation does -- cleaner and
+easier to audit.
+
+From the project root directory, run:
+
+```bash
+make bootstrap
+```
+
+This will ask for your **sudo password on the Pis** (the same password you use
+to log in as `myuser`). It only needs to be run once per node.
+
+### What just happened?
+
+The bootstrap playbook connected as `myuser` to each Pi and:
+
+1. Created a new user called `ansible`
+2. Gave it **passwordless sudo** (so Ansible can install packages, change configs, etc. without prompting)
+3. Copied your SSH public key to the `ansible` user's `authorized_keys`
+
+From this point on, **all Ansible playbooks connect as the `ansible` user** --
+you never need to use your personal account for automation again.
+
+### Verify it works
+
+```bash
+ssh -i ~/.ssh/id_ed25519 ansible@10.0.0.11 "whoami && sudo whoami"
+```
+
+Should print:
+
+```
+ansible
+root
+```
+
+No password prompts. The `ansible` user can run any command as root.
 
 ---
 
@@ -169,7 +214,9 @@ Before moving on, confirm:
 - [ ] `k9s version` works
 - [ ] `age --version` works
 - [ ] `sops --version` works
-- [ ] You can SSH to all 4 Pis without a password
+- [ ] `gh --version` works
+- [ ] You can SSH to all 4 Pis without a password (as `myuser`)
+- [ ] The `ansible` user exists on all Pis and has passwordless sudo
 
 ---
 

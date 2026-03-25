@@ -6,8 +6,8 @@ set -euo pipefail
 # =============================================================================
 
 # Node list (adjust to match your network)
-NODES=("pi-k3s-1" "pi-k3s-2" "pi-k3s-3" "pi-k3s-4")
-SSH_USER="ubuntu"
+NODES=("rpi-k3s-1" "rpi-k3s-2" "rpi-k3s-3" "rpi-k3s-4")
+SSH_USER="ansible"
 
 # -----------------------------------------------------------------------------
 # Banner

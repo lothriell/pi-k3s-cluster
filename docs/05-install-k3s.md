@@ -37,7 +37,7 @@ K3s is purpose-built for exactly what you're doing: running Kubernetes on small 
 
 Think of your cluster like a restaurant.
 
-### The server (pi-k3s-1) -- the manager
+### The server (rpi-k3s-1) -- the manager
 
 The **server** node runs the **control plane**. This is the brain of your cluster. It:
 
@@ -48,9 +48,9 @@ The **server** node runs the **control plane**. This is the brain of your cluste
 
 In the restaurant analogy, the server node is the **manager**. It takes the orders (your deployment requests), decides which cook handles what, and keeps the books.
 
-You have **one** server node: `pi-k3s-1`.
+You have **one** server node: `rpi-k3s-1`.
 
-### The agents (pi-k3s-2, pi-k3s-3, pi-k3s-4) -- the workers
+### The agents (rpi-k3s-2, rpi-k3s-3, rpi-k3s-4) -- the workers
 
 The **agent** nodes (also called **workers**) do the actual work of running your containers. They:
 
@@ -60,7 +60,7 @@ The **agent** nodes (also called **workers**) do the actual work of running your
 
 In the restaurant analogy, the agents are the **cooks**. They get orders from the manager and actually prepare the food.
 
-You have **three** agent nodes: `pi-k3s-2`, `pi-k3s-3`, `pi-k3s-4`.
+You have **three** agent nodes: `rpi-k3s-2`, `rpi-k3s-3`, `rpi-k3s-4`.
 
 ### How they connect
 
@@ -68,7 +68,7 @@ When an agent starts up, it reaches out to the server and says "I'd like to join
 
 ```
                           +-----------+
-                          | pi-k3s-1  |
+                          | rpi-k3s-1  |
                           |  (server) |
                           | port 6443 |
                           +-----+-----+
@@ -76,7 +76,7 @@ When an agent starts up, it reaches out to the server and says "I'd like to join
               +-----------------+-----------------+
               |                 |                 |
         +-----+-----+    +-----+-----+    +-----+-----+
-        | pi-k3s-2  |    | pi-k3s-3  |    | pi-k3s-4  |
+        | rpi-k3s-2  |    | rpi-k3s-3  |    | rpi-k3s-4  |
         |  (agent)  |    |  (agent)  |    |  (agent)  |
         +-----------+    +-----------+    +-----------+
 ```
@@ -89,7 +89,7 @@ All communication flows over port **6443** (the Kubernetes API port).
 
 The install playbook runs in two phases.
 
-### Phase 1: Install K3s on the server (pi-k3s-1)
+### Phase 1: Install K3s on the server (rpi-k3s-1)
 
 1. **Downloads and installs K3s** using the official install script from `https://get.k3s.io`. This is a single command that downloads the K3s binary, sets up the systemd service, and starts it.
 
@@ -99,12 +99,12 @@ The install playbook runs in two phases.
 
 4. **Fetches the kubeconfig file.** This is the credentials file you need on your local machine (your Mac) to talk to the cluster with `kubectl`. The playbook copies it from the server and puts it at `~/.kube/config` on your Mac.
 
-### Phase 2: Install K3s on the agents (pi-k3s-2, pi-k3s-3, pi-k3s-4)
+### Phase 2: Install K3s on the agents (rpi-k3s-2, rpi-k3s-3, rpi-k3s-4)
 
 1. **Downloads and installs K3s** using the same official install script.
 
 2. **Starts K3s in agent mode** with two critical pieces of information:
-   - `K3S_URL` -- the address of the server: `https://pi-k3s-1:6443`
+   - `K3S_URL` -- the address of the server: `https://rpi-k3s-1:6443`
    - `K3S_TOKEN` -- the secret token retrieved from the server in Phase 1
 
 3. Each agent contacts the server, presents the token, and **joins the cluster**. The server now knows about this new worker and can schedule containers on it.
@@ -141,10 +141,10 @@ You should see all four nodes with a `Ready` status:
 
 ```
 NAME        STATUS   ROLES                  AGE   VERSION
-pi-k3s-1   Ready    control-plane,master   2m    v1.31.4+k3s1
-pi-k3s-2   Ready    <none>                 90s   v1.31.4+k3s1
-pi-k3s-3   Ready    <none>                 88s   v1.31.4+k3s1
-pi-k3s-4   Ready    <none>                 85s   v1.31.4+k3s1
+rpi-k3s-1   Ready    control-plane,master   2m    v1.31.4+k3s1
+rpi-k3s-2   Ready    <none>                 90s   v1.31.4+k3s1
+rpi-k3s-3   Ready    <none>                 88s   v1.31.4+k3s1
+rpi-k3s-4   Ready    <none>                 85s   v1.31.4+k3s1
 ```
 
 ### What just happened?
@@ -171,7 +171,7 @@ When you ran `kubectl get nodes`, how did `kubectl` know where your cluster is, 
 
 The kubeconfig file contains three things:
 
-1. **Cluster info** -- the address of your K3s server (`https://pi-k3s-1:6443`) and its certificate (to verify you're talking to the right server)
+1. **Cluster info** -- the address of your K3s server (`https://rpi-k3s-1:6443`) and its certificate (to verify you're talking to the right server)
 2. **User credentials** -- a certificate and key that prove you're an authorized admin
 3. **Context** -- which cluster + user combination to use by default
 
@@ -188,7 +188,7 @@ That's `/Users/myuser/.kube/config` on your Mac.
 The Ansible playbook did this automatically:
 
 1. It read the kubeconfig file from the server node at `/etc/rancher/k3s/k3s.yaml`
-2. It replaced `127.0.0.1` in that file with the actual hostname/IP of your server (`pi-k3s-1`) so your Mac can reach it over the network
+2. It replaced `127.0.0.1` in that file with the actual hostname/IP of your server (`rpi-k3s-1`) so your Mac can reach it over the network
 3. It saved the modified file to `~/.kube/config` on your Mac
 
 You can look at it if you're curious:
@@ -223,7 +223,7 @@ K3s doesn't just install Kubernetes -- it bundles several components that you'd 
 
 ### Flannel (container networking)
 
-**What it does:** Creates a virtual network that spans all four nodes. This is what lets a container on pi-k3s-2 talk to a container on pi-k3s-4 as if they were on the same local network. Without Flannel, pods on different nodes would be isolated.
+**What it does:** Creates a virtual network that spans all four nodes. This is what lets a container on rpi-k3s-2 talk to a container on rpi-k3s-4 as if they were on the same local network. Without Flannel, pods on different nodes would be isolated.
 
 **Namespace:** `kube-system`
 
@@ -260,18 +260,18 @@ You'll see pods for all of the above. Don't worry about understanding every pod 
 ### kubectl: connection refused
 
 ```
-The connection to the server pi-k3s-1:6443 was refused
+The connection to the server rpi-k3s-1:6443 was refused
 ```
 
 **Causes:**
-- K3s server isn't running on pi-k3s-1
+- K3s server isn't running on rpi-k3s-1
 - Your kubeconfig isn't pointing to the right address
 
 **Fix:**
 
 1. Check if K3s is running on the server node:
    ```bash
-   ssh pi-k3s-1
+   ssh rpi-k3s-1
    sudo systemctl status k3s
    ```
    You should see `active (running)`. If it says `failed` or `inactive`, start it:
@@ -283,13 +283,13 @@ The connection to the server pi-k3s-1:6443 was refused
    ```bash
    grep server ~/.kube/config
    ```
-   It should show `https://pi-k3s-1:6443` (or the IP of pi-k3s-1).
+   It should show `https://rpi-k3s-1:6443` (or the IP of rpi-k3s-1).
 
 ### A node shows "NotReady"
 
 ```
 NAME        STATUS     ROLES                  AGE   VERSION
-pi-k3s-3   NotReady   <none>                 30s   v1.31.4+k3s1
+rpi-k3s-3   NotReady   <none>                 30s   v1.31.4+k3s1
 ```
 
 **Fix:**
@@ -298,13 +298,13 @@ pi-k3s-3   NotReady   <none>                 30s   v1.31.4+k3s1
 
 2. If it's still NotReady, check the K3s agent service on that node:
    ```bash
-   ssh pi-k3s-3
+   ssh rpi-k3s-3
    sudo systemctl status k3s-agent
    ```
 
 3. Check the logs for errors:
    ```bash
-   ssh pi-k3s-3
+   ssh rpi-k3s-3
    sudo journalctl -u k3s-agent -f --no-pager | tail -50
    ```
    Look for lines with `error` or `failed`.
@@ -317,27 +317,27 @@ If `kubectl get nodes` only shows 3 (or fewer) nodes, the missing node's agent n
 
 1. **Check the K3s agent is running:**
    ```bash
-   ssh pi-k3s-4   # whichever node is missing
+   ssh rpi-k3s-4   # whichever node is missing
    sudo systemctl status k3s-agent
    ```
 
 2. **Check the token.** The agent needs the correct token to join. On the server:
    ```bash
-   ssh pi-k3s-1
+   ssh rpi-k3s-1
    sudo cat /var/lib/rancher/k3s/server/node-token
    ```
    This should match what was used in the agent's configuration.
 
 3. **Check the agent can reach the server on port 6443:**
    ```bash
-   ssh pi-k3s-4
-   curl -k https://pi-k3s-1:6443
+   ssh rpi-k3s-4
+   curl -k https://rpi-k3s-1:6443
    ```
-   If this times out, there's a network or firewall issue between the nodes. Make sure port 6443 is open on pi-k3s-1.
+   If this times out, there's a network or firewall issue between the nodes. Make sure port 6443 is open on rpi-k3s-1.
 
 4. **Restart the agent:**
    ```bash
-   ssh pi-k3s-4
+   ssh rpi-k3s-4
    sudo systemctl restart k3s-agent
    ```
 
@@ -349,7 +349,7 @@ If the Ansible playbook itself fails (red text, `failed=1` in PLAY RECAP):
 
 2. Common cause: the K3s install script couldn't download. Check the node has internet access:
    ```bash
-   ssh pi-k3s-1
+   ssh rpi-k3s-1
    curl -s https://get.k3s.io | head -5
    ```
 

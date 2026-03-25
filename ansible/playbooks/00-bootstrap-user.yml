@@ -1,0 +1,89 @@
+---
+# Playbook 00: Bootstrap the Ansible service account
+# =============================================================================
+# This playbook creates a dedicated 'ansible' user on all nodes for automation.
+# It must be run ONCE using your personal account (myuser) to bootstrap access.
+#
+# Why a dedicated user?
+#   - Separation of concerns: your personal account stays untouched
+#   - Passwordless sudo: only the automation account gets this privilege
+#   - Auditing: easy to see what was done by automation vs. manually
+#   - Security: you can revoke automation access without affecting your login
+#
+# Usage (first time only, uses your personal account):
+#   make bootstrap
+#
+# After this playbook runs, all other playbooks will use the 'ansible' user.
+# =============================================================================
+
+- name: Create Ansible service account on all nodes
+  hosts: k3s_cluster
+  become: true
+  # Override remote_user for this playbook only -- we connect as 'myuser'
+  # because the 'ansible' user doesn't exist yet
+  vars:
+    ansible_user: myuser
+    service_account: ansible
+
+  tasks:
+    - name: Switch from sudo-rs to traditional sudo (Ansible compatibility)
+      ansible.builtin.command: update-alternatives --set sudo /usr/bin/sudo.ws
+      register: sudo_switch
+      changed_when: "'manual mode' in sudo_switch.stdout"
+      failed_when: false
+      tags: [sudo]
+
+    - name: Create the '{{ service_account }}' user
+      ansible.builtin.user:
+        name: "{{ service_account }}"
+        shell: /bin/bash
+        create_home: true
+        system: false
+        comment: "Ansible automation service account"
+        state: present
+      tags: [user]
+
+    - name: Grant passwordless sudo to '{{ service_account }}'
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/{{ service_account }}"
+        content: "{{ service_account }} ALL=(ALL) NOPASSWD: ALL\n"
+        mode: "0440"
+        validate: "visudo -cf %s"
+      tags: [sudo]
+
+    - name: Create .ssh directory for '{{ service_account }}'
+      ansible.builtin.file:
+        path: "/home/{{ service_account }}/.ssh"
+        state: directory
+        owner: "{{ service_account }}"
+        group: "{{ service_account }}"
+        mode: "0700"
+      tags: [ssh]
+
+    - name: Copy your SSH public key to '{{ service_account }}' authorized_keys
+      ansible.builtin.authorized_key:
+        user: "{{ service_account }}"
+        key: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_ed25519.pub') }}"
+        state: present
+      tags: [ssh]
+
+    - name: Verify '{{ service_account }}' can run sudo without password
+      ansible.builtin.command: >
+        ssh -i {{ lookup('env', 'HOME') }}/.ssh/id_ed25519
+        -o BatchMode=yes -o StrictHostKeyChecking=no
+        {{ service_account }}@{{ ansible_host }}
+        "sudo whoami"
+      delegate_to: localhost
+      become: false
+      register: sudo_check
+      changed_when: false
+      failed_when: "'root' not in sudo_check.stdout"
+      tags: [verify]
+
+    - name: Display success message
+      ansible.builtin.debug:
+        msg: >-
+          User '{{ service_account }}' created on {{ inventory_hostname }}
+          with passwordless sudo and SSH key access.
+          Verified: sudo whoami returned '{{ sudo_check.stdout | trim }}'.
+      tags: [verify]

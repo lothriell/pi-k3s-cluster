@@ -38,10 +38,10 @@ inside the range but reserved). Here is an example:
 
 | Hostname | IP Address | Role |
 |----------|-----------|------|
-| `pi-k3s-1` | `192.168.1.101` | K3s server (control plane) |
-| `pi-k3s-2` | `192.168.1.102` | K3s agent (worker) |
-| `pi-k3s-3` | `192.168.1.103` | K3s agent (worker) |
-| `pi-k3s-4` | `192.168.1.104` | K3s agent (worker) |
+| `rpi-k3s-1` | `10.0.0.11` | K3s server (control plane) |
+| `rpi-k3s-2` | `10.0.0.12` | K3s agent (worker) |
+| `rpi-k3s-3` | `10.0.0.13` | K3s agent (worker) |
+| `rpi-k3s-4` | `10.0.0.14` | K3s agent (worker) |
 
 > **Important:** These are example IPs. Your subnet may be `10.0.0.x` or
 > `192.168.0.x` or something else entirely. Check your UniFi dashboard under
@@ -53,7 +53,7 @@ To check your Mac's current subnet:
 ifconfig en0 | grep "inet "
 ```
 
-This will show something like `inet 192.168.1.50 netmask 0xffffff00`. The
+This will show something like `inet 10.69.0.x netmask 0xffffff00`. The
 first three groups (`192.168.1`) are your subnet.
 
 ---
@@ -87,16 +87,16 @@ The MAC address here is `dc:a6:32:12:34:56`.
 
 1. Open the UniFi dashboard (usually at `https://unifi.ui.com` or your local controller address).
 2. Go to **Client Devices**.
-3. Find each Pi (look for the hostnames `pi-k3s-1` through `pi-k3s-4`, or look for new devices).
+3. Find each Pi (look for the hostnames `rpi-k3s-1` through `rpi-k3s-4`, or look for new devices).
 4. Click on a Pi to see its details -- the MAC address is listed there.
 
 Record all 4 MAC addresses:
 
 ```
-pi-k3s-1: ___:___:___:___:___:___
-pi-k3s-2: ___:___:___:___:___:___
-pi-k3s-3: ___:___:___:___:___:___
-pi-k3s-4: ___:___:___:___:___:___
+rpi-k3s-1: ___:___:___:___:___:___
+rpi-k3s-2: ___:___:___:___:___:___
+rpi-k3s-3: ___:___:___:___:___:___
+rpi-k3s-4: ___:___:___:___:___:___
 ```
 
 ---
@@ -110,16 +110,16 @@ pi-k3s-4: ___:___:___:___:___:___
 5. Under **DHCP Service Management**, look for **Static Mappings** (it may also be labeled "Fixed IP" or "DHCP Reservations" depending on your UniFi version).
 6. Click **Create New** (or **Add Entry**).
 7. Fill in:
-   - **Name:** `pi-k3s-1`
+   - **Name:** `rpi-k3s-1`
    - **MAC Address:** the MAC address from Step 2
-   - **IP Address:** `192.168.1.101` (or your chosen IP)
+   - **IP Address:** `10.0.0.11` (or your chosen IP)
 8. Click **Save** or **Apply**.
 9. Repeat for all 4 nodes.
 
 ### What just happened?
 
 You told your UniFi Gateway: "Whenever a device with MAC address
-`dc:a6:32:xx:xx:xx` asks for an IP via DHCP, always give it `192.168.1.101`."
+`dc:a6:32:xx:xx:xx` asks for an IP via DHCP, always give it `10.0.0.11`."
 The Pi does not know or care -- it just asks for an IP like normal and always
 gets the same one.
 
@@ -131,16 +131,16 @@ The static mappings take effect on the next DHCP lease renewal. To force it
 immediately, reboot each Pi:
 
 ```bash
-ssh ubuntu@<current-ip-of-pi> "sudo reboot"
+ssh myuser@<current-ip-of-pi> "sudo reboot"
 ```
 
 Wait about 60 seconds, then check from your Mac:
 
 ```bash
-ping -c 3 192.168.1.101
-ping -c 3 192.168.1.102
-ping -c 3 192.168.1.103
-ping -c 3 192.168.1.104
+ping -c 3 10.0.0.11
+ping -c 3 10.0.0.12
+ping -c 3 10.0.0.13
+ping -c 3 10.0.0.14
 ```
 
 All 4 should respond.
@@ -149,15 +149,15 @@ All 4 should respond.
 
 ## Step 5 -- (Optional) Add DNS entries in UniFi
 
-If you want to be able to type `pi-k3s-1` instead of `192.168.1.101`, you can
+If you want to be able to type `rpi-k3s-1` instead of `10.0.0.11`, you can
 add local DNS records:
 
 1. In the UniFi dashboard, go to **Settings** > **Networks** > **DNS**.
 2. Under **DNS Records** (or **Local DNS Entries**), add:
-   - `pi-k3s-1` -> `192.168.1.101`
-   - `pi-k3s-2` -> `192.168.1.102`
-   - `pi-k3s-3` -> `192.168.1.103`
-   - `pi-k3s-4` -> `192.168.1.104`
+   - `rpi-k3s-1` -> `10.0.0.11`
+   - `rpi-k3s-2` -> `10.0.0.12`
+   - `rpi-k3s-3` -> `10.0.0.13`
+   - `rpi-k3s-4` -> `10.0.0.14`
 3. Save.
 
 > The exact location of this setting varies by UniFi OS version. If you cannot
@@ -178,10 +178,10 @@ Add these lines at the bottom (adjust IPs to match yours):
 
 ```
 # Raspberry Pi K3s Cluster
-192.168.1.101   pi-k3s-1
-192.168.1.102   pi-k3s-2
-192.168.1.103   pi-k3s-3
-192.168.1.104   pi-k3s-4
+10.0.0.11   rpi-k3s-1
+10.0.0.12   rpi-k3s-2
+10.0.0.13   rpi-k3s-3
+10.0.0.14   rpi-k3s-4
 ```
 
 Save and exit (`Ctrl+O`, `Enter`, `Ctrl+X` in nano).
@@ -189,19 +189,19 @@ Save and exit (`Ctrl+O`, `Enter`, `Ctrl+X` in nano).
 ### Verify it works
 
 ```bash
-ping -c 2 pi-k3s-1
-ping -c 2 pi-k3s-2
-ping -c 2 pi-k3s-3
-ping -c 2 pi-k3s-4
+ping -c 2 rpi-k3s-1
+ping -c 2 rpi-k3s-2
+ping -c 2 rpi-k3s-3
+ping -c 2 rpi-k3s-4
 ```
 
 And SSH by hostname:
 
 ```bash
-ssh ubuntu@pi-k3s-1 "hostname"
+ssh myuser@rpi-k3s-1 "hostname"
 ```
 
-Should print `pi-k3s-1`.
+Should print `rpi-k3s-1`.
 
 ---
 
@@ -209,7 +209,7 @@ Should print `pi-k3s-1`.
 
 Later in this project, you will see an Ansible inventory file at
 `ansible/inventory/hosts.yml` that lists your Pi IP addresses. It will contain
-placeholder IPs like `192.168.1.101`. **You need to replace those with your
+placeholder IPs like `10.0.0.11`. **You need to replace those with your
 actual IPs.**
 
 This is what the inventory looks like (you do not need to create it now -- it
@@ -220,16 +220,16 @@ all:
   children:
     servers:
       hosts:
-        pi-k3s-1:
-          ansible_host: 192.168.1.101    # <-- replace with your actual IP
+        rpi-k3s-1:
+          ansible_host: 10.0.0.11    # <-- replace with your actual IP
     agents:
       hosts:
-        pi-k3s-2:
-          ansible_host: 192.168.1.102    # <-- replace with your actual IP
-        pi-k3s-3:
-          ansible_host: 192.168.1.103    # <-- replace with your actual IP
-        pi-k3s-4:
-          ansible_host: 192.168.1.104    # <-- replace with your actual IP
+        rpi-k3s-2:
+          ansible_host: 10.0.0.12    # <-- replace with your actual IP
+        rpi-k3s-3:
+          ansible_host: 10.0.0.13    # <-- replace with your actual IP
+        rpi-k3s-4:
+          ansible_host: 10.0.0.14    # <-- replace with your actual IP
 ```
 
 When you get to that step, just swap in the IPs you chose above.
@@ -242,7 +242,7 @@ Before moving on, confirm:
 
 - [ ] All 4 Pis have static IPs assigned in UniFi
 - [ ] You can ping all 4 IPs from your Mac
-- [ ] You can SSH to all 4 using `ssh ubuntu@<ip>`
+- [ ] You can SSH to all 4 using `ssh myuser@<ip>`
 - [ ] (Optional) Hostnames work via `/etc/hosts` or UniFi DNS
 - [ ] You have written down your IP-to-hostname mapping somewhere safe
 

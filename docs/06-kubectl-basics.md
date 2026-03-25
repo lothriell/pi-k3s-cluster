@@ -14,11 +14,11 @@
 
 **kubectl** (pronounced "cube-control" or "cube-C-T-L" -- people argue about this, either is fine) is the command-line tool for talking to your Kubernetes cluster.
 
-Every time you want to ask your cluster a question ("what's running?") or tell it to do something ("deploy this app"), you use kubectl. It reads your kubeconfig file (`~/.kube/config`), connects to the K3s server on pi-k3s-1, and sends your request.
+Every time you want to ask your cluster a question ("what's running?") or tell it to do something ("deploy this app"), you use kubectl. It reads your kubeconfig file (`~/.kube/config`), connects to the K3s server on rpi-k3s-1, and sends your request.
 
 Think of it like this:
 - **You** type a kubectl command on your Mac
-- **kubectl** sends that request over the network to pi-k3s-1 on port 6443
+- **kubectl** sends that request over the network to rpi-k3s-1 on port 6443
 - **The K3s server** processes the request and sends back a response
 - **kubectl** formats the response and displays it in your terminal
 
@@ -70,7 +70,7 @@ When you start deploying your own apps, you'll create namespaces like `monitorin
 
 ### Node
 
-A **node** is a physical machine in your cluster. You have four nodes: your Raspberry Pi CM5 modules. pi-k3s-1 is the server node (runs the control plane), and pi-k3s-2/3/4 are agent nodes (run your workloads).
+A **node** is a physical machine in your cluster. You have four nodes: your Raspberry Pi CM5 modules. rpi-k3s-1 is the server node (runs the control plane), and rpi-k3s-2/3/4 are agent nodes (run your workloads).
 
 You already know this one from running `kubectl get nodes`.
 
@@ -118,10 +118,10 @@ kubectl get nodes
 
 ```
 NAME        STATUS   ROLES                  AGE   VERSION
-pi-k3s-1   Ready    control-plane,master   1d    v1.31.4+k3s1
-pi-k3s-2   Ready    <none>                 1d    v1.31.4+k3s1
-pi-k3s-3   Ready    <none>                 1d    v1.31.4+k3s1
-pi-k3s-4   Ready    <none>                 1d    v1.31.4+k3s1
+rpi-k3s-1   Ready    control-plane,master   1d    v1.31.4+k3s1
+rpi-k3s-2   Ready    <none>                 1d    v1.31.4+k3s1
+rpi-k3s-3   Ready    <none>                 1d    v1.31.4+k3s1
+rpi-k3s-4   Ready    <none>                 1d    v1.31.4+k3s1
 ```
 
 **What just happened?** You asked the cluster "show me all nodes." All four are `Ready`, meaning they're healthy and accepting work. If any showed `NotReady`, that node has a problem (see the troubleshooting section in [05-install-k3s.md](05-install-k3s.md)).
@@ -167,7 +167,7 @@ kubectl get services -A
 NAMESPACE     NAME             TYPE           CLUSTER-IP      EXTERNAL-IP     PORT(S)                      AGE
 default       kubernetes       ClusterIP      10.43.0.1       <none>          443/TCP                      1d
 kube-system   kube-dns         ClusterIP      10.43.0.10      <none>          53/UDP,53/TCP,9153/TCP       1d
-kube-system   traefik          LoadBalancer   10.43.171.142   192.168.1.100   80:31080/TCP,443:31443/TCP   1d
+kube-system   traefik          LoadBalancer   10.43.171.142   10.0.0.100   80:31080/TCP,443:31443/TCP   1d
 ```
 
 **What just happened?** Services are the stable network endpoints for your apps.
@@ -272,10 +272,10 @@ kubectl top nodes
 
 ```
 NAME        CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%
-pi-k3s-1   245m         6%     1284Mi          8%
-pi-k3s-2   112m         2%     842Mi           5%
-pi-k3s-3   98m          2%     756Mi           4%
-pi-k3s-4   104m         2%     798Mi           5%
+rpi-k3s-1   245m         6%     1284Mi          8%
+rpi-k3s-2   112m         2%     842Mi           5%
+rpi-k3s-3   98m          2%     756Mi           4%
+rpi-k3s-4   104m         2%     798Mi           5%
 ```
 
 **What just happened?** This shows CPU and memory usage for each node. CPU is measured in "millicores" (m) -- 1000m = one full CPU core. Your CM5s have 4 cores each, so 4000m total per node. Memory is in mebibytes (Mi).

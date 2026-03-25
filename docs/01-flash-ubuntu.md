@@ -130,9 +130,9 @@ that you can write to.
 Before writing, Imager will ask "Would you like to apply OS customisation
 settings?" Click **Edit Settings** and configure:
 
-- **Set hostname:** `pi-k3s-1` (for the first module; use `pi-k3s-2`, `pi-k3s-3`, `pi-k3s-4` for the rest)
+- **Set hostname:** `rpi-k3s-1` (for the first module; use `rpi-k3s-2`, `rpi-k3s-3`, `rpi-k3s-4` for the rest)
 - **Enable SSH:** check "Use password authentication" (you will switch to key-based auth later)
-- **Set username and password:** username `ubuntu`, pick a password you will remember
+- **Set username and password:** username `myuser`, pick a password you will remember
 - **Set locale settings:** your timezone and keyboard layout
 
 Click **Save**, then **Yes** to apply, then **Yes** to confirm writing.
@@ -157,10 +157,10 @@ Repeat Steps 3 through 6 for each CM5 module, using a different hostname each ti
 
 | Module | Hostname |
 |--------|----------|
-| 1 | `pi-k3s-1` |
-| 2 | `pi-k3s-2` |
-| 3 | `pi-k3s-3` |
-| 4 | `pi-k3s-4` |
+| 1 | `rpi-k3s-1` |
+| 2 | `rpi-k3s-2` |
+| 3 | `rpi-k3s-3` |
+| 4 | `rpi-k3s-4` |
 
 ---
 
@@ -177,7 +177,7 @@ If you set hostnames in the Imager settings, you may be able to reach them by
 name right away (depending on your network):
 
 ```bash
-ping pi-k3s-1.local
+ping rpi-k3s-1.local
 ```
 
 If that does not work, check your UniFi dashboard (or your router's admin page)
@@ -186,10 +186,10 @@ for new DHCP leases to find the IPs. You will set static IPs in the next guide.
 ### First SSH connection
 
 ```bash
-ssh ubuntu@<ip-address>
+ssh myuser@<ip-address>
 ```
 
-If you did **not** configure the password in Imager, the default is `ubuntu` and
+If you did **not** configure the password in Imager, the default is the one you set during flash and
 you will be forced to change it immediately.
 
 Verify you are on the right node:
@@ -199,7 +199,7 @@ hostname
 cat /etc/os-release | head -3
 ```
 
-You should see `pi-k3s-1` (or whichever node) and `Ubuntu 24.04`.
+You should see `rpi-k3s-1` (or whichever node) and `Ubuntu 24.04`.
 
 ---
 
@@ -208,13 +208,13 @@ You should see `pi-k3s-1` (or whichever node) and `Ubuntu 24.04`.
 If you did not set the hostname during flashing, set it now on each Pi:
 
 ```bash
-sudo hostnamectl set-hostname pi-k3s-1
+sudo hostnamectl set-hostname rpi-k3s-1
 ```
 
 Then edit `/etc/hosts` to match:
 
 ```bash
-sudo sed -i 's/127.0.1.1.*/127.0.1.1\tpi-k3s-1/' /etc/hosts
+sudo sed -i 's/127.0.1.1.*/127.0.1.1\trpi-k3s-1/' /etc/hosts
 ```
 
 Repeat with the correct hostname for each node.
@@ -244,7 +244,7 @@ Before moving on, confirm:
 - [ ] All 4 CM5 modules are flashed with Ubuntu Server 24.04 LTS (64-bit ARM)
 - [ ] All 4 are powered on, connected to Ethernet, and booted
 - [ ] You can SSH into each one from your Mac
-- [ ] Each has a unique hostname (`pi-k3s-1` through `pi-k3s-4`)
+- [ ] Each has a unique hostname (`rpi-k3s-1` through `rpi-k3s-4`)
 - [ ] SSH is running on all nodes
 
 ---

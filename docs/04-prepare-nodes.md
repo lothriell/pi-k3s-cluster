@@ -14,7 +14,7 @@
 
 Before you can install Kubernetes (K3s) on your Raspberry Pi CM5 modules, each one needs to be configured in a specific way. Think of it like prepping a room before painting -- you need to lay down drop cloths, tape the trim, and move the furniture before the first brushstroke.
 
-The prepare playbook does all of this automatically on every node (pi-k3s-1 through pi-k3s-4). Here is exactly what it does and why:
+The prepare playbook does all of this automatically on every node (rpi-k3s-1 through rpi-k3s-4). Here is exactly what it does and why:
 
 ### 1. Update all system packages
 
@@ -99,10 +99,10 @@ Each task prints its name and a status for every node:
 
 ```
 TASK [Update apt package cache] ************************************************
-ok: [pi-k3s-1]
-ok: [pi-k3s-2]
-changed: [pi-k3s-3]
-ok: [pi-k3s-4]
+ok: [rpi-k3s-1]
+ok: [rpi-k3s-2]
+changed: [rpi-k3s-3]
+ok: [rpi-k3s-4]
 ```
 
 ### The final summary (PLAY RECAP)
@@ -111,10 +111,10 @@ At the very end, you'll see something like this:
 
 ```
 PLAY RECAP *********************************************************************
-pi-k3s-1   : ok=12   changed=5    unreachable=0    failed=0    skipped=0
-pi-k3s-2   : ok=12   changed=5    unreachable=0    failed=0    skipped=0
-pi-k3s-3   : ok=12   changed=5    unreachable=0    failed=0    skipped=0
-pi-k3s-4   : ok=12   changed=5    unreachable=0    failed=0    skipped=0
+rpi-k3s-1   : ok=12   changed=5    unreachable=0    failed=0    skipped=0
+rpi-k3s-2   : ok=12   changed=5    unreachable=0    failed=0    skipped=0
+rpi-k3s-3   : ok=12   changed=5    unreachable=0    failed=0    skipped=0
+rpi-k3s-4   : ok=12   changed=5    unreachable=0    failed=0    skipped=0
 ```
 
 Here's what each column means:
@@ -140,7 +140,7 @@ You don't have to trust the output blindly. SSH into any node and check for your
 ### Check that swap is off
 
 ```bash
-ssh pi-k3s-1
+ssh rpi-k3s-1
 free -h
 ```
 
@@ -207,13 +207,13 @@ net.ipv4.ip_forward = 1
 
 2. **Can you ping it?**
    ```bash
-   ping pi-k3s-1
+   ping rpi-k3s-1
    ```
    If this fails, the node is either off or has a different IP/hostname than what's in your inventory file.
 
 3. **Can you SSH manually?**
    ```bash
-   ssh pi-k3s-1
+   ssh rpi-k3s-1
    ```
    If this asks for a password, your SSH key isn't set up correctly for that node. Go back to your node setup steps and ensure your public key is in `~/.ssh/authorized_keys` on the node.
 
@@ -226,7 +226,7 @@ net.ipv4.ip_forward = 1
 **Fix:** Make sure the user Ansible connects as has passwordless sudo. On each node:
 
 ```bash
-ssh pi-k3s-1
+ssh rpi-k3s-1
 sudo visudo
 ```
 
@@ -260,7 +260,7 @@ your-username ALL=(ALL) NOPASSWD: ALL
 **Fix:** Reboot the node and check again:
 
 ```bash
-ssh pi-k3s-1
+ssh rpi-k3s-1
 sudo reboot
 ```
 

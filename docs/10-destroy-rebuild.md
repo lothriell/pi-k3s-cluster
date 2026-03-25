@@ -48,11 +48,11 @@ Here is what happens, step by step:
    every node. Your applications get a chance to shut down cleanly.
 
 2. **Uninstalls K3s from all agent nodes** -- runs the K3s uninstall script on
-   pi-k3s-2, pi-k3s-3, and pi-k3s-4. This removes K3s, its containers, and
+   rpi-k3s-2, rpi-k3s-3, and rpi-k3s-4. This removes K3s, its containers, and
    its data directories.
 
 3. **Uninstalls K3s from the server node** -- runs the K3s uninstall script on
-   pi-k3s-1. The server node gets uninstalled last because agents need to
+   rpi-k3s-1. The server node gets uninstalled last because agents need to
    deregister from it first.
 
 4. **Cleans up local kubeconfig** -- removes the Kubernetes configuration file
@@ -159,8 +159,8 @@ make all
 This single command runs all the playbooks in order:
 
 1. Common OS configuration (already done, but idempotent -- safe to re-run)
-2. K3s server install on pi-k3s-1
-3. K3s agent install on pi-k3s-2, pi-k3s-3, pi-k3s-4
+2. K3s server install on rpi-k3s-1
+3. K3s agent install on rpi-k3s-2, rpi-k3s-3, rpi-k3s-4
 4. MetalLB configuration
 5. cert-manager installation
 6. Monitoring stack (Prometheus + Grafana)
@@ -204,10 +204,10 @@ You should see all 4 nodes with status **Ready**:
 
 ```
 NAME        STATUS   ROLES                  AGE   VERSION
-pi-k3s-1   Ready    control-plane,master   5m    v1.31.x+k3s1
-pi-k3s-2   Ready    <none>                 4m    v1.31.x+k3s1
-pi-k3s-3   Ready    <none>                 4m    v1.31.x+k3s1
-pi-k3s-4   Ready    <none>                 4m    v1.31.x+k3s1
+rpi-k3s-1   Ready    control-plane,master   5m    v1.31.x+k3s1
+rpi-k3s-2   Ready    <none>                 4m    v1.31.x+k3s1
+rpi-k3s-3   Ready    <none>                 4m    v1.31.x+k3s1
+rpi-k3s-4   Ready    <none>                 4m    v1.31.x+k3s1
 ```
 
 ### Monitoring

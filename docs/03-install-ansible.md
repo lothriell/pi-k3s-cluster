@@ -77,12 +77,12 @@ all:
   children:
     servers:
       hosts:
-        pi-k3s-1:
-          ansible_host: 192.168.1.101
+        rpi-k3s-1:
+          ansible_host: 10.0.0.11
     agents:
       hosts:
-        pi-k3s-2:
-          ansible_host: 192.168.1.102
+        rpi-k3s-2:
+          ansible_host: 10.0.0.12
 ```
 
 ### 2. Tasks (the "what")
@@ -163,7 +163,7 @@ ran `ssh-copy-id` earlier. Ansible will:
 5. Collect the results and show you what happened.
 
 You do not need to install anything on the Pis for this to work. If you can
-`ssh ubuntu@pi-k3s-1`, then Ansible can reach it.
+`ssh myuser@rpi-k3s-1`, then Ansible can reach it.
 
 ---
 
@@ -191,8 +191,8 @@ If the inventory file does not exist yet, you can test with a quick one-liner
 (replace IPs with yours):
 
 ```bash
-ansible all -i '192.168.1.101,192.168.1.102,192.168.1.103,192.168.1.104,' \
-  -u ubuntu -m ping
+ansible all -i '10.0.0.11,10.0.0.12,10.0.0.13,10.0.0.14,' \
+  -u myuser -m ping
 ```
 
 (Note the trailing comma -- Ansible needs it when passing a list directly.)
@@ -200,19 +200,19 @@ ansible all -i '192.168.1.101,192.168.1.102,192.168.1.103,192.168.1.104,' \
 ### Successful output looks like this
 
 ```
-pi-k3s-1 | SUCCESS => {
+rpi-k3s-1 | SUCCESS => {
     "changed": false,
     "ping": "pong"
 }
-pi-k3s-2 | SUCCESS => {
+rpi-k3s-2 | SUCCESS => {
     "changed": false,
     "ping": "pong"
 }
-pi-k3s-3 | SUCCESS => {
+rpi-k3s-3 | SUCCESS => {
     "changed": false,
     "ping": "pong"
 }
-pi-k3s-4 | SUCCESS => {
+rpi-k3s-4 | SUCCESS => {
     "changed": false,
     "ping": "pong"
 }
@@ -228,10 +228,10 @@ means Ansible did not modify anything on the system (it was just a test).
 
 | Problem | Fix |
 |---------|-----|
-| `UNREACHABLE! ... Permission denied` | SSH key not copied. Re-run `ssh-copy-id ubuntu@<ip>`. |
+| `UNREACHABLE! ... Permission denied` | SSH key not copied. Re-run `ssh-copy-id myuser@<ip>`. |
 | `UNREACHABLE! ... Connection timed out` | Wrong IP or Pi is off. Check with `ping <ip>`. |
 | `UNREACHABLE! ... No route to host` | Network issue. Make sure your Mac and Pis are on the same subnet. |
-| `FAILED! ... /usr/bin/python3: not found` | Unlikely on Ubuntu 24.04, but fix with `ssh ubuntu@<ip> "sudo apt install python3"`. |
+| `FAILED! ... /usr/bin/python3: not found` | Unlikely on Ubuntu 24.04, but fix with `ssh myuser@<ip> "sudo apt install python3"`. |
 
 ---
 

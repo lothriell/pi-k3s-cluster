@@ -1,0 +1,123 @@
+---
+# Playbook: Setup shell environment on all nodes
+# =============================================================================
+# Installs zsh, oh-my-zsh, oh-my-posh, eza, and configures the same shell
+# experience as the workstation for the 'myuser' user on all Pi nodes.
+#
+# Usage:
+#   make shell
+# =============================================================================
+
+- name: Setup shell environment on all nodes
+  hosts: k3s_cluster
+  become: true
+  vars:
+    target_user: myuser
+    target_home: "/home/myuser"
+
+  tasks:
+    # -- Install packages ------------------------------------------------------
+
+    - name: Install zsh and dependencies
+      ansible.builtin.apt:
+        name:
+          - zsh
+          - git
+          - curl
+          - unzip
+          - fontconfig
+        state: present
+        update_cache: true
+      tags: [packages]
+
+    - name: Install eza (modern ls replacement)
+      ansible.builtin.shell: |
+        if ! command -v eza &>/dev/null; then
+          wget -qO- https://raw.githubusercontent.com/eza-community/eza/main/deb.asc | gpg --dearmor -o /etc/apt/keyrings/gierens.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/gierens.gpg] http://deb.gierens.de stable main" | tee /etc/apt/sources.list.d/gierens.list
+          apt update
+          apt install -y eza
+        fi
+      args:
+        creates: /usr/bin/eza
+      tags: [packages]
+
+    # -- Set zsh as default shell ----------------------------------------------
+
+    - name: Set zsh as default shell for {{ target_user }}
+      ansible.builtin.user:
+        name: "{{ target_user }}"
+        shell: /usr/bin/zsh
+      tags: [shell]
+
+    # -- Install Oh My Zsh ----------------------------------------------------
+
+    - name: Check if Oh My Zsh is already installed
+      ansible.builtin.stat:
+        path: "{{ target_home }}/.oh-my-zsh"
+      register: omz_dir
+      tags: [omz]
+
+    - name: Install Oh My Zsh
+      ansible.builtin.shell: |
+        su - {{ target_user }} -c 'sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended'
+      when: not omz_dir.stat.exists
+      tags: [omz]
+
+    - name: Install zsh-autosuggestions plugin
+      ansible.builtin.git:
+        repo: https://github.com/zsh-users/zsh-autosuggestions.git
+        dest: "{{ target_home }}/.oh-my-zsh/custom/plugins/zsh-autosuggestions"
+        depth: 1
+      tags: [omz]
+
+    - name: Fix oh-my-zsh ownership
+      ansible.builtin.file:
+        path: "{{ target_home }}/.oh-my-zsh"
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        recurse: true
+      tags: [omz]
+
+    # -- Install Oh My Posh ---------------------------------------------------
+
+    - name: Check if oh-my-posh is already installed
+      ansible.builtin.stat:
+        path: /usr/local/bin/oh-my-posh
+      register: omp_bin
+      tags: [omp]
+
+    - name: Install oh-my-posh
+      ansible.builtin.shell: |
+        curl -fsSL https://ohmyposh.dev/install.sh | bash -s -- -d /usr/local/bin
+      when: not omp_bin.stat.exists
+      tags: [omp]
+
+    - name: Create oh-my-posh themes directory
+      ansible.builtin.file:
+        path: "{{ target_home }}/.config/oh-my-posh/themes"
+        state: directory
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: "0755"
+      tags: [omp]
+
+    - name: Copy custom atomic theme
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../dotfiles/oh-my-posh/atomic.omp.json"
+        dest: "{{ target_home }}/.config/oh-my-posh/themes/atomic.omp.json"
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: "0644"
+      tags: [omp]
+
+    # -- Deploy .zshrc ---------------------------------------------------------
+
+    - name: Deploy .zshrc
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../dotfiles/zshrc"
+        dest: "{{ target_home }}/.zshrc"
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: "0644"
+      tags: [zshrc]
