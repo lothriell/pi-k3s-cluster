@@ -41,7 +41,10 @@ Lightweight Kubernetes (K3s) cluster running on 4x Raspberry Pi CM5 modules, ful
 If everything is already set up on your workstation and the Pis are flashed + networked:
 
 ```bash
-# Full cluster deployment from scratch
+# Flash a CM5 node (eMMC via USB, injects cloud-init automatically)
+make flash NODE=rpi-k3s-1 IMAGE=~/Downloads/ubuntu-server.img.xz
+
+# Full cluster deployment from scratch (after all nodes are flashed + booted)
 make all
 
 # Or step by step

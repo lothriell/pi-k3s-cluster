@@ -57,6 +57,10 @@ all: prepare k3s post-install metallb monitoring gitea argocd ## Full cluster bu
 # Provisioning Stages
 # =============================================================================
 
+.PHONY: flash
+flash: ## Flash a CM5 node: make flash NODE=rpi-k3s-1 [IMAGE=path/to/image]
+	@scripts/flash-node.sh $(NODE) $(IMAGE)
+
 .PHONY: bootstrap
 bootstrap: ## Create 'ansible' service account on all nodes (run once, uses your personal account)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/00-bootstrap-user.yml --ask-become-pass
