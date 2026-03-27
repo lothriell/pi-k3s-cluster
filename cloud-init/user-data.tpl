@@ -57,6 +57,20 @@ packages:
   - curl
   - wget
 
+# --- NTP ----------------------------------------------------------------------
+# Use plain NTP (port 123/udp) instead of Ubuntu's NTS default (port 4460/tcp).
+# NTS TLS handshakes frequently time out, leaving Pis without time sync.
+# Pi CM5 has no hardware RTC so reliable NTP is critical.
+ntp:
+  enabled: true
+  ntp_client: chrony
+  servers: []
+  pools:
+    - 0.pool.ntp.org
+    - 1.pool.ntp.org
+    - 2.pool.ntp.org
+    - 3.pool.ntp.org
+
 # --- First-boot commands ------------------------------------------------------
 runcmd:
   # Switch sudo-rs to traditional sudo (Ubuntu 25.10+ compatibility with Ansible)
@@ -64,6 +78,8 @@ runcmd:
     if [ -x /usr/bin/sudo.ws ]; then
       update-alternatives --set sudo /usr/bin/sudo.ws 2>/dev/null || true
     fi
+  # Allow chrony to step clock at any time (no hardware RTC)
+  - sed -i 's/^makestep.*/makestep 1 -1/' /etc/chrony/chrony.conf && systemctl restart chrony
   # Disable unattended-upgrades (Ansible manages updates)
   - systemctl disable --now unattended-upgrades.service || true
   - systemctl disable --now apt-daily.timer || true

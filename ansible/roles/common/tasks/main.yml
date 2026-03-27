@@ -94,3 +94,28 @@
   ansible.builtin.command: sysctl --system
   changed_when: false
   tags: [kernel]
+
+- name: Replace Ubuntu NTS-only NTP sources with reliable pool.ntp.org
+  ansible.builtin.copy:
+    dest: /etc/chrony/sources.d/ubuntu-ntp-pools.sources
+    content: |
+      # Replaced Ubuntu NTS pools — NTS requires TLS on port 4460 which
+      # frequently times out and leaves Pis (no hardware RTC) without time sync.
+      # Using plain NTP from pool.ntp.org instead (port 123/udp).
+      pool 0.pool.ntp.org iburst maxsources 2
+      pool 1.pool.ntp.org iburst maxsources 2
+      pool 2.pool.ntp.org iburst maxsources 2
+      pool 3.pool.ntp.org iburst maxsources 2
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart chrony
+  tags: [ntp]
+
+- name: Allow larger initial clock step for Pis without hardware RTC
+  ansible.builtin.lineinfile:
+    path: /etc/chrony/chrony.conf
+    regexp: '^makestep'
+    line: "makestep 1 -1"
+  notify: restart chrony
+  tags: [ntp]

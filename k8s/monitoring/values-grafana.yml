@@ -12,6 +12,12 @@
 # =============================================================================
 
 # ---------------------------------------------------------------------------
+# Service -- expose Grafana via MetalLB LoadBalancer for direct LAN access.
+# ---------------------------------------------------------------------------
+service:
+  type: LoadBalancer
+
+# ---------------------------------------------------------------------------
 # Admin credentials
 # ---------------------------------------------------------------------------
 # TODO CHANGEME -- change this password immediately after first login!
@@ -100,31 +106,31 @@ dashboards:
       datasource: Prometheus
 
 # ---------------------------------------------------------------------------
-# Ingress -- expose Grafana through Traefik (K3s default ingress controller).
+# Sidecar -- watches for ConfigMaps labeled grafana_dashboard and loads them.
+# ---------------------------------------------------------------------------
+sidecar:
+  dashboards:
+    enabled: true
+    label: grafana_dashboard
+    folder: /tmp/dashboards
+    resource: configmap
+    searchNamespace: monitoring
+
+# ---------------------------------------------------------------------------
+# Ingress -- disabled for now; using MetalLB LoadBalancer for direct access.
+# Re-enable once Cloudflare tunnel + cert-manager are configured.
 # ---------------------------------------------------------------------------
 ingress:
-  enabled: true
-  annotations:
-    kubernetes.io/ingress.class: traefik
-    # Uncomment the lines below once cert-manager is working to get
-    # automatic TLS certificates from Let's Encrypt:
-    # cert-manager.io/cluster-issuer: letsencrypt-production
-  hosts:
-    # TODO CHANGEME -- replace with your actual domain
-    - grafana.yourdomain.com
-  # Uncomment to enable TLS (requires cert-manager):
-  # tls:
-  #   - secretName: grafana-tls
-  #     hosts:
-  #       - grafana.yourdomain.com
+  enabled: false
 
 # ---------------------------------------------------------------------------
 # Grafana configuration overrides (grafana.ini)
 # ---------------------------------------------------------------------------
 grafana.ini:
   server:
-    # TODO CHANGEME -- set to your actual Grafana URL
-    root_url: http://grafana.yourdomain.com
+    # Serve from root on the LoadBalancer IP
+    root_url: "%(protocol)s://%(domain)s/"
+    serve_from_sub_path: false
   # Disable analytics/telemetry to save bandwidth on a Pi
   analytics:
     check_for_updates: false
