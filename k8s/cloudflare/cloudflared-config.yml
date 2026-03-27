@@ -6,7 +6,7 @@
 # cloudflared routes it to the corresponding service inside your cluster.
 #
 # How it works:
-#   [User visits grafana.yourdomain.com]
+#   [User visits grafana.example.com]
 #     --> Cloudflare edge receives the request
 #     --> Routes it through the tunnel to your cloudflared pod
 #     --> cloudflared matches the hostname to an ingress rule below
@@ -32,8 +32,7 @@ data:
     # Tunnel ID -- the UUID you got when you ran:
     #   cloudflared tunnel create pi-cluster
     # -----------------------------------------------------------------------
-    # TODO CHANGEME -- replace with your actual tunnel ID
-    tunnel: 00000000-0000-0000-0000-000000000000
+    tunnel: 44ab070c-301e-4dbf-9c88-d254b935beec
 
     # Path to the credentials file (mounted from the K8s Secret)
     credentials-file: /etc/cloudflared/credentials.json
@@ -52,36 +51,19 @@ data:
     # The last rule MUST be a catch-all (no hostname) that returns 404.
     # -----------------------------------------------------------------------
     ingress:
-      # -- Grafana (monitoring dashboards)
-      # TODO CHANGEME -- replace hostname with your actual domain
-      - hostname: grafana.yourdomain.com
-        service: http://grafana.monitoring.svc.cluster.local:80
-        # Optional: pass original IP headers to Grafana
-        originRequest:
-          noTLSVerify: true
-
-      # -- Gitea (self-hosted Git)
-      # TODO CHANGEME -- replace hostname with your actual domain
-      - hostname: gitea.yourdomain.com
-        service: http://gitea-http.gitea.svc.cluster.local:3000
-        originRequest:
-          noTLSVerify: true
-
-      # -- ArgoCD (GitOps continuous deployment)
-      # TODO CHANGEME -- replace hostname with your actual domain
-      - hostname: argocd.yourdomain.com
-        service: http://argocd-server.argocd.svc.cluster.local:80
-        originRequest:
-          noTLSVerify: true
-
       # -----------------------------------------------------------------------
-      # Add more services here as you deploy them. Examples:
+      # Admin/ops tools (Grafana, Gitea, ArgoCD) are NOT exposed here.
+      # They are accessible via Tailscale or LAN MetalLB IPs only.
+      # Only add public-facing user apps below.
+      # -----------------------------------------------------------------------
+
+      # -- Add public-facing services here. Examples:
       #
-      # - hostname: wiki.yourdomain.com
+      # - hostname: app.example.com
+      #   service: http://my-app.default.svc.cluster.local:8080
+      #
+      # - hostname: wiki.example.com
       #   service: http://wiki.default.svc.cluster.local:3000
-      #
-      # - hostname: home.yourdomain.com
-      #   service: http://home-assistant.default.svc.cluster.local:8123
       # -----------------------------------------------------------------------
 
       # -- Catch-all rule (REQUIRED, must be last)
