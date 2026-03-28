@@ -1,0 +1,21 @@
+---
+# 08-deploy-tailscale.yml
+# Install Tailscale on all cluster nodes for secure remote access.
+# The K3s server node acts as a subnet router, advertising the local
+# network (10.69.0.0/24) so remote Tailscale clients can reach all
+# node IPs, MetalLB services, and the K3s API.
+#
+# Prerequisites:
+#   - Tailscale auth key in secrets/tailscale-auth-key
+#   - After first run, approve subnet routes in Tailscale admin console:
+#     https://login.tailscale.com/admin/machines
+#
+# Usage:
+#   make tailscale
+#   ansible-playbook ansible/playbooks/08-deploy-tailscale.yml
+
+- name: Deploy Tailscale to cluster nodes
+  hosts: k3s_cluster
+  become: true
+  roles:
+    - role: ../roles/tailscale

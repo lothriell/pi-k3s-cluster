@@ -1,0 +1,49 @@
+# Longhorn distributed storage for Raspberry Pi CM5 cluster
+# 32GB eMMC per node — conservative settings to leave room for OS upgrades
+
+persistence:
+  defaultClassReplicaCount: 2    # 2 replicas for pod migration (3 is overkill on 3-4 nodes)
+
+defaultSettings:
+  # Storage limits — keep ~10GB free per node for OS + upgrades
+  storageOverProvisioningPercentage: 100
+  storageMinimalAvailablePercentage: 25    # Stop scheduling when <25% free (~7GB)
+
+  # Exclude rpi-k3s-1 (faulty, cordoned)
+  nodeDownPodDeletionPolicy: delete-both-statefulset-and-deployment-pod
+
+  # Performance tuning for eMMC
+  guaranteedInstanceManagerCPU: 5          # Low CPU guarantee (eMMC is slow anyway)
+
+  # Default 2 replicas
+  defaultReplicaCount: 2
+
+  # Data path on eMMC
+  defaultDataPath: /var/lib/longhorn
+
+# Resource limits — keep it light on Pi nodes
+longhornManager:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+longhornDriver:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+# Expose Longhorn UI via Traefik ingress
+ingress:
+  enabled: true
+  ingressClassName: traefik
+  host: longhorn.homielab.omg
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web

@@ -1,0 +1,95 @@
+---
+# Install and configure Tailscale on Raspberry Pi CM5 nodes
+# The K3s server node is configured as a subnet router to advertise
+# the local network (nodes + MetalLB IPs) to the Tailscale network.
+
+- name: Add Tailscale GPG key
+  ansible.builtin.shell: |
+    curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg \
+      | tee /usr/share/keyrings/tailscale-archive-keyring.gpg > /dev/null
+  args:
+    creates: /usr/share/keyrings/tailscale-archive-keyring.gpg
+  tags: [tailscale, packages]
+
+- name: Add Tailscale apt repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/tailscale.list
+    content: |
+      deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [tailscale, packages]
+
+- name: Install Tailscale
+  ansible.builtin.apt:
+    name: tailscale
+    state: present
+    update_cache: true
+  tags: [tailscale, packages]
+
+- name: Enable and start tailscaled service
+  ansible.builtin.systemd:
+    name: tailscaled
+    enabled: true
+    state: started
+  tags: [tailscale, services]
+
+- name: Check if Tailscale is already authenticated
+  ansible.builtin.command: tailscale status --json
+  register: tailscale_status
+  changed_when: false
+  failed_when: false
+  tags: [tailscale]
+
+- name: Configure Tailscale (regular node)
+  ansible.builtin.command: >
+    tailscale set
+    --hostname={{ inventory_hostname }}
+  when: inventory_hostname not in groups['k3s_server']
+  changed_when: true
+  tags: [tailscale]
+
+- name: Configure Tailscale as subnet router (server node)
+  ansible.builtin.command: >
+    tailscale set
+    --hostname={{ inventory_hostname }}
+    --advertise-routes={{ tailscale_subnet_routes }}
+  when: inventory_hostname in groups['k3s_server']
+  changed_when: true
+  tags: [tailscale]
+
+- name: Authenticate Tailscale (regular node)
+  ansible.builtin.command: >
+    tailscale up
+    --authkey={{ tailscale_auth_key }}
+    --hostname={{ inventory_hostname }}
+  when:
+    - tailscale_status.rc != 0 or (tailscale_status.stdout | from_json).BackendState != "Running"
+    - inventory_hostname not in groups['k3s_server']
+  changed_when: true
+  tags: [tailscale]
+
+- name: Authenticate Tailscale as subnet router (server node)
+  ansible.builtin.command: >
+    tailscale up
+    --authkey={{ tailscale_auth_key }}
+    --hostname={{ inventory_hostname }}
+    --advertise-routes={{ tailscale_subnet_routes }}
+  when:
+    - tailscale_status.rc != 0 or (tailscale_status.stdout | from_json).BackendState != "Running"
+    - inventory_hostname in groups['k3s_server']
+  changed_when: true
+  tags: [tailscale]
+
+- name: Ensure IP forwarding is enabled for subnet routing (server node)
+  ansible.builtin.sysctl:
+    name: "{{ item }}"
+    value: "1"
+    sysctl_file: /etc/sysctl.d/tailscale.conf
+    reload: true
+  loop:
+    - net.ipv4.ip_forward
+    - net.ipv6.conf.all.forwarding
+  when: inventory_hostname in groups['k3s_server']
+  tags: [tailscale, kernel]

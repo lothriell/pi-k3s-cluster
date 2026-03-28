@@ -2,7 +2,7 @@
 # Playbook: Setup shell environment on all nodes
 # =============================================================================
 # Installs zsh, oh-my-zsh, oh-my-posh, eza, and configures the same shell
-# experience as the workstation for the 'myuser' user on all Pi nodes.
+# experience as the workstation for the personal user on all Pi nodes.
 #
 # Usage:
 #   make shell
@@ -12,8 +12,8 @@
   hosts: k3s_cluster
   become: true
   vars:
-    target_user: myuser
-    target_home: "/home/myuser"
+    target_user: "{{ personal_user }}"
+    target_home: "/home/{{ personal_user }}"
 
   tasks:
     # -- Install packages ------------------------------------------------------

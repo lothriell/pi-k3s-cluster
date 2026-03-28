@@ -2,7 +2,7 @@
 # Local domain ingress rules for *.homielab.omg
 # =============================================================================
 # Routes local domain names to cluster services via Traefik.
-# Requires DNS resolution of *.homielab.omg -> 10.0.0.100 (Traefik LB IP).
+# Requires DNS resolution of *.homielab.omg -> 10.69.20.100 (Traefik LB IP).
 #
 # Apply with: kubectl apply -f local-ingress.yml
 # =============================================================================

@@ -39,9 +39,8 @@ spec:
     #   2. Must NOT overlap with your router's DHCP range
     #   3. Must NOT include IPs already assigned to other devices
     #
-    # Pi nodes use 10.0.0.11-153, reserved range up to .160
-    # MetalLB gets .155-.160 (adjust if you need more)
-    - 10.0.0.100-10.0.0.110
+    # Pi nodes use 10.69.20.11-14, MetalLB gets .100-.110
+    - 10.69.20.100-10.69.20.110
 
 ---
 # ---------------------------------------------------------------------------

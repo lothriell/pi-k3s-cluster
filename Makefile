@@ -51,7 +51,7 @@ help: ## Show all available targets with descriptions
 	@echo ""
 
 .PHONY: all
-all: prepare k3s post-install metallb monitoring gitea argocd ## Full cluster build (prepare -> k3s -> post-install -> metallb -> monitoring -> gitea -> argocd)
+all: prepare k3s post-install metallb tailscale longhorn monitoring gitea argocd ## Full cluster build (prepare -> k3s -> post-install -> metallb -> tailscale -> longhorn -> monitoring -> gitea -> argocd)
 
 # =============================================================================
 # Provisioning Stages
@@ -122,6 +122,21 @@ argocd: ## Deploy ArgoCD for GitOps continuous deployment
 cloudflare: ## Deploy Cloudflare tunnel for external access
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/06-deploy-cloudflare.yml
 
+.PHONY: longhorn
+longhorn: ## Deploy Longhorn distributed storage
+	$(HELM) repo add longhorn https://charts.longhorn.io 2>/dev/null || true
+	$(HELM) repo update longhorn
+	$(HELM) upgrade --install longhorn longhorn/longhorn \
+		-n longhorn-system \
+		--create-namespace \
+		-f k8s/longhorn/values-longhorn.yml \
+		--wait --timeout 5m
+	$(KUBECTL) patch storageclass local-path -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
+
+.PHONY: tailscale
+tailscale: ## Deploy Tailscale for secure remote access (subnet router on server node)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/08-deploy-tailscale.yml
+
 # =============================================================================
 # Cluster Operations
 # =============================================================================
@@ -147,11 +162,11 @@ ping: ## Test Ansible connectivity to all nodes
 # =============================================================================
 
 .PHONY: ssh-1
-ssh-1: ## SSH into rpi-k3s-1 (server)
+ssh-1: ## SSH into rpi-k3s-1 (agent)
 	ssh $(PI_USER)@$(PI_1)
 
 .PHONY: ssh-2
-ssh-2: ## SSH into rpi-k3s-2 (agent)
+ssh-2: ## SSH into rpi-k3s-2 (server/control plane)
 	ssh $(PI_USER)@$(PI_2)
 
 .PHONY: ssh-3

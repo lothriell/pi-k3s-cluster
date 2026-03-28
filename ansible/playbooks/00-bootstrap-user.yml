@@ -2,7 +2,7 @@
 # Playbook 00: Bootstrap the Ansible service account
 # =============================================================================
 # This playbook creates a dedicated 'ansible' user on all nodes for automation.
-# It must be run ONCE using your personal account (myuser) to bootstrap access.
+# It must be run ONCE using your personal account to bootstrap access.
 #
 # Why a dedicated user?
 #   - Separation of concerns: your personal account stays untouched
@@ -19,10 +19,10 @@
 - name: Create Ansible service account on all nodes
   hosts: k3s_cluster
   become: true
-  # Override remote_user for this playbook only -- we connect as 'myuser'
+  # Override remote_user for this playbook only -- we connect as personal user
   # because the 'ansible' user doesn't exist yet
   vars:
-    ansible_user: myuser
+    ansible_user: "{{ personal_user }}"
     service_account: ansible
 
   tasks:
