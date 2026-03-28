@@ -16,12 +16,13 @@ __pycache__/
 # Logs
 *.log
 
-# Secrets (never commit these)
+# Secrets and local config (never commit these)
 secrets/
 *.pem
 *.key
 tunnel-credentials.json
 .env
+ansible/inventory/group_vars/all.yml
 
 # Kubeconfig copies
 kubeconfig

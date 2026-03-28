@@ -112,7 +112,8 @@ kubectl get secret -n argocd argocd-initial-admin-secret -o jsonpath='{.data.pas
 ## File Conventions
 
 - Playbooks are numbered and run in order (00-08)
-- K8s manifests use `values-<service>.yml` for Helm, raw YAML for kubectl apply
+- K8s manifests use `values-<service>.yml` for Helm, `.j2` templates for configs with environment-specific values
 - Placeholder values marked with `TODO CHANGEME`
 - Dotfiles for Pi shell environment live in `dotfiles/`
 - `ansible.cfg` is at project root (not in `ansible/`) so it works from any subdirectory
+- **Local config:** `ansible/inventory/group_vars/all.yml` (gitignored) holds IPs, username, and secrets. Copy from `all.yml.example` to set up.

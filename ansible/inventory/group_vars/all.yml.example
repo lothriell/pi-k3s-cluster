@@ -1,0 +1,28 @@
+---
+# Local configuration — copy to all.yml and fill in your values
+# all.yml is gitignored — your secrets and IPs stay local
+#
+# cp all.yml.example all.yml
+
+# Personal user account (used for bootstrap playbook)
+personal_user: myuser
+
+# Node IPs — must match your network/DHCP reservations
+node_ip_1: 10.0.0.11
+node_ip_2: 10.0.0.12
+node_ip_3: 10.0.0.13
+node_ip_4: 10.0.0.14
+
+# K3s server endpoint (which node is control plane)
+k3s_server_ip: "{{ node_ip_1 }}"
+k3s_server_url: "https://{{ k3s_server_ip }}:6443"
+
+# MetalLB IP range for LoadBalancer services (must not overlap with node/DHCP IPs)
+metallb_ip_range: "10.0.0.100-10.0.0.110"
+
+# Tailscale
+tailscale_auth_key: "{{ lookup('file', playbook_dir + '/../../secrets/tailscale-auth-key') | trim }}"
+tailscale_subnet_routes: "10.0.0.0/24"
+
+# Cloudflare tunnel domain
+cloudflare_domain: example.com

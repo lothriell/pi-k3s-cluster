@@ -93,7 +93,10 @@ metallb: ## Deploy MetalLB load balancer via Helm
 		-n metallb-system \
 		--create-namespace \
 		--wait
-	$(KUBECTL) apply -f k8s/metallb/metallb-config.yml
+	@ansible localhost -m template \
+		-a "src=k8s/metallb/metallb-config.yml.j2 dest=/tmp/metallb-config.yml" \
+		--connection=local -e @ansible/inventory/group_vars/all.yml 2>/dev/null
+	$(KUBECTL) apply -f /tmp/metallb-config.yml
 
 .PHONY: cert-manager
 cert-manager: ## Deploy cert-manager and cluster issuer
