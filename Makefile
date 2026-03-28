@@ -66,7 +66,7 @@ bootstrap: ## Create 'ansible' service account on all nodes (run once, uses your
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/00-bootstrap-user.yml --ask-become-pass
 
 .PHONY: shell
-shell: ## Setup zsh + oh-my-posh + eza on all nodes (for myuser user)
+shell: ## Setup zsh + oh-my-posh + eza on all nodes (for personal user)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/00-setup-shell.yml
 
 .PHONY: prepare

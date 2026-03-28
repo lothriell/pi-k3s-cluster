@@ -10,7 +10,7 @@ set -euo pipefail
 #
 # Examples:
 #   ./scripts/flash-node.sh rpi-k3s-1
-#   ./scripts/flash-node.sh rpi-k3s-2 ~/Downloads/ubuntu-25.10-preinstalled-server-arm64+raspi.img.xz
+#   ./scripts/flash-node.sh rpi-k3s-2 ~/Downloads/ubuntu-24.04-preinstalled-server-arm64+raspi.img.xz
 #
 # Prerequisites:
 #   1. Install rpiboot: brew install --cask raspberry-pi-imager
@@ -38,6 +38,27 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 CLOUD_INIT_DIR="${PROJECT_DIR}/cloud-init"
+GROUP_VARS="${PROJECT_DIR}/ansible/inventory/group_vars/all.yml"
+
+# --- Load config from group_vars/all.yml ------------------------------------
+
+if [[ ! -f "$GROUP_VARS" ]]; then
+    echo "  ERROR: ${GROUP_VARS} not found."
+    echo "  Copy from all.yml.example and fill in your values:"
+    echo "    cp ansible/inventory/group_vars/all.yml.example ansible/inventory/group_vars/all.yml"
+    exit 1
+fi
+
+# Parse YAML values (simple key: value extraction)
+PERSONAL_USER=$(grep '^personal_user:' "$GROUP_VARS" | awk '{print $2}' | tr -d '"')
+SSH_PUBKEY=$(grep '^ssh_pubkey:' "$GROUP_VARS" | sed 's/^ssh_pubkey: *//' | tr -d '"')
+
+if [[ -z "$PERSONAL_USER" || -z "$SSH_PUBKEY" ]]; then
+    echo "  ERROR: personal_user or ssh_pubkey not set in ${GROUP_VARS}"
+    exit 1
+fi
+
+echo "  Config: user=${PERSONAL_USER}, key=${SSH_PUBKEY:0:30}..."
 
 # --- Arguments ---------------------------------------------------------------
 
@@ -87,16 +108,20 @@ echo ""
 read -rp "  Press Enter when ready (or Ctrl+C to cancel)..."
 echo ""
 
-if command -v rpiboot &>/dev/null; then
+RPIBOOT_DIR="${RPIBOOT_DIR:-${HOME}/Git/usbboot}"
+if [[ -x "${RPIBOOT_DIR}/rpiboot" ]]; then
+    echo "  Running rpiboot from ${RPIBOOT_DIR}..."
+    (cd "$RPIBOOT_DIR" && sudo ./rpiboot -d mass-storage-gadget64)
+elif command -v rpiboot &>/dev/null; then
     echo "  Running rpiboot..."
-    sudo rpiboot
+    sudo rpiboot -d mass-storage-gadget64
 elif [[ -x /usr/local/bin/rpiboot ]]; then
     echo "  Running rpiboot..."
-    sudo /usr/local/bin/rpiboot
+    sudo /usr/local/bin/rpiboot -d mass-storage-gadget64
 else
     echo "  ERROR: rpiboot not found."
     echo "  Install it: https://github.com/raspberrypi/usbboot"
-    echo "  Or: brew install --cask raspberry-pi-imager (includes rpiboot)"
+    echo "  Set RPIBOOT_DIR env var if installed elsewhere."
     exit 1
 fi
 
@@ -112,7 +137,7 @@ echo ""
 # On macOS, the CM5 eMMC typically appears as /dev/diskN
 # Look for a ~32GB disk that just appeared
 EMMC_DISK=""
-for disk in /dev/disk2 /dev/disk3 /dev/disk4 /dev/disk5; do
+for disk in /dev/disk2 /dev/disk3 /dev/disk4 /dev/disk5 /dev/disk6 /dev/disk7 /dev/disk8; do
     if diskutil info "$disk" &>/dev/null; then
         SIZE=$(diskutil info "$disk" | grep "Disk Size" | head -1)
         if echo "$SIZE" | grep -qE "2[89]\.|3[0-2]\."; then
@@ -206,8 +231,11 @@ fi
 echo "  Boot partition: ${BOOT_MOUNT}"
 echo "  Writing cloud-init files for ${HOSTNAME}..."
 
-# Generate user-data with hostname substituted
-sed "s/__HOSTNAME__/${HOSTNAME}/g" "${CLOUD_INIT_DIR}/user-data.tpl" > "${BOOT_MOUNT}/user-data"
+# Generate user-data with all variables substituted
+sed -e "s/__HOSTNAME__/${HOSTNAME}/g" \
+    -e "s/__USERNAME__/${PERSONAL_USER}/g" \
+    -e "s|__SSH_PUBKEY__|${SSH_PUBKEY}|g" \
+    "${CLOUD_INIT_DIR}/user-data.tpl" > "${BOOT_MOUNT}/user-data"
 
 # Copy network-config (DHCP, no per-node changes needed)
 cp "${CLOUD_INIT_DIR}/network-config.tpl" "${BOOT_MOUNT}/network-config"

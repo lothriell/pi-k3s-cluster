@@ -4,8 +4,11 @@
 #
 # cp all.yml.example all.yml
 
-# Personal user account (used for bootstrap playbook)
+# Personal user account (used for bootstrap and cloud-init)
 personal_user: myuser
+
+# SSH public key (used in cloud-init for both personal and ansible users)
+ssh_pubkey: "ssh-ed25519 AAAA... your-key-here"
 
 # Node IPs — must match your network/DHCP reservations
 node_ip_1: 10.0.0.11

@@ -5,10 +5,10 @@
 # This file is processed by cloud-init on FIRST BOOT ONLY.
 # Place it on the boot partition as 'user-data' (no extension).
 #
-# Variables to replace per node:
-#   __HOSTNAME__  - e.g., rpi-k3s-1, rpi-k3s-2, etc.
-#
-# The flash-node.sh script does this automatically.
+# Variables replaced by flash-node.sh:
+#   __HOSTNAME__    - e.g., rpi-k3s-1, rpi-k3s-2, etc.
+#   __USERNAME__    - personal user account name
+#   __SSH_PUBKEY__  - SSH public key for both users
 # =============================================================================
 
 # --- Identity ----------------------------------------------------------------
@@ -20,11 +20,11 @@ timezone: UTC
 locale: en_US.UTF-8
 
 # --- Users --------------------------------------------------------------------
-# Create both personal (myuser) and automation (ansible) accounts.
+# Create both personal and automation (ansible) accounts.
 # Both get SSH key access. Only ansible gets passwordless sudo.
 # Password login is disabled entirely - SSH keys only.
 users:
-  - name: myuser
+  - name: __USERNAME__
     gecos: Personal Account
     groups: adm, sudo, systemd-journal
     shell: /bin/bash
@@ -73,10 +73,16 @@ ntp:
 
 # --- First-boot commands ------------------------------------------------------
 runcmd:
-  # Switch sudo-rs to traditional sudo (Ubuntu 25.10+ compatibility with Ansible)
+  # Switch sudo-rs to traditional sudo (Ubuntu 25.10+ only, harmless on 24.04)
   - |
     if [ -x /usr/bin/sudo.ws ]; then
       update-alternatives --set sudo /usr/bin/sudo.ws 2>/dev/null || true
+    fi
+  # Disable eMMC Command Queue Engine to prevent freeze after ~3.5 days
+  # (raspberrypi/linux#7167 — CQE deadlock on CM5 eMMC)
+  - |
+    if ! grep -q 'sdhci.cqe=0' /boot/firmware/cmdline.txt 2>/dev/null; then
+      sed -i 's/$/ sdhci.cqe=0/' /boot/firmware/cmdline.txt
     fi
   # Allow chrony to step clock at any time (no hardware RTC)
   - sed -i 's/^makestep.*/makestep 1 -1/' /etc/chrony/chrony.conf && systemctl restart chrony
