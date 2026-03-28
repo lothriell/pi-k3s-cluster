@@ -96,6 +96,17 @@ server:
     kubernetes.io/arch: arm64
 
 # ---------------------------------------------------------------------------
+# Extra scrape configs -- add targets not auto-discovered by Prometheus.
+# ---------------------------------------------------------------------------
+extraScrapeConfigs: |
+  - job_name: longhorn
+    scrape_interval: 30s
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+        - longhorn-backend.longhorn-system.svc:9500
+
+# ---------------------------------------------------------------------------
 # ConfigMap reload sidecar -- watches for config changes and triggers a
 # reload without restarting the pod. Very lightweight.
 # ---------------------------------------------------------------------------

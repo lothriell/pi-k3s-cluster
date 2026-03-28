@@ -65,6 +65,12 @@ redis-cluster:
 redis:
   enabled: false
 
+valkey:
+  enabled: false
+
+valkey-cluster:
+  enabled: false
+
 # ---------------------------------------------------------------------------
 # Gitea application configuration (app.ini)
 # ---------------------------------------------------------------------------
@@ -88,8 +94,7 @@ gitea:
 
     # Queue: use a level-DB based queue (no Redis needed).
     queue:
-      TYPE: level
-      CONN_STR: /data/gitea/queues
+      TYPE: channel
 
     # Server settings
     server:

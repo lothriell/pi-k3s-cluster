@@ -93,9 +93,8 @@ metallb: ## Deploy MetalLB load balancer via Helm
 		-n metallb-system \
 		--create-namespace \
 		--wait
-	@ansible localhost -m template \
-		-a "src=k8s/metallb/metallb-config.yml.j2 dest=/tmp/metallb-config.yml" \
-		--connection=local -e @ansible/inventory/group_vars/all.yml 2>/dev/null
+	@METALLB_RANGE=$$(grep '^metallb_ip_range:' ansible/inventory/group_vars/all.yml | sed 's/metallb_ip_range: *//' | tr -d '"'); \
+		sed "s/{{ metallb_ip_range }}/$$METALLB_RANGE/g" k8s/metallb/metallb-config.yml.j2 > /tmp/metallb-config.yml
 	$(KUBECTL) apply -f /tmp/metallb-config.yml
 
 .PHONY: cert-manager

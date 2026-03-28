@@ -52,9 +52,10 @@ fi
 # Parse YAML values (simple key: value extraction)
 PERSONAL_USER=$(grep '^personal_user:' "$GROUP_VARS" | awk '{print $2}' | tr -d '"')
 SSH_PUBKEY=$(grep '^ssh_pubkey:' "$GROUP_VARS" | sed 's/^ssh_pubkey: *//' | tr -d '"')
+PASSWORD_HASH=$(grep '^password_hash:' "$GROUP_VARS" | sed 's/^password_hash: *//' | tr -d '"')
 
-if [[ -z "$PERSONAL_USER" || -z "$SSH_PUBKEY" ]]; then
-    echo "  ERROR: personal_user or ssh_pubkey not set in ${GROUP_VARS}"
+if [[ -z "$PERSONAL_USER" || -z "$SSH_PUBKEY" || -z "$PASSWORD_HASH" ]]; then
+    echo "  ERROR: personal_user, ssh_pubkey, or password_hash not set in ${GROUP_VARS}"
     exit 1
 fi
 
@@ -235,6 +236,7 @@ echo "  Writing cloud-init files for ${HOSTNAME}..."
 sed -e "s/__HOSTNAME__/${HOSTNAME}/g" \
     -e "s/__USERNAME__/${PERSONAL_USER}/g" \
     -e "s|__SSH_PUBKEY__|${SSH_PUBKEY}|g" \
+    -e "s|__PASSWORD_HASH__|${PASSWORD_HASH}|g" \
     "${CLOUD_INIT_DIR}/user-data.tpl" > "${BOOT_MOUNT}/user-data"
 
 # Copy network-config (DHCP, no per-node changes needed)
@@ -243,10 +245,17 @@ cp "${CLOUD_INIT_DIR}/network-config.tpl" "${BOOT_MOUNT}/network-config"
 # Generate meta-data with hostname
 sed "s/__HOSTNAME__/${HOSTNAME}/g" "${CLOUD_INIT_DIR}/meta-data.tpl" > "${BOOT_MOUNT}/meta-data"
 
+# Copy dotfiles to boot partition (picked up by cloud-init runcmd)
+DOTFILES_DIR="${PROJECT_DIR}/dotfiles"
+mkdir -p "${BOOT_MOUNT}/dotfiles"
+cp "${DOTFILES_DIR}/zshrc" "${BOOT_MOUNT}/dotfiles/"
+cp "${DOTFILES_DIR}/oh-my-posh/atomic.omp.json" "${BOOT_MOUNT}/dotfiles/"
+
 echo "  Written:"
 echo "    ${BOOT_MOUNT}/user-data"
 echo "    ${BOOT_MOUNT}/network-config"
 echo "    ${BOOT_MOUNT}/meta-data"
+echo "    ${BOOT_MOUNT}/dotfiles/ (zshrc, atomic.omp.json)"
 echo ""
 
 # --- Step 5: Unmount ----------------------------------------------------------

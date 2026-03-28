@@ -10,6 +10,9 @@ personal_user: myuser
 # SSH public key (used in cloud-init for both personal and ansible users)
 ssh_pubkey: "ssh-ed25519 AAAA... your-key-here"
 
+# Password hash for personal user (generate with: openssl passwd -6)
+password_hash: "$6$rounds=4096$salt$hash-here"
+
 # Node IPs — must match your network/DHCP reservations
 node_ip_1: 10.0.0.11
 node_ip_2: 10.0.0.12
