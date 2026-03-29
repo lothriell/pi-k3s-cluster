@@ -114,6 +114,21 @@ extraScrapeConfigs: |
       - source_labels: [__meta_kubernetes_endpoint_port_name]
         regex: manager
         action: keep
+  - job_name: trivy-operator
+    scrape_interval: 30s
+    metrics_path: /metrics
+    kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names:
+            - trivy-system
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_name]
+        regex: trivy-operator
+        action: keep
+      - source_labels: [__meta_kubernetes_endpoint_port_name]
+        regex: metrics
+        action: keep
 
 # ---------------------------------------------------------------------------
 # ConfigMap reload sidecar -- watches for config changes and triggers a

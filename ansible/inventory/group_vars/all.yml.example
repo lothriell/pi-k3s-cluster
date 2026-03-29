@@ -30,6 +30,18 @@ metallb_ip_range: "10.0.0.100-10.0.0.110"
 tailscale_auth_key: "{{ lookup('file', playbook_dir + '/../../secrets/tailscale-auth-key') | trim }}"
 tailscale_subnet_routes: "10.0.0.0/24"
 
+# x86 K3s agent node IPs (Proxmox VMs)
+x86_node_ip_1: 10.0.0.21
+x86_node_ip_2: 10.0.0.22
+
+# SFF node IPs
+sff_athena_ip: 10.0.0.30
+sff_artemis_ip: 10.0.0.31
+sff_minisforum_ip: 10.0.0.32
+
+# Wazuh manager IP
+wazuh_manager_ip: 10.0.0.50
+
 # Cloudflare tunnel domain
 cloudflare_domain: example.com
 

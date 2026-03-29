@@ -61,6 +61,20 @@
       changed_when: false
       tags: [grafana]
 
+    # -- Trivy dashboard (auto-discovered by Grafana sidecar) -----------------
+
+    - name: Deploy Trivy Operator Grafana dashboard
+      ansible.builtin.shell: |
+        kubectl create configmap trivy-operator-dashboard \
+          --namespace monitoring \
+          --from-file=trivy-operator.json={{ playbook_dir }}/../../k8s/monitoring/dashboards/trivy-operator.json \
+          --dry-run=client -o yaml | \
+        kubectl label --local -f - grafana_dashboard=1 -o yaml --dry-run=client | \
+        kubectl apply -f -
+      register: trivy_dashboard
+      changed_when: "'configured' in trivy_dashboard.stdout"
+      tags: [grafana, trivy]
+
     # -- Summary ---------------------------------------------------------------
 
     - name: Show monitoring pod status
