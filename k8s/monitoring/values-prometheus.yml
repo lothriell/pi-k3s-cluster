@@ -102,9 +102,18 @@ extraScrapeConfigs: |
   - job_name: longhorn
     scrape_interval: 30s
     metrics_path: /metrics
-    static_configs:
-      - targets:
-        - longhorn-backend.longhorn-system.svc:9500
+    kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names:
+            - longhorn-system
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_name]
+        regex: longhorn-backend
+        action: keep
+      - source_labels: [__meta_kubernetes_endpoint_port_name]
+        regex: manager
+        action: keep
 
 # ---------------------------------------------------------------------------
 # ConfigMap reload sidecar -- watches for config changes and triggers a

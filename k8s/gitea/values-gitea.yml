@@ -98,8 +98,11 @@ gitea:
 
     # Server settings
     server:
+      # ROOT_URL must be the internal service URL for the container registry
+      # Www-Authenticate header to resolve inside the cluster. External access
+      # works through Traefik ingress regardless of this setting.
+      ROOT_URL: http://gitea-http.gitea.svc.cluster.local:3000
       # TODO CHANGEME -- set to your actual domain
-      ROOT_URL: http://gitea.yourdomain.com
       DOMAIN: gitea.yourdomain.com
       SSH_DOMAIN: gitea.yourdomain.com
       # SSH on a non-standard port to avoid conflicts with host SSH
@@ -119,6 +122,11 @@ gitea:
     # Limit resource-heavy features
     indexer:
       REPO_INDEXER_ENABLED: false
+
+    # Container registry -- allows pushing/pulling Docker images.
+    # Images are stored on the persistent volume alongside Git repos.
+    packages:
+      ENABLED: true
 
     # Logging: keep it quiet
     log:

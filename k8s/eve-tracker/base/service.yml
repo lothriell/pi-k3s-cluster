@@ -1,0 +1,31 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: eve-tracker-backend
+  labels:
+    app: eve-tracker
+    component: backend
+spec:
+  selector:
+    app: eve-tracker
+    component: backend
+  ports:
+    - port: 3001
+      targetPort: 3001
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: eve-tracker-frontend
+  labels:
+    app: eve-tracker
+    component: frontend
+spec:
+  selector:
+    app: eve-tracker
+    component: frontend
+  ports:
+    - port: 80
+      targetPort: 80

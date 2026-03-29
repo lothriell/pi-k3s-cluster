@@ -32,3 +32,9 @@ tailscale_subnet_routes: "10.0.0.0/24"
 
 # Cloudflare tunnel domain
 cloudflare_domain: example.com
+
+# Local domain (for internal ingress, Gitea registry, etc.)
+local_domain: yourdomain.local
+
+# Gitea registry hostname (resolved via /etc/hosts on nodes)
+gitea_registry_host: "gitea.{{ local_domain }}"

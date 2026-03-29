@@ -1,0 +1,29 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: eve-tracker-dev
+  namespace: argocd
+  annotations:
+    argocd-image-updater.argoproj.io/image-list: >-
+      backend=gitea.yourdomain.com/CHANGEME/eve-tracking-jobs-backend:dev,
+      frontend=gitea.yourdomain.com/CHANGEME/eve-tracking-jobs-frontend:dev
+    argocd-image-updater.argoproj.io/backend.update-strategy: digest
+    argocd-image-updater.argoproj.io/frontend.update-strategy: digest
+    argocd-image-updater.argoproj.io/backend.pull-secret: pullsecret:eve-tracker-dev/gitea-registry
+    argocd-image-updater.argoproj.io/frontend.pull-secret: pullsecret:eve-tracker-dev/gitea-registry
+    argocd-image-updater.argoproj.io/write-back-method: git
+spec:
+  project: default
+  source:
+    repoURL: http://gitea-http.gitea.svc.cluster.local:3000/CHANGEME/eve-tracker-k8s.git
+    targetRevision: main
+    path: overlays/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: eve-tracker-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

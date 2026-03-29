@@ -32,7 +32,8 @@ data:
     # Tunnel ID -- the UUID you got when you ran:
     #   cloudflared tunnel create pi-cluster
     # -----------------------------------------------------------------------
-    tunnel: 44ab070c-301e-4dbf-9c88-d254b935beec
+    # TODO CHANGEME -- your tunnel UUID from: cloudflared tunnel create <name>
+    tunnel: YOUR-TUNNEL-UUID
 
     # Path to the credentials file (mounted from the K8s Secret)
     credentials-file: /etc/cloudflared/credentials.json
@@ -57,14 +58,9 @@ data:
       # Only add public-facing user apps below.
       # -----------------------------------------------------------------------
 
-      # -- Add public-facing services here. Examples:
-      #
-      # - hostname: app.example.com
-      #   service: http://my-app.default.svc.cluster.local:8080
-      #
-      # - hostname: wiki.example.com
-      #   service: http://wiki.default.svc.cluster.local:3000
-      # -----------------------------------------------------------------------
+      # -- Public-facing services --
+      # - hostname: app.yourdomain.com
+      #   service: http://app-frontend.app-namespace.svc.cluster.local:80
 
       # -- Catch-all rule (REQUIRED, must be last)
       # Any request that does not match a hostname above gets a 404.

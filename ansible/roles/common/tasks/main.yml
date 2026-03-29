@@ -112,6 +112,43 @@
   notify: restart chrony
   tags: [ntp]
 
+- name: Prevent cloud-init from overwriting /etc/hosts on reboot
+  ansible.builtin.copy:
+    dest: /etc/cloud/cloud.cfg.d/99-disable-manage-hosts.cfg
+    content: |
+      manage_etc_hosts: false
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [system]
+
+- name: Add Gitea registry to /etc/hosts (MetalLB Traefik IP)
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    line: "{{ metallb_ip_range.split('-')[0] }} {{ gitea_registry_host | default('gitea.' + (local_domain | default('homielab.local'))) }}"
+    state: present
+  tags: [system]
+
+- name: Create K3s config directory for agents
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    mode: "0755"
+  tags: [registry]
+
+- name: Configure K3s to use HTTP for Gitea container registry
+  ansible.builtin.copy:
+    dest: /etc/rancher/k3s/registries.yaml
+    content: |
+      mirrors:
+        {{ gitea_registry_host | default('gitea.' + (local_domain | default('homielab.local'))) }}:
+          endpoint:
+            - "http://{{ gitea_registry_host | default('gitea.' + (local_domain | default('homielab.local'))) }}"
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [registry]
+
 - name: Allow larger initial clock step for Pis without hardware RTC
   ansible.builtin.lineinfile:
     path: /etc/chrony/chrony.conf

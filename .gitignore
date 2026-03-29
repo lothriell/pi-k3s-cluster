@@ -27,3 +27,14 @@ ansible/inventory/group_vars/all.yml
 # Kubeconfig copies
 kubeconfig
 kubeconfig.*
+
+# Private docs with real IPs/secrets
+docs/eve-tracker-deployment.md
+k8s/eve-tracker/secret.yml
+k8s/eve-tracker/overlays/*/secret.yml
+k8s/argocd/values-image-updater.yml
+k8s/argocd/eve-tracker-image-updater.yml
+k8s/argocd/eve-tracker-dev-image-updater.yml
+
+# Private runbooks with real values
+docs/13-deploy-eve-tracker-dev.md
