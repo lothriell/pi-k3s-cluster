@@ -1,8 +1,8 @@
 # =============================================================================
-# Local domain ingress rules for *.homielab.omg
+# Local domain ingress rules for *.example.local
 # =============================================================================
 # Routes local domain names to cluster services via Traefik.
-# Requires DNS resolution of *.homielab.omg -> 10.69.20.100 (Traefik LB IP).
+# Requires DNS resolution of *.example.local -> METALLB_VIP (Traefik LB IP).
 #
 # Apply with: kubectl apply -f local-ingress.yml
 # =============================================================================
@@ -17,7 +17,7 @@ metadata:
     traefik.ingress.kubernetes.io/router.entrypoints: web
 spec:
   rules:
-    - host: grafana.homielab.omg
+    - host: grafana.example.local
       http:
         paths:
           - path: /
@@ -38,7 +38,7 @@ metadata:
     traefik.ingress.kubernetes.io/router.entrypoints: web
 spec:
   rules:
-    - host: gitea.homielab.omg
+    - host: gitea.example.local
       http:
         paths:
           - path: /
@@ -59,7 +59,7 @@ metadata:
     traefik.ingress.kubernetes.io/router.entrypoints: web
 spec:
   rules:
-    - host: argocd.homielab.omg
+    - host: argocd.example.local
       http:
         paths:
           - path: /
@@ -80,7 +80,7 @@ metadata:
     traefik.ingress.kubernetes.io/router.entrypoints: web
 spec:
   rules:
-    - host: prometheus.homielab.omg
+    - host: prometheus.example.local
       http:
         paths:
           - path: /

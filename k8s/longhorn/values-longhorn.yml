@@ -44,6 +44,6 @@ longhornDriver:
 ingress:
   enabled: true
   ingressClassName: traefik
-  host: longhorn.homielab.omg
+  host: longhorn.example.local
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: web

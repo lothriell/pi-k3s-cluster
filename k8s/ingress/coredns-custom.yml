@@ -1,4 +1,4 @@
-# Custom CoreDNS entries for *.homielab.omg resolution inside the cluster.
+# Custom CoreDNS entries for *.example.local resolution inside the cluster.
 # This allows pods to resolve local domains that external clients use.
 apiVersion: v1
 kind: ConfigMap
@@ -6,5 +6,5 @@ metadata:
   name: coredns-custom
   namespace: kube-system
 data:
-  homielab.override: |
-    rewrite name gitea.homielab.omg gitea-http.gitea.svc.cluster.local
+  example.override: |
+    rewrite name gitea.example.local gitea-http.gitea.svc.cluster.local

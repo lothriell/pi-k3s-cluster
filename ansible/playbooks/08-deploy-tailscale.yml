@@ -2,7 +2,7 @@
 # 08-deploy-tailscale.yml
 # Install Tailscale on all cluster nodes for secure remote access.
 # The K3s server node acts as a subnet router, advertising the local
-# network (10.69.0.0/24) so remote Tailscale clients can reach all
+# network (10.x.x.0/24) so remote Tailscale clients can reach all
 # node IPs, MetalLB services, and the K3s API.
 #
 # Prerequisites:

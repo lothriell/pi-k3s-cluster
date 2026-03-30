@@ -50,7 +50,7 @@ ansible-playbook ansible/playbooks/00-bootstrap-user.yml --limit rpi-k3s-1 -K -u
 ### Cluster Topology
 
 ```
-Home Site (10.69.20.0/24)              Remote Site (10.70.20.0/24)
+Home Site (home subnet)                Remote Site (remote subnet)
 ┌─────────────────────┐                ┌──────────────────────┐
 │ rpi-k3s-1 (control) │                │ k3s-x86-1 (agent)    │
 │ rpi-k3s-2 (agent)   │◄──Site Magic──►│ k3s-x86-2 (agent)    │

@@ -9,7 +9,7 @@ resources:
   - secret.yml
 
 images:
-  - name: gitea.homielab.omg/sann/eve-tracking-jobs-backend
+  - name: gitea.example.local/CHANGEME/eve-tracking-jobs-backend
     newTag: dev
-  - name: gitea.homielab.omg/sann/eve-tracking-jobs-frontend
+  - name: gitea.example.local/CHANGEME/eve-tracking-jobs-frontend
     newTag: dev
