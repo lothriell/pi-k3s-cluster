@@ -67,14 +67,14 @@ server:
   retention: "7d"
 
   # -- Resource requests/limits sized for a Pi with 16GB RAM.
-  #    Prometheus is the heaviest component; 512Mi limit gives headroom.
+  #    Prometheus is the heaviest component; 1Gi limit needed for 6 nodes.
   resources:
     requests:
       cpu: 200m
-      memory: 256Mi
+      memory: 512Mi
     limits:
       cpu: 500m
-      memory: 512Mi
+      memory: 1Gi
 
   # -- Persistent storage so metrics survive pod restarts.
   persistentVolume:
