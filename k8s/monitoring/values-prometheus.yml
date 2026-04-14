@@ -38,6 +38,12 @@ prometheus-node-exporter:
     limits:
       cpu: 100m
       memory: 64Mi
+  # Disable default scrape annotation so the built-in kubernetes-service-endpoints
+  # job does NOT scrape node-exporter. We use a dedicated job in extraScrapeConfigs
+  # that labels instance with hostname instead of IP (prevents Grafana duplicates).
+  service:
+    annotations:
+      prometheus.io/scrape: "false"
   # Tolerate ARM64 taints if any are set on your Pi nodes
   tolerations:
     - key: "node.kubernetes.io/arch"
@@ -99,6 +105,19 @@ server:
 # Extra scrape configs -- add targets not auto-discovered by Prometheus.
 # ---------------------------------------------------------------------------
 extraScrapeConfigs: |
+  - job_name: node-exporter
+    scrape_interval: 30s
+    kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names:
+            - monitoring
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_name]
+        regex: prometheus-prometheus-node-exporter
+        action: keep
+      - source_labels: [__meta_kubernetes_endpoint_node_name]
+        target_label: instance
   - job_name: longhorn
     scrape_interval: 30s
     metrics_path: /metrics
