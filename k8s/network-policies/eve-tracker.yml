@@ -1,0 +1,42 @@
+# NetworkPolicy: eve-tracker namespace (prod)
+#
+# eve-tracker has two components: frontend (port 80) and backend (port 3001).
+# The frontend is reached via the Cloudflare tunnel (cloudflared in cloudflare ns).
+# The frontend talks to the backend over the same namespace.
+# The backend is not directly exposed — only reached by the frontend.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: eve-tracker-allowed-ingress
+  namespace: eve-tracker
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Frontend — reachable by cloudflared tunnel + Traefik (LAN fallback)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cloudflare
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 80
+    # Backend — reachable only from the frontend in the same namespace
+    - from:
+        - podSelector:
+            matchLabels:
+              app: eve-tracker
+              component: frontend
+      ports:
+        - protocol: TCP
+          port: 3001
+    # Prometheus scraping (future)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring

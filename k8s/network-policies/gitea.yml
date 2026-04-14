@@ -1,0 +1,49 @@
+# NetworkPolicy: gitea namespace
+#
+# Pattern: podSelector {} selects all pods in the namespace; the presence of
+# this policy with an `ingress:` block causes an implicit deny for anything
+# not matched by a rule below. No separate "default-deny" policy needed.
+#
+# Traffic allowed:
+#   - Traefik (kube-system) → gitea-http:3000 (web UI + git over HTTPS)
+#   - ArgoCD (argocd ns)    → gitea-http:3000 (git pulls + container registry)
+#   - Prometheus (monitoring ns) → gitea-http:3000 (future metrics scraping)
+#   - Any source → gitea-ssh:2222 (NodePort 30022 → pod:2222 for git over SSH)
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gitea-allowed-ingress
+  namespace: gitea
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 3000
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: argocd
+      ports:
+        - protocol: TCP
+          port: 3000
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 3000
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 2222

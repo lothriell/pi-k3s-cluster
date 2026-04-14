@@ -1,0 +1,37 @@
+# NetworkPolicy: eve-tracker-dev namespace
+#
+# Mirror of eve-tracker prod. Dev frontend is reachable from cloudflared + Traefik;
+# dev backend is only reachable from dev frontend within the same namespace.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: eve-tracker-dev-allowed-ingress
+  namespace: eve-tracker-dev
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cloudflare
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 80
+    - from:
+        - podSelector:
+            matchLabels:
+              app: eve-tracker
+              component: frontend
+      ports:
+        - protocol: TCP
+          port: 3001
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
