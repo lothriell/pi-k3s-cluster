@@ -1,0 +1,49 @@
+#!/bin/bash
+#
+# K3s SQLite state backup to Cloudflare R2.
+# Managed by Ansible (playbook 11-configure-backups.yml).
+#
+# Takes an online consistent snapshot of the K3s SQLite datastore using
+# SQLite's built-in .backup command, compresses it with gzip, and uploads
+# it to R2. Retains ~3 days of history (6h cadence × 12 snapshots).
+
+set -euo pipefail
+
+DB="/var/lib/rancher/k3s/server/db/state.db"
+WORKDIR="/var/lib/rancher/k3s-backup"
+BUCKET="{{ r2_backup_bucket }}"
+RCLONE_CONFIG="/etc/rancher/k3s-backup/rclone.conf"
+PREFIX="k3s-state/{{ inventory_hostname }}"
+TIMESTAMP=$(date -u +%Y%m%d-%H%M%SZ)
+NAME="state-${TIMESTAMP}.db.gz"
+
+mkdir -p "$WORKDIR"
+cd "$WORKDIR"
+
+# SQLite online backup (safe while K3s is running)
+sqlite3 "$DB" ".backup $WORKDIR/state.db.tmp"
+
+# Compress
+gzip -f "$WORKDIR/state.db.tmp"
+mv "$WORKDIR/state.db.tmp.gz" "$WORKDIR/$NAME"
+
+SIZE=$(stat -c%s "$WORKDIR/$NAME")
+echo "[$(date -u +%H:%M:%SZ)] backup prepared: $NAME ($SIZE bytes)"
+
+# Upload to R2. Flags tuned for R2 quirks:
+#   --s3-no-check-bucket  : don't HEAD the bucket on startup (R2 object-scoped
+#                           tokens return 403 instead of 404 on missing keys,
+#                           which rclone treats as an auth error).
+#   --ignore-existing     : don't HEAD the destination key before upload.
+RCLONE_FLAGS="--config $RCLONE_CONFIG --s3-no-check-bucket --ignore-existing"
+
+rclone $RCLONE_FLAGS copy "$WORKDIR/$NAME" "r2:${BUCKET}/${PREFIX}/"
+
+# Retention: delete objects older than 3 days from the prefix
+rclone --config "$RCLONE_CONFIG" --s3-no-check-bucket \
+  delete --min-age 3d "r2:${BUCKET}/${PREFIX}/" || true
+
+# Clean local temp (the uploaded copy stays in R2)
+rm -f "$WORKDIR/$NAME"
+
+echo "[$(date -u +%H:%M:%SZ)] backup uploaded to r2:${BUCKET}/${PREFIX}/$NAME"

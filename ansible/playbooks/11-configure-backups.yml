@@ -1,0 +1,246 @@
+---
+# Playbook 11: Configure backups
+#
+# Phase 1 (local): etcd snapshots on the K3s server every 6h (retain 12) and
+#                  Longhorn recurring snapshots daily (retain 7) on critical
+#                  volumes only — monitoring PVCs are excluded because they
+#                  are high-churn derived data.
+# Phase 2 (offsite): etcd snapshots uploaded to Cloudflare R2 and Longhorn
+#                    daily backups to the same bucket (retain 30).
+#
+# Critical volumes (labelled with recurring-job-group.longhorn.io/critical):
+#   - eve-tracker/eve-tracker-data
+#   - eve-tracker-dev/eve-tracker-data
+#   - gitea/gitea-shared-storage
+#   - monitoring/grafana
+#   - open-webui/open-webui-data
+#
+# Usage: ansible-playbook ansible/playbooks/11-configure-backups.yml
+
+# ============================================================================
+# Play 1: K3s SQLite state backup via systemd timer + rclone → R2
+#
+# NOTE: K3s was installed without --cluster-init, so it uses SQLite (KINE)
+# as the datastore. The K3s etcd-snapshot flags do not apply. We instead
+# take a consistent SQLite .backup snapshot every 6h and ship it to R2.
+# When the cluster migrates to embedded etcd (prereq for HA, task #8),
+# this can be replaced with --etcd-s3 flags in the K3s config.
+# ============================================================================
+- name: Configure K3s SQLite state backup to R2
+  hosts: k3s_server
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Remove any leftover etcd-s3 config from earlier attempts
+      ansible.builtin.file:
+        path: /etc/rancher/k3s/config.yaml.d/10-backups.yaml
+        state: absent
+      tags: [backups, k3s-state]
+
+    - name: Install sqlite3 + rclone
+      ansible.builtin.apt:
+        name:
+          - sqlite3
+          - rclone
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      tags: [backups, k3s-state, packages]
+
+    - name: Ensure rclone config directory exists
+      ansible.builtin.file:
+        path: /etc/rancher/k3s-backup
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      tags: [backups, k3s-state]
+
+    - name: Deploy rclone R2 config
+      ansible.builtin.template:
+        src: rclone-r2.conf.j2
+        dest: /etc/rancher/k3s-backup/rclone.conf
+        owner: root
+        group: root
+        mode: "0600"
+      tags: [backups, k3s-state]
+
+    - name: Deploy SQLite backup script
+      ansible.builtin.template:
+        src: k3s-sqlite-backup.sh.j2
+        dest: /usr/local/bin/k3s-sqlite-backup.sh
+        owner: root
+        group: root
+        mode: "0755"
+      tags: [backups, k3s-state]
+
+    - name: Deploy systemd service unit
+      ansible.builtin.template:
+        src: k3s-sqlite-backup.service.j2
+        dest: /etc/systemd/system/k3s-sqlite-backup.service
+        owner: root
+        group: root
+        mode: "0644"
+      register: backup_service_unit
+      tags: [backups, k3s-state]
+
+    - name: Deploy systemd timer unit
+      ansible.builtin.template:
+        src: k3s-sqlite-backup.timer.j2
+        dest: /etc/systemd/system/k3s-sqlite-backup.timer
+        owner: root
+        group: root
+        mode: "0644"
+      register: backup_timer_unit
+      tags: [backups, k3s-state]
+
+    - name: Reload systemd if unit files changed
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: backup_service_unit.changed or backup_timer_unit.changed
+      tags: [backups, k3s-state]
+
+    - name: Enable and start K3s SQLite backup timer
+      ansible.builtin.systemd:
+        name: k3s-sqlite-backup.timer
+        enabled: true
+        state: started
+      tags: [backups, k3s-state]
+
+    - name: Run first backup now to smoke-test the pipeline
+      ansible.builtin.command: systemctl start k3s-sqlite-backup.service
+      changed_when: false
+      tags: [backups, k3s-state, smoke-test]
+
+    - name: Wait for first backup to complete
+      ansible.builtin.command: systemctl is-active k3s-sqlite-backup.service
+      register: backup_active
+      retries: 30
+      delay: 5
+      until: backup_active.stdout == "inactive"
+      changed_when: false
+      failed_when: false
+      tags: [backups, k3s-state, smoke-test]
+
+    - name: Show last backup journal output
+      ansible.builtin.command: journalctl -u k3s-sqlite-backup.service -n 20 --no-pager
+      register: backup_journal
+      changed_when: false
+      tags: [backups, k3s-state, smoke-test]
+
+    - name: Display backup journal
+      ansible.builtin.debug:
+        var: backup_journal.stdout_lines
+      tags: [backups, k3s-state, smoke-test]
+
+# ============================================================================
+# Play 2: Longhorn backup target + recurring jobs (runs against the cluster)
+# ============================================================================
+- name: Configure Longhorn R2 backup target and recurring jobs
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+
+  vars:
+    critical_pvcs:
+      - { namespace: eve-tracker, name: eve-tracker-data }
+      - { namespace: eve-tracker-dev, name: eve-tracker-data }
+      - { namespace: gitea, name: gitea-shared-storage }
+      - { namespace: monitoring, name: grafana }
+      - { namespace: open-webui, name: open-webui-data }
+
+  tasks:
+    - name: Create longhorn-system R2 credential secret
+      ansible.builtin.shell: |
+        kubectl create secret generic longhorn-r2-credentials \
+          --namespace longhorn-system \
+          --from-literal=AWS_ACCESS_KEY_ID='{{ r2_access_key_id }}' \
+          --from-literal=AWS_SECRET_ACCESS_KEY='{{ r2_secret_access_key }}' \
+          --from-literal=AWS_ENDPOINTS='{{ r2_endpoint_url }}' \
+          --dry-run=client -o yaml | kubectl apply -f -
+      changed_when: false
+      tags: [backups, longhorn]
+
+    # Longhorn v1.7+ uses the BackupTarget CRD (not the legacy backup-target
+    # Setting). The "default" BackupTarget is created on install with an
+    # empty URL; we patch it to point at R2.
+    - name: Configure default Longhorn BackupTarget to point at R2
+      ansible.builtin.command: >
+        kubectl -n longhorn-system patch backuptargets.longhorn.io/default
+        --type=merge
+        -p {{ ({"spec": {"backupTargetURL": "s3://" + r2_backup_bucket + "@auto/longhorn/", "credentialSecret": "longhorn-r2-credentials", "pollInterval": "5m0s"}} | to_json) | quote }}
+      changed_when: false
+      tags: [backups, longhorn]
+
+    - name: Apply critical-snapshot RecurringJob (daily, retain 7)
+      ansible.builtin.shell: |
+        cat <<'EOF' | kubectl apply -f -
+        apiVersion: longhorn.io/v1beta2
+        kind: RecurringJob
+        metadata:
+          name: critical-snapshot
+          namespace: longhorn-system
+        spec:
+          cron: "0 2 * * *"
+          task: snapshot
+          groups:
+            - critical
+          retain: 7
+          concurrency: 2
+        EOF
+      changed_when: false
+      tags: [backups, longhorn]
+
+    - name: Apply critical-backup RecurringJob (daily, retain 30, to R2)
+      ansible.builtin.shell: |
+        cat <<'EOF' | kubectl apply -f -
+        apiVersion: longhorn.io/v1beta2
+        kind: RecurringJob
+        metadata:
+          name: critical-backup
+          namespace: longhorn-system
+        spec:
+          cron: "0 3 * * *"
+          task: backup
+          groups:
+            - critical
+          retain: 30
+          concurrency: 1
+        EOF
+      changed_when: false
+      tags: [backups, longhorn]
+
+    - name: Look up Longhorn volume names for critical PVCs
+      ansible.builtin.command: >
+        kubectl -n {{ item.namespace }} get pvc {{ item.name }}
+        -o jsonpath={.spec.volumeName}
+      register: critical_volume_lookup
+      loop: "{{ critical_pvcs }}"
+      changed_when: false
+      failed_when: false
+      tags: [backups, longhorn]
+
+    - name: Label critical Longhorn volumes with recurring-job-group
+      ansible.builtin.command: >
+        kubectl -n longhorn-system label volumes.longhorn.io {{ item.stdout }}
+        recurring-job-group.longhorn.io/critical=enabled --overwrite
+      loop: "{{ critical_volume_lookup.results }}"
+      when: item.rc == 0 and item.stdout != ""
+      loop_control:
+        label: "{{ item.item.namespace }}/{{ item.item.name }} -> {{ item.stdout }}"
+      changed_when: false
+      tags: [backups, longhorn]
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          Backups configured:
+            - K3s SQLite state: every 6h, retain 3 days, uploaded to r2:{{ r2_backup_bucket }}/k3s-state/
+              (systemd timer k3s-sqlite-backup.timer on the control plane node)
+            - Longhorn recurring snapshots: daily @ 02:00 UTC, retain 7 (local, in-cluster)
+            - Longhorn recurring backups: daily @ 03:00 UTC, retain 30 (to R2, offsite)
+            - Critical volumes: {{ critical_pvcs | map(attribute='namespace') | zip(critical_pvcs | map(attribute='name')) | map('join','/') | list }}
+            - Excluded from Longhorn backups: prometheus, loki, alertmanager (high churn, derived data)
+      tags: [backups]

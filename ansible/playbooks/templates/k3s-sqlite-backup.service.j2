@@ -1,0 +1,12 @@
+[Unit]
+Description=K3s SQLite state backup to R2
+Documentation=file:///usr/local/bin/k3s-sqlite-backup.sh
+After=network-online.target k3s.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/k3s-sqlite-backup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
