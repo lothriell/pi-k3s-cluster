@@ -90,3 +90,55 @@ spec:
                 name: prometheus-server
                 port:
                   number: 80
+
+# =============================================================================
+# Ollama -- external GPU server proxied through Traefik
+# =============================================================================
+# Ollama runs on a GPU server outside K8s. We create a headless Service +
+# Endpoints pointing to its LAN IP, then an Ingress to route traffic.
+# =============================================================================
+
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: ollama-external
+  namespace: default
+subsets:
+  - addresses:
+      # TODO CHANGEME -- GPU server LAN IP (see all.yml: gpu_node_ip_1)
+      - ip: CHANGEME
+    ports:
+      - port: 11434
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-external
+  namespace: default
+spec:
+  ports:
+    - port: 11434
+      targetPort: 11434
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ollama-local
+  namespace: default
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  rules:
+    - host: ollama.example.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ollama-external
+                port:
+                  number: 11434
