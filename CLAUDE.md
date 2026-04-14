@@ -123,8 +123,37 @@ Longhorn is the default StorageClass (2 replicas). `local-path` is still availab
 ### Prometheus Longhorn Scraping
 Longhorn metrics must use `kubernetes_sd_configs` with endpoint role (not `static_configs` with service VIP). A service VIP load-balances to one random pod per scrape, losing metrics from other nodes.
 
+### K3s Agent Token Loss on Upgrade
+The K3s install script overwrites `/etc/systemd/system/k3s-agent.service.env` on every run, wiping `K3S_TOKEN`. Fix: write `server` and `token` to `/etc/rancher/k3s/config.yaml` which the install script does NOT overwrite. K3s upgrades must step through each minor version (no skipping). v1.32 auto-upgrades Traefik v2→v3.
+
+### Gitea Admin Creation Fails on Helm Upgrade
+The Gitea Helm chart's `gitea.admin.*` values trigger `gitea admin user create` in an init container. If the user already exists in the SQLite DB (from a previous install), it crashes. Fix: only pass `--set gitea.admin.*` on fresh installs, not upgrades. The playbook (05-deploy-gitea.yml) checks `helm status` first.
+
 ### Cloudflare Tunnel DNS
 The `cloudflared` CLI cert (`~/.cloudflared/cert.pem`) is locked to one Cloudflare zone. Always create tunnel DNS records manually in the Cloudflare dashboard — never use `cloudflared tunnel route dns` for domains on a different zone.
+
+### Prometheus Node-Exporter Hostname Relabeling
+Node-exporter is scraped by a dedicated `node-exporter` job in `extraScrapeConfigs` that labels `instance` with the node hostname (not IP). The default `kubernetes-service-endpoints` job is disabled for node-exporter via `prometheus.io/scrape: "false"` annotation. This prevents Grafana showing duplicate nodes after upgrades or pod rescheduling.
+
+## AI Stack
+
+### Ollama (GPU server, external to K8s)
+- Runs as Docker container on a dedicated GPU server (RTX 3090, 24GB VRAM)
+- Playbook: `ansible/playbooks/09-deploy-ollama.yml` (targets `gpu_servers` group)
+- Role: `ansible/roles/ollama/` (Docker + NVIDIA runtime)
+- Proxied into K8s via `ollama-external` Service/Endpoints in `k8s/ingress/local-ingress.yml`
+- Accessible at `ollama.<local_domain>` through Traefik
+- Models: Qwen 3 32B Q4_K_M (primary), Qwen 2.5 32B Q4_K_M (legacy)
+
+### Open WebUI (K8s)
+- ChatGPT-like web interface for Ollama
+- Namespace: `open-webui`
+- Manifest: `k8s/open-webui/open-webui.yml`
+- Connects to Ollama via `ollama-external.default.svc.cluster.local:11434`
+- SQLite conversation history on a 2Gi PVC
+- First signup becomes admin; disable after: `kubectl set env deployment/open-webui -n open-webui ENABLE_SIGNUP=false`
+- Needs ~1Gi memory limit (OOMKills at 512Mi on ARM64)
+- Accessible at `chat.<local_domain>` through Traefik
 
 ## Network Layout
 
@@ -156,18 +185,18 @@ All IPs are configured in `ansible/inventory/hosts.yml` and `group_vars/all.yml`
 
 ## Service Credentials
 
-Retrieved at runtime:
-```bash
-# Grafana: admin / admin (default)
-# ArgoCD admin password:
-kubectl get secret -n argocd argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
-# Gitea: configured on first web visit
-# Wazuh: credentials shown during install (stored on Wazuh VM)
-```
+Gitea and ArgoCD credentials are defined in `group_vars/all.yml` (gitignored) and auto-created on deploy:
+- **Gitea:** Admin account created via `--set gitea.admin.*` on fresh install (playbook 05). Skipped on upgrades (user already exists in SQLite DB).
+- **ArgoCD:** Fixed admin password via bcrypt hash in `--set configs.secret.argocdServerAdminPassword`. Gitea repo secret auto-created.
+- **Grafana:** admin / admin (hardcoded in values file, change after first login)
+- **Open WebUI:** First signup becomes admin. Disable signup after: `kubectl set env deployment/open-webui -n open-webui ENABLE_SIGNUP=false`
+- **Wazuh:** Credentials shown during install (stored on Wazuh VM)
+
+Template: `all.yml.example` has placeholder values for `gitea_admin_user`, `gitea_admin_password`, `gitea_admin_email`, `argocd_admin_password`.
 
 ## File Conventions
 
-- Playbooks are numbered and run in order (00-08)
+- Playbooks are numbered and run in order (00-09)
 - K8s manifests use `values-<service>.yml` for Helm, Kustomize overlays for apps
 - Placeholder values marked with `TODO CHANGEME`
 - Dotfiles for Pi shell environment live in `dotfiles/`
