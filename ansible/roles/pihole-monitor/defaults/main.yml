@@ -1,0 +1,28 @@
+---
+# Pi-hole DNS monitor configuration
+
+# ntfy server
+ntfy_port: 8080
+ntfy_topic: dns-alerts
+
+# Pihole log path (host-mounted from Docker container)
+pihole_log_dir: /var/log/pihole
+pihole_log_file: "{{ pihole_log_dir }}/pihole.log"
+
+# Monitor config directory
+monitor_config_dir: /etc/pihole-monitor
+
+# Default watch patterns (domain wildcard = display label)
+# Override in playbook or all.yml
+monitor_watch_patterns:
+  - pattern: "*.example.com"
+    label: "example domain"
+
+# Default IPs to monitor
+# Override in playbook or all.yml
+monitor_watch_ips:
+  - "10.0.0.1"
+
+# Promtail config
+promtail_port: 9080
+loki_url: "http://loki.monitoring.svc.cluster.local:3100"

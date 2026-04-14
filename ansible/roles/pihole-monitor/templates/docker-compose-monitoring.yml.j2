@@ -1,0 +1,28 @@
+version: "3"
+
+services:
+  ntfy:
+    image: binwiederhier/ntfy:latest
+    container_name: ntfy
+    restart: unless-stopped
+    command: serve
+    ports:
+      - "{{ ntfy_port }}:80"
+    volumes:
+      - ntfy-cache:/var/cache/ntfy
+      - ntfy-etc:/etc/ntfy
+    environment:
+      - TZ=UTC
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    restart: unless-stopped
+    volumes:
+      - {{ pihole_log_dir }}:/var/log/pihole:ro
+      - /etc/pihole-monitor/promtail-config.yml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+
+volumes:
+  ntfy-cache:
+  ntfy-etc:

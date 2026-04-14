@@ -1,0 +1,13 @@
+---
+- name: restart pihole-dns-monitor
+  ansible.builtin.systemd:
+    name: pihole-dns-monitor
+    state: restarted
+    daemon_reload: true
+  become: true
+
+- name: reload pihole-dns-monitor
+  ansible.builtin.systemd:
+    name: pihole-dns-monitor
+    state: reloaded
+  become: true

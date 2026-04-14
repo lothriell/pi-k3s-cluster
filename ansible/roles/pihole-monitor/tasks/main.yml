@@ -1,0 +1,155 @@
+---
+# Pi-hole DNS monitor: ntfy + alerting script + Promtail → Loki
+
+# -- Mount pihole log volume to host ----------------------------------------
+
+- name: Add pihole log volume mount to Pi-hole container
+  ansible.builtin.shell: |
+    # Check if volume is already mounted
+    if sudo docker inspect pihole --format '{{ '{{' }}json .Mounts{{ '}}' }}' | grep -q '/var/log/pihole'; then
+      echo "ALREADY_MOUNTED"
+    else
+      echo "NEEDS_MOUNT"
+    fi
+  register: pihole_mount_check
+  changed_when: false
+
+- name: Stop Pi-hole container for volume remount
+  ansible.builtin.command: sudo docker stop pihole
+  when: "'NEEDS_MOUNT' in pihole_mount_check.stdout"
+
+- name: Create host log directory
+  ansible.builtin.file:
+    path: "{{ pihole_log_dir }}"
+    state: directory
+    mode: "0755"
+  become: true
+
+- name: Recreate Pi-hole container with log volume
+  ansible.builtin.shell: |
+    # Get current container config for recreation
+    CURRENT_IMAGE=$(sudo docker inspect pihole --format '{{ '{{' }}.Config.Image{{ '}}' }}')
+    # Remove old container (data is in other volumes)
+    sudo docker rm pihole
+    # Recreate with additional log volume mount
+    sudo docker run -d \
+      --name pihole \
+      --restart unless-stopped \
+      -p 53:53/tcp -p 53:53/udp \
+      -p 67:67/udp -p 547:547/udp \
+      -p 8800:80/tcp \
+      -v /DATA/AppData/pihole/etc/pihole:/etc/pihole \
+      -v /DATA/AppData/pihole/etc/dnsmasq.d:/etc/dnsmasq.d \
+      -v {{ pihole_log_dir }}:/var/log/pihole \
+      "$CURRENT_IMAGE"
+  when: "'NEEDS_MOUNT' in pihole_mount_check.stdout"
+
+- name: Wait for Pi-hole to be healthy
+  ansible.builtin.command: sudo docker exec pihole pihole status
+  register: pihole_status
+  retries: 10
+  delay: 5
+  until: pihole_status.rc == 0
+  changed_when: false
+  when: "'NEEDS_MOUNT' in pihole_mount_check.stdout"
+
+# -- Config directory -------------------------------------------------------
+
+- name: Create monitor config directory
+  ansible.builtin.file:
+    path: "{{ monitor_config_dir }}"
+    state: directory
+    mode: "0755"
+  become: true
+
+# -- Deploy monitoring script -----------------------------------------------
+
+- name: Deploy DNS monitor script
+  ansible.builtin.template:
+    src: pihole-dns-monitor.py.j2
+    dest: /usr/local/bin/pihole-dns-monitor
+    mode: "0755"
+  become: true
+  notify: restart pihole-dns-monitor
+
+- name: Deploy watch patterns config
+  ansible.builtin.template:
+    src: watch-patterns.conf.j2
+    dest: "{{ monitor_config_dir }}/watch-patterns.conf"
+    mode: "0644"
+  become: true
+  notify: reload pihole-dns-monitor
+
+- name: Deploy watch IPs config
+  ansible.builtin.template:
+    src: watch-ips.conf.j2
+    dest: "{{ monitor_config_dir }}/watch-ips.conf"
+    mode: "0644"
+  become: true
+  notify: reload pihole-dns-monitor
+
+# -- Deploy systemd service -------------------------------------------------
+
+- name: Deploy monitor systemd service
+  ansible.builtin.template:
+    src: pihole-dns-monitor.service.j2
+    dest: /etc/systemd/system/pihole-dns-monitor.service
+    mode: "0644"
+  become: true
+  notify: restart pihole-dns-monitor
+
+- name: Enable and start monitor service
+  ansible.builtin.systemd:
+    name: pihole-dns-monitor
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+
+# -- Deploy ntfy + Promtail via Docker Compose -------------------------------
+
+- name: Deploy Promtail config
+  ansible.builtin.template:
+    src: promtail-config.yml.j2
+    dest: "{{ monitor_config_dir }}/promtail-config.yml"
+    mode: "0644"
+  become: true
+
+- name: Deploy docker-compose for ntfy + Promtail
+  ansible.builtin.template:
+    src: docker-compose-monitoring.yml.j2
+    dest: "{{ monitor_config_dir }}/docker-compose.yml"
+    mode: "0644"
+  become: true
+
+- name: Start ntfy + Promtail containers
+  ansible.builtin.command: sudo docker compose -f {{ monitor_config_dir }}/docker-compose.yml up -d
+  changed_when: false
+
+# -- Verify ------------------------------------------------------------------
+
+- name: Verify ntfy is running
+  ansible.builtin.uri:
+    url: "http://localhost:{{ ntfy_port }}/v1/health"
+    method: GET
+    status_code: 200
+  register: ntfy_health
+  retries: 5
+  delay: 3
+  until: ntfy_health.status == 200
+
+- name: Verify monitor service is running
+  ansible.builtin.systemd:
+    name: pihole-dns-monitor
+  register: monitor_status
+  failed_when: monitor_status.status.ActiveState != "active"
+
+- name: Display status
+  ansible.builtin.debug:
+    msg: |
+      Pi-hole DNS Monitor deployed:
+        - ntfy: http://localhost:{{ ntfy_port }}/{{ ntfy_topic }}
+        - Monitor: systemctl status pihole-dns-monitor
+        - Patterns: {{ monitor_config_dir }}/watch-patterns.conf
+        - IPs: {{ monitor_config_dir }}/watch-ips.conf
+        - Reload: sudo systemctl reload pihole-dns-monitor

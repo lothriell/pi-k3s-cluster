@@ -1,0 +1,83 @@
+---
+# Playbook 10: Deploy Pi-hole DNS monitoring stack
+#
+# Deploys on athena:
+#   - ntfy (push notification server)
+#   - Promtail (ships pihole.log to Loki on K8s)
+#   - DNS monitor script (pattern matching + alerts)
+#
+# Deploys on K8s (from localhost):
+#   - Loki (log aggregation, 3-month retention)
+#   - Grafana Loki datasource
+#
+# Usage:
+#   ansible-playbook ansible/playbooks/10-deploy-pihole-monitor.yml
+#
+# Configure watch patterns and IPs in all.yml (or edit directly on athena):
+#   /etc/pihole-monitor/watch-patterns.conf
+#   /etc/pihole-monitor/watch-ips.conf
+
+- name: Deploy Pi-hole monitoring on athena
+  hosts: athena
+  become: false
+  roles:
+    - role: ../roles/pihole-monitor
+
+- name: Deploy Loki on K8s cluster
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+
+  tasks:
+    - name: Add Grafana Helm repository
+      ansible.builtin.command: helm repo add grafana https://grafana.github.io/helm-charts
+      register: helm_repo
+      changed_when: "'has been added' in helm_repo.stdout"
+      failed_when: false
+
+    - name: Update Helm repos
+      ansible.builtin.command: helm repo update
+      changed_when: false
+
+    - name: Deploy Loki via Helm
+      ansible.builtin.command: >
+        helm upgrade --install loki
+        grafana/loki
+        --namespace monitoring
+        --set loki.auth_enabled=false
+        --set loki.commonConfig.replication_factor=1
+        --set loki.storage.type=filesystem
+        --set loki.limits_config.retention_period=2160h
+        --set loki.compactor.retention_enabled=true
+        --set singleBinary.replicas=1
+        --set singleBinary.resources.requests.cpu=100m
+        --set singleBinary.resources.requests.memory=256Mi
+        --set singleBinary.resources.limits.cpu=500m
+        --set singleBinary.resources.limits.memory=512Mi
+        --set singleBinary.persistence.size=10Gi
+        --set monitoring.selfMonitoring.enabled=false
+        --set monitoring.lokiCanary.enabled=false
+        --set test.enabled=false
+        --set gateway.enabled=false
+        --set backend.replicas=0
+        --set read.replicas=0
+        --set write.replicas=0
+        --set chunksCache.enabled=false
+        --set resultsCache.enabled=false
+        --wait
+        --timeout 5m
+      register: loki_deploy
+      changed_when: "'STATUS: deployed' in loki_deploy.stdout"
+
+    - name: Wait for Loki to be ready
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Ready pods
+        -l app.kubernetes.io/name=loki
+        --namespace monitoring
+        --timeout=300s
+      changed_when: false
+
+    - name: Display Loki status
+      ansible.builtin.debug:
+        msg: "Loki deployed. Add as Grafana datasource: http://loki.monitoring.svc.cluster.local:3100"

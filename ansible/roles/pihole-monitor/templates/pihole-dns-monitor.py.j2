@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""Monitor Pi-hole DNS logs and alert on matching queries via ntfy.
+
+Reads watch patterns and IPs from config files. Sends custom-labeled
+notifications when a monitored IP queries a watched domain.
+
+Config reload: send SIGHUP to re-read pattern and IP files without restart.
+"""
+
+import subprocess
+import re
+import signal
+import fnmatch
+import urllib.request
+import sys
+import os
+
+PATTERNS_FILE = "{{ monitor_config_dir }}/watch-patterns.conf"
+IPS_FILE = "{{ monitor_config_dir }}/watch-ips.conf"
+NTFY_URL = "http://localhost:{{ ntfy_port }}/{{ ntfy_topic }}"
+LOG_FILE = "{{ pihole_log_file }}"
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def load_patterns(path):
+    """Load pattern=label mappings from config file."""
+    patterns = []
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    pat, label = line.split("=", 1)
+                    patterns.append((pat.strip(), label.strip()))
+                else:
+                    patterns.append((line, line))
+    except FileNotFoundError:
+        log(f"WARNING: {path} not found")
+    return patterns
+
+
+def load_ips(path):
+    """Load watched IPs from config file."""
+    try:
+        with open(path) as f:
+            return set(
+                l.strip() for l in f if l.strip() and not l.startswith("#")
+            )
+    except FileNotFoundError:
+        log(f"WARNING: {path} not found")
+        return set()
+
+
+def reload_config(signum=None, frame=None):
+    global patterns, watch_ips
+    patterns = load_patterns(PATTERNS_FILE)
+    watch_ips = load_ips(IPS_FILE)
+    log(f"Config loaded: {len(patterns)} patterns, {len(watch_ips)} IPs")
+
+
+def send_alert(domain, client_ip, label):
+    """Send notification via ntfy."""
+    msg = f"User {client_ip} accessed {label}"
+    body = f"Domain: {domain}\nClient: {client_ip}\nLabel: {label}"
+    try:
+        req = urllib.request.Request(
+            NTFY_URL,
+            data=body.encode(),
+            headers={
+                "Title": msg,
+                "Priority": "high",
+                "Tags": "warning",
+            },
+        )
+        urllib.request.urlopen(req, timeout=5)
+        log(f"ALERT: {msg} ({domain})")
+    except Exception as e:
+        log(f"ERROR sending alert: {e}")
+
+
+# Regex: "query[A] domain.name from 10.69.0.42"
+QUERY_RE = re.compile(r"query\[\w+\]\s+(\S+)\s+from\s+(\S+)")
+
+# Load initial config
+patterns = []
+watch_ips = set()
+reload_config()
+
+# Reload config on SIGHUP
+signal.signal(signal.SIGHUP, reload_config)
+
+log(f"Starting Pi-hole DNS monitor, tailing {LOG_FILE}")
+
+# Tail the log file
+proc = subprocess.Popen(
+    ["tail", "-n", "0", "-F", LOG_FILE],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.DEVNULL,
+    text=True,
+)
+
+try:
+    for line in proc.stdout:
+        m = QUERY_RE.search(line)
+        if not m:
+            continue
+        domain, client_ip = m.group(1), m.group(2)
+        if client_ip not in watch_ips:
+            continue
+        for pat, label in patterns:
+            if fnmatch.fnmatch(domain, pat):
+                send_alert(domain, client_ip, label)
+                break
+except KeyboardInterrupt:
+    log("Shutting down")
+finally:
+    proc.terminate()

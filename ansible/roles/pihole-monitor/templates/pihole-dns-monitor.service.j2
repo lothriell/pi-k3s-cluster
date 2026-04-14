@@ -1,0 +1,16 @@
+[Unit]
+Description=Pi-hole DNS Query Monitor
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/pihole-dns-monitor
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -68,6 +68,11 @@ datasources:
         access: proxy
         isDefault: true
         editable: true
+      - name: Loki
+        type: loki
+        url: http://loki.monitoring.svc.cluster.local:3100
+        access: proxy
+        editable: true
 
 # ---------------------------------------------------------------------------
 # Dashboard providers -- tell Grafana where to find dashboard JSON files.
