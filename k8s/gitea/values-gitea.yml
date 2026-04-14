@@ -132,6 +132,10 @@ gitea:
     log:
       LEVEL: Warn
 
+  # -- Admin account -- pre-created on every deploy so it survives nuke-and-rebuild.
+  #    Credentials are injected via --set flags in the Ansible playbook (05-deploy-gitea.yml)
+  #    from variables defined in all.yml (gitignored).
+
   # -- Gitea Actions (CI/CD runner) -- disabled by default to save resources.
   #    Enable later when you want CI/CD pipelines.
   #    See: https://docs.gitea.com/usage/actions/overview

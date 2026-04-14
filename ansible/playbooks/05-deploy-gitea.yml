@@ -15,9 +15,36 @@
     gitea_values: "{{ playbook_dir }}/../../k8s/gitea/values-gitea.yml"
 
   tasks:
-    # -- Gitea -----------------------------------------------------------------
+    # -- Check if this is a fresh install or upgrade ---------------------------
 
-    - name: Deploy Gitea via Helm
+    - name: Check if Gitea is already deployed
+      ansible.builtin.command: helm status gitea -n gitea
+      register: gitea_status
+      changed_when: false
+      failed_when: false
+      tags: [gitea]
+
+    # -- Fresh install: create admin account -----------------------------------
+
+    - name: Deploy Gitea via Helm (fresh install with admin account)
+      ansible.builtin.command: >
+        helm upgrade --install gitea
+        gitea/gitea
+        --namespace gitea
+        --values {{ gitea_values }}
+        --set gitea.admin.username={{ gitea_admin_user }}
+        --set gitea.admin.password={{ gitea_admin_password }}
+        --set gitea.admin.email={{ gitea_admin_email }}
+        --wait
+        --timeout 10m
+      register: gitea_deploy
+      changed_when: "'STATUS: deployed' in gitea_deploy.stdout"
+      when: gitea_status.rc != 0
+      tags: [gitea]
+
+    # -- Upgrade: skip admin creation (user already exists in DB) --------------
+
+    - name: Deploy Gitea via Helm (upgrade without admin creation)
       ansible.builtin.command: >
         helm upgrade --install gitea
         gitea/gitea
@@ -27,6 +54,7 @@
         --timeout 10m
       register: gitea_deploy
       changed_when: "'STATUS: deployed' in gitea_deploy.stdout"
+      when: gitea_status.rc == 0
       tags: [gitea]
 
     - name: Wait for Gitea pods to be ready

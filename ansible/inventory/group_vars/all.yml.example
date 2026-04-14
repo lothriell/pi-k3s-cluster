@@ -50,3 +50,9 @@ local_domain: yourdomain.local
 
 # Gitea registry hostname (resolved via /etc/hosts on nodes)
 gitea_registry_host: "gitea.{{ local_domain }}"
+
+# Service credentials (survive nuke-and-rebuild)
+gitea_admin_user: mygiteaadmin
+gitea_admin_password: changeme-use-a-real-password
+gitea_admin_email: admin@example.com
+argocd_admin_password: changeme-use-a-real-password

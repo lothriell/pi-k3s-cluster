@@ -44,6 +44,20 @@
       changed_when: false
       tags: [argocd]
 
+    # -- ArgoCD admin password ---------------------------------------------------
+
+    - name: Generate bcrypt hash of ArgoCD admin password
+      ansible.builtin.command: >
+        htpasswd -nbBC 10 "" {{ argocd_admin_password }}
+      register: argocd_bcrypt
+      changed_when: false
+      tags: [argocd]
+
+    - name: Set bcrypt hash fact
+      ansible.builtin.set_fact:
+        argocd_password_hash: "{{ argocd_bcrypt.stdout | regex_replace('^:', '') }}"
+      tags: [argocd]
+
     # -- ArgoCD ------------------------------------------------------------------
 
     - name: Deploy ArgoCD via Helm
@@ -52,6 +66,7 @@
         argo/argo-cd
         --namespace argocd
         --values {{ argocd_values }}
+        --set configs.secret.argocdServerAdminPassword={{ argocd_password_hash }}
         --wait
         --timeout 10m
       register: argocd_deploy
@@ -63,6 +78,28 @@
         kubectl wait --for=condition=Ready pods
         --all --namespace argocd
         --timeout=300s
+      changed_when: false
+      tags: [argocd]
+
+    # -- Gitea repo credentials for ArgoCD -------------------------------------
+
+    - name: Create Gitea repository secret for ArgoCD
+      ansible.builtin.shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: gitea-repo-creds
+          namespace: argocd
+          labels:
+            argocd.argoproj.io/secret-type: repository
+        type: Opaque
+        stringData:
+          type: git
+          url: http://gitea-http.gitea.svc.cluster.local:3000
+          username: {{ gitea_admin_user }}
+          password: {{ gitea_admin_password }}
+        EOF
       changed_when: false
       tags: [argocd]
 
@@ -79,17 +116,7 @@
         var: argocd_pods.stdout_lines
       tags: [verify]
 
-    - name: Show ArgoCD initial admin password
-      ansible.builtin.shell: >
-        kubectl -n argocd get secret argocd-initial-admin-secret
-        -o jsonpath="{.data.password}" | base64 --decode
-      register: argocd_password
-      changed_when: false
-      failed_when: false
-      tags: [verify]
-
-    - name: Display ArgoCD admin password
+    - name: Display ArgoCD admin credentials
       ansible.builtin.debug:
-        msg: "ArgoCD admin password: {{ argocd_password.stdout }}"
-      when: argocd_password.rc == 0
+        msg: "ArgoCD admin login: admin / {{ argocd_admin_password }}"
       tags: [verify]
