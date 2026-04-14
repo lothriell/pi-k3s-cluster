@@ -72,9 +72,9 @@
   become: true
   notify: restart pihole-dns-monitor
 
-- name: Deploy alert rules config
-  ansible.builtin.template:
-    src: alert-rules.conf.j2
+- name: Deploy alert rules config from local secrets file
+  ansible.builtin.copy:
+    src: "{{ monitor_alert_rules_file }}"
     dest: "{{ monitor_config_dir }}/alert-rules.conf"
     mode: "0644"
   become: true

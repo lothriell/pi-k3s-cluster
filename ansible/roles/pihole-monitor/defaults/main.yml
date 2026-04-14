@@ -12,12 +12,9 @@ pihole_log_file: "{{ pihole_log_dir }}/pihole.log"
 # Monitor config directory
 monitor_config_dir: /etc/pihole-monitor
 
-# Alert rules: domain pattern + IP (or * for all) + display label
-# Override in all.yml
-monitor_alert_rules:
-  - pattern: "*.example.com"
-    ip: "*"
-    label: "example domain"
+# Alert rules file (gitignored, lives in secrets/)
+# Edit locally or directly on athena at /etc/pihole-monitor/alert-rules.conf
+monitor_alert_rules_file: "{{ playbook_dir }}/../../secrets/pihole-alert-rules.conf"
 
 # Promtail config (ships ALL logs to Loki, not just alerts)
 promtail_port: 9080
