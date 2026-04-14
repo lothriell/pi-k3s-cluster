@@ -1,8 +1,0 @@
-# Pi-hole DNS Monitor — Watched IPs
-# One IP per line. Only queries from these IPs trigger alerts.
-# Lines starting with # are comments
-# Reload: sudo systemctl reload pihole-dns-monitor
-#
-{% for ip in monitor_watch_ips %}
-{{ ip }}
-{% endfor %}

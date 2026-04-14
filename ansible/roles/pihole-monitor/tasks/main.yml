@@ -72,18 +72,10 @@
   become: true
   notify: restart pihole-dns-monitor
 
-- name: Deploy watch patterns config
+- name: Deploy alert rules config
   ansible.builtin.template:
-    src: watch-patterns.conf.j2
-    dest: "{{ monitor_config_dir }}/watch-patterns.conf"
-    mode: "0644"
-  become: true
-  notify: reload pihole-dns-monitor
-
-- name: Deploy watch IPs config
-  ansible.builtin.template:
-    src: watch-ips.conf.j2
-    dest: "{{ monitor_config_dir }}/watch-ips.conf"
+    src: alert-rules.conf.j2
+    dest: "{{ monitor_config_dir }}/alert-rules.conf"
     mode: "0644"
   become: true
   notify: reload pihole-dns-monitor
@@ -150,6 +142,5 @@
       Pi-hole DNS Monitor deployed:
         - ntfy: http://localhost:{{ ntfy_port }}/{{ ntfy_topic }}
         - Monitor: systemctl status pihole-dns-monitor
-        - Patterns: {{ monitor_config_dir }}/watch-patterns.conf
-        - IPs: {{ monitor_config_dir }}/watch-ips.conf
+        - Rules: {{ monitor_config_dir }}/alert-rules.conf
         - Reload: sudo systemctl reload pihole-dns-monitor

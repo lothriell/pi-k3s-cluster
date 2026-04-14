@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Monitor Pi-hole DNS logs and alert on matching queries via ntfy.
 
-Reads watch patterns and IPs from config files. Sends custom-labeled
-notifications when a monitored IP queries a watched domain.
+Reads alert rules from a single config file. Each rule can specify:
+  - domain pattern + specific IP  → alert only for that IP
+  - domain pattern + *            → alert for ANY IP querying that domain
 
-Config reload: send SIGHUP to re-read pattern and IP files without restart.
+Config reload: send SIGHUP to re-read rules without restart.
 """
 
 import subprocess
@@ -12,11 +13,9 @@ import re
 import signal
 import fnmatch
 import urllib.request
-import sys
-import os
 
-PATTERNS_FILE = "{{ monitor_config_dir }}/watch-patterns.conf"
-IPS_FILE = "{{ monitor_config_dir }}/watch-ips.conf"
+
+RULES_FILE = "{{ monitor_config_dir }}/alert-rules.conf"
 NTFY_URL = "http://localhost:{{ ntfy_port }}/{{ ntfy_topic }}"
 LOG_FILE = "{{ pihole_log_file }}"
 
@@ -25,42 +24,43 @@ def log(msg):
     print(msg, flush=True)
 
 
-def load_patterns(path):
-    """Load pattern=label mappings from config file."""
-    patterns = []
+def load_rules(path):
+    """Load alert rules from config file.
+
+    Format per line:
+        domain_pattern | ip_or_* | label
+    Examples:
+        *.sme.sk | 10.69.0.42 | duck domain
+        *.facebook.com | * | social media
+        bad-site.org | 10.69.0.42 | phishing
+    """
+    rules = []
     try:
         with open(path) as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
-                if "=" in line:
-                    pat, label = line.split("=", 1)
-                    patterns.append((pat.strip(), label.strip()))
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) == 3:
+                    domain_pat, ip_pat, label = parts
+                    rules.append((domain_pat, ip_pat, label))
+                elif len(parts) == 2:
+                    domain_pat, label = parts
+                    rules.append((domain_pat, "*", label))
                 else:
-                    patterns.append((line, line))
+                    log(f"WARNING: invalid rule: {line}")
     except FileNotFoundError:
         log(f"WARNING: {path} not found")
-    return patterns
-
-
-def load_ips(path):
-    """Load watched IPs from config file."""
-    try:
-        with open(path) as f:
-            return set(
-                l.strip() for l in f if l.strip() and not l.startswith("#")
-            )
-    except FileNotFoundError:
-        log(f"WARNING: {path} not found")
-        return set()
+    return rules
 
 
 def reload_config(signum=None, frame=None):
-    global patterns, watch_ips
-    patterns = load_patterns(PATTERNS_FILE)
-    watch_ips = load_ips(IPS_FILE)
-    log(f"Config loaded: {len(patterns)} patterns, {len(watch_ips)} IPs")
+    global rules
+    rules = load_rules(RULES_FILE)
+    log(f"Config loaded: {len(rules)} alert rules")
+    for domain_pat, ip_pat, label in rules:
+        log(f"  {domain_pat} | {ip_pat} | {label}")
 
 
 def send_alert(domain, client_ip, label):
@@ -83,12 +83,18 @@ def send_alert(domain, client_ip, label):
         log(f"ERROR sending alert: {e}")
 
 
-# Regex: "query[A] domain.name from 10.69.0.42"
+def matches_ip(client_ip, ip_pattern):
+    """Check if client IP matches the rule's IP pattern."""
+    if ip_pattern == "*":
+        return True
+    return client_ip == ip_pattern
+
+
+# Regex: "query[A] domain.name from 10.x.x.x"
 QUERY_RE = re.compile(r"query\[\w+\]\s+(\S+)\s+from\s+(\S+)")
 
 # Load initial config
-patterns = []
-watch_ips = set()
+rules = []
 reload_config()
 
 # Reload config on SIGHUP
@@ -110,10 +116,8 @@ try:
         if not m:
             continue
         domain, client_ip = m.group(1), m.group(2)
-        if client_ip not in watch_ips:
-            continue
-        for pat, label in patterns:
-            if fnmatch.fnmatch(domain, pat):
+        for domain_pat, ip_pat, label in rules:
+            if fnmatch.fnmatch(domain, domain_pat) and matches_ip(client_ip, ip_pat):
                 send_alert(domain, client_ip, label)
                 break
 except KeyboardInterrupt:

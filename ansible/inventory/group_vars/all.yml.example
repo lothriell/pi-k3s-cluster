@@ -55,12 +55,15 @@ gitea_registry_host: "gitea.{{ local_domain }}"
 tailscale_arch_t_01: 100.x.x.x
 tailscale_cachy_t_01: 100.x.x.x
 
-# Pi-hole DNS monitor
-monitor_watch_patterns:
+# Pi-hole DNS monitor alert rules
+# pattern | ip (or * for all) | label
+monitor_alert_rules:
   - pattern: "*.example.com"
+    ip: "10.0.0.100"
     label: "example domain"
-monitor_watch_ips:
-  - "10.0.0.100"
+  - pattern: "*.suspicious.org"
+    ip: "*"
+    label: "suspicious site"
 loki_url: "http://loki.monitoring.svc.cluster.local:3100"
 
 # Service credentials (survive nuke-and-rebuild)
