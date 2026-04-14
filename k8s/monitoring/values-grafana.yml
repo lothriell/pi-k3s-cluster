@@ -12,6 +12,28 @@
 # =============================================================================
 
 # ---------------------------------------------------------------------------
+# Hardened container security. Pod-level securityContext (runAsNonRoot, UID 472)
+# and allowPrivilegeEscalation/caps/seccomp are set by chart defaults. Adding
+# readOnlyRootFilesystem closes the KSV-0014 finding; /tmp emptyDir is required
+# because Grafana writes session + cache files there.
+# ---------------------------------------------------------------------------
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+extraVolumeMounts:
+  - name: tmp
+    mountPath: /tmp
+extraVolumes:
+  - name: tmp
+    emptyDir: {}
+
+# ---------------------------------------------------------------------------
 # Service -- expose Grafana via MetalLB LoadBalancer for direct LAN access.
 # ---------------------------------------------------------------------------
 service:
@@ -114,6 +136,18 @@ dashboards:
 # Sidecar -- watches for ConfigMaps labeled grafana_dashboard and loads them.
 # ---------------------------------------------------------------------------
 sidecar:
+  # k8s-sidecar is a tiny Python watcher. It writes dashboard JSON files
+  # to /tmp/dashboards (a shared emptyDir with the main grafana container,
+  # provided by the chart). It does not need /tmp itself, so readOnly rootfs
+  # is safe here.
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+    seccompProfile:
+      type: RuntimeDefault
   dashboards:
     enabled: true
     label: grafana_dashboard

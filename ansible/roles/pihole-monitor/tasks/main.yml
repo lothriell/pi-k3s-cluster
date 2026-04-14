@@ -151,6 +151,27 @@
     sudo docker exec ntfy ntfy access everyone {{ ntfy_topic }} write 2>&1 || true
   changed_when: false
 
+- name: Check if alertmanager ntfy user exists
+  ansible.builtin.shell: |
+    sudo docker exec ntfy ntfy user list {{ ntfy_alertmanager_user }} 2>/dev/null \
+      | grep -q "^user {{ ntfy_alertmanager_user }} "
+  register: ntfy_alertmanager_user_check
+  changed_when: false
+  failed_when: false
+
+- name: Create dedicated ntfy user for K8s Alertmanager
+  ansible.builtin.shell: |
+    printf '%s\n%s\n' '{{ ntfy_alertmanager_password }}' '{{ ntfy_alertmanager_password }}' \
+      | sudo docker exec -i ntfy ntfy user add {{ ntfy_alertmanager_user }}
+  when: ntfy_alertmanager_user_check.rc != 0
+
+- name: Grant write-only access for alertmanager user on k8s-alerts topic
+  ansible.builtin.command: >
+    sudo docker exec ntfy ntfy access
+    {{ ntfy_alertmanager_user }} {{ ntfy_k8s_alerts_topic }} write-only
+  register: ntfy_alertmanager_acl
+  changed_when: "'granted' in ntfy_alertmanager_acl.stdout"
+
 # -- Deploy Promtail ---------------------------------------------------------
 
 - name: Deploy Promtail config

@@ -1,0 +1,330 @@
+# =============================================================================
+# Helm Values: prometheus-community/prometheus  (Jinja2 template)
+# =============================================================================
+# Rendered by playbook 04-deploy-monitoring.yml through ansible.builtin.template
+# so that site-specific values (ntfy topic, Cloudflare domain, basic-auth
+# credentials) are injected at deploy time without being committed to git.
+# Tuned for Raspberry Pi CM5 (ARM64, 16GB RAM per node).
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Alertmanager -- routes alerts to the self-hosted ntfy server on athena.
+# Basic-auth credentials for the dedicated `alertmanager` ntfy user are
+# templated in from group_vars/all.yml at deploy time.
+# ---------------------------------------------------------------------------
+alertmanager:
+  enabled: true
+  persistence:
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 96Mi
+  nodeSelector:
+    kubernetes.io/arch: arm64
+  # NOTE: this chart (prometheus-community/prometheus) does NOT expose a
+  # containerSecurityContext key for alertmanager — only podSecurityContext.
+  # The pod-level defaults already run alertmanager as non-root UID 65534.
+  # The remaining KSV-0014 (read-only rootfs) on the alertmanager container
+  # can only be fixed by migrating to kube-prometheus-stack or post-processing.
+  # Accepted as of 2026-04-14.
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      group_by: ['alertname', 'severity']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      # Default: drop. Warnings still show in the Alertmanager UI and Grafana
+      # but do not page. Only critical severity routes to ntfy.
+      receiver: 'null'
+      routes:
+        - matchers:
+            - severity="critical"
+          receiver: ntfy
+          continue: false
+    receivers:
+      - name: 'null'
+      - name: ntfy
+        webhook_configs:
+          - url: "{{ ntfy_base_url }}/{{ ntfy_k8s_alerts_topic }}"
+            send_resolved: true
+            http_config:
+              basic_auth:
+                username: "{{ ntfy_alertmanager_user }}"
+                password: "{{ ntfy_alertmanager_password }}"
+
+# ---------------------------------------------------------------------------
+# Pushgateway -- not needed for a basic monitoring setup. It is used to
+# push metrics from short-lived batch jobs; you can enable it later.
+# ---------------------------------------------------------------------------
+prometheus-pushgateway:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# Node Exporter -- collects hardware/OS metrics from every node.
+# Runs as a DaemonSet (one pod per node). Keep it lightweight.
+# ---------------------------------------------------------------------------
+prometheus-node-exporter:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+  # Disable default scrape annotation so the built-in kubernetes-service-endpoints
+  # job does NOT scrape node-exporter. We use a dedicated job in extraScrapeConfigs
+  # that labels instance with hostname instead of IP (prevents Grafana duplicates).
+  service:
+    annotations:
+      prometheus.io/scrape: "false"
+  # Tolerate ARM64 taints if any are set on your Pi nodes
+  tolerations:
+    - key: "node.kubernetes.io/arch"
+      operator: "Equal"
+      value: "arm64"
+      effect: "NoSchedule"
+
+# ---------------------------------------------------------------------------
+# kube-state-metrics -- exposes cluster-level metrics (deployment status,
+# pod phases, etc.). Single replica is fine.
+# ---------------------------------------------------------------------------
+kube-state-metrics:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+# ---------------------------------------------------------------------------
+# Prometheus Server -- the core metrics database.
+# ---------------------------------------------------------------------------
+server:
+  # -- How long to keep metrics. Actual rate measured 2026-04-14 is
+  #    ~770 MB/day across 30 scrape targets. 20d retention fits in 20Gi
+  #    with headroom (20 × 0.77 ≈ 15.4 GB actual, leaving ~4.5 GB buffer).
+  #    To go to 30d+, first expand the x86 VM disks and then bump PVC.
+  retention: "20d"
+
+  # -- Resource requests/limits sized for a Pi with 16GB RAM.
+  #    Prometheus is the heaviest component; 1Gi limit needed for 6 nodes.
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+  # -- Persistent storage so metrics survive pod restarts.
+  persistentVolume:
+    enabled: true
+    size: 20Gi
+    # Uses the default StorageClass (K3s ships with local-path-provisioner).
+    # If you add Longhorn later, set storageClass: "longhorn".
+    storageClass: ""
+
+  # -- Global scrape settings. 30s is a good balance between freshness and
+  #    CPU usage on resource-constrained nodes.
+  global:
+    scrape_interval: 30s
+    evaluation_interval: 30s
+
+  # -- Node affinity is not strictly required since all nodes are ARM64,
+  #    but this makes the intent explicit.
+  nodeSelector:
+    kubernetes.io/arch: arm64
+
+  # -- Hardened container security. Pod-level runAsNonRoot/UID 65534 is set
+  #    by the chart. /tmp needs an emptyDir because Prometheus writes scratch
+  #    files there during compaction.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+    seccompProfile:
+      type: RuntimeDefault
+  extraVolumeMounts:
+    - name: tmp
+      mountPath: /tmp
+  extraVolumes:
+    - name: tmp
+      emptyDir: {}
+
+# ---------------------------------------------------------------------------
+# Extra scrape configs -- add targets not auto-discovered by Prometheus.
+# ---------------------------------------------------------------------------
+extraScrapeConfigs: |
+  - job_name: node-exporter
+    scrape_interval: 30s
+    kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names:
+            - monitoring
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_name]
+        regex: prometheus-prometheus-node-exporter
+        action: keep
+      - source_labels: [__meta_kubernetes_endpoint_node_name]
+        target_label: instance
+  - job_name: longhorn
+    scrape_interval: 30s
+    metrics_path: /metrics
+    kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names:
+            - longhorn-system
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_name]
+        regex: longhorn-backend
+        action: keep
+      - source_labels: [__meta_kubernetes_endpoint_port_name]
+        regex: manager
+        action: keep
+  - job_name: trivy-operator
+    scrape_interval: 30s
+    metrics_path: /metrics
+    kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names:
+            - trivy-system
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_name]
+        regex: trivy-operator
+        action: keep
+      - source_labels: [__meta_kubernetes_endpoint_port_name]
+        regex: metrics
+        action: keep
+
+# ---------------------------------------------------------------------------
+# ConfigMap reload sidecar -- watches for config changes and triggers a
+# reload without restarting the pod. Very lightweight. Hardened container
+# security: the config-reloader is a tiny static Go binary, needs no /tmp.
+# ---------------------------------------------------------------------------
+configmapReload:
+  prometheus:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+      limits:
+        cpu: 50m
+        memory: 32Mi
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 65534
+      capabilities:
+        drop:
+          - ALL
+      seccompProfile:
+        type: RuntimeDefault
+
+# ---------------------------------------------------------------------------
+# Alert rules -- baseline coverage for node/cluster/storage health.
+# Alertmanager routes all of these to the ntfy k8s-alerts topic.
+# ---------------------------------------------------------------------------
+serverFiles:
+  alerting_rules.yml:
+    groups:
+      - name: nodes
+        rules:
+          - alert: NodeDiskFull
+            expr: (node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"}) < 0.2
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Disk nearly full on {{ '{{' }} $labels.instance {{ '}}' }}"
+              description: "Root filesystem has less than 20% free ({{ '{{' }} $value | humanizePercentage {{ '}}' }})."
+          - alert: NodeDiskCritical
+            expr: (node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"}) < 0.1
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Disk critically full on {{ '{{' }} $labels.instance {{ '}}' }}"
+              description: "Root filesystem has less than 10% free — cluster stability at risk."
+          - alert: NodeMemoryPressure
+            expr: (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) < 0.1
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Memory pressure on {{ '{{' }} $labels.instance {{ '}}' }}"
+              description: "Less than 10% memory available for 10 minutes."
+          - alert: NodeDown
+            expr: up{job="node-exporter"} == 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Node exporter down on {{ '{{' }} $labels.instance {{ '}}' }}"
+              description: "Node has not reported metrics for 5 minutes."
+      - name: kubernetes
+        rules:
+          - alert: KubeNodeNotReady
+            expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Node {{ '{{' }} $labels.node {{ '}}' }} not ready"
+              description: "Kubernetes reports the node as NotReady for 5 minutes."
+          - alert: PodCrashLooping
+            expr: rate(kube_pod_container_status_restarts_total[15m]) * 60 * 15 > 3
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Pod {{ '{{' }} $labels.namespace {{ '}}' }}/{{ '{{' }} $labels.pod {{ '}}' }} crash-looping"
+              description: "More than 3 restarts in the last 15 minutes."
+          - alert: PodNotReady
+            expr: sum by (namespace, pod) (kube_pod_status_phase{phase=~"Pending|Unknown|Failed"}) > 0
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Pod {{ '{{' }} $labels.namespace {{ '}}' }}/{{ '{{' }} $labels.pod {{ '}}' }} not ready"
+              description: "Pod has been in a non-ready phase for 15 minutes."
+      - name: longhorn
+        rules:
+          - alert: LonghornVolumeDegraded
+            expr: longhorn_volume_robustness == 2
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Longhorn volume {{ '{{' }} $labels.volume {{ '}}' }} degraded"
+              description: "A replica is missing — schedule maintenance to restore redundancy."
+          - alert: LonghornVolumeFaulted
+            expr: longhorn_volume_robustness == 3
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Longhorn volume {{ '{{' }} $labels.volume {{ '}}' }} faulted"
+              description: "Volume has no healthy replicas — data loss risk."
+          - alert: LonghornNodeStorageAlmostFull
+            expr: (longhorn_node_storage_usage_bytes / longhorn_node_storage_capacity_bytes) > 0.8
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Longhorn storage >80% on {{ '{{' }} $labels.node {{ '}}' }}"
+              description: "Longhorn will stop scheduling new replicas soon."

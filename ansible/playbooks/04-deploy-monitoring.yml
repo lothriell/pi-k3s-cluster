@@ -12,22 +12,49 @@
   gather_facts: false
 
   vars:
-    prometheus_values: "{{ playbook_dir }}/../../k8s/monitoring/values-prometheus.yml"
+    prometheus_values_template: "{{ playbook_dir }}/../../k8s/monitoring/values-prometheus.yml.j2"
+    prometheus_values_rendered: "/tmp/values-prometheus.rendered.yml"
     grafana_values: "{{ playbook_dir }}/../../k8s/monitoring/values-grafana.yml"
 
   tasks:
     # -- Prometheus ------------------------------------------------------------
+
+    - name: Ensure monitoring namespace exists
+      ansible.builtin.command: kubectl create namespace monitoring --dry-run=client -o yaml
+      register: ns_yaml
+      changed_when: false
+      tags: [prometheus]
+
+    - name: Apply monitoring namespace
+      ansible.builtin.command: kubectl apply -f -
+      args:
+        stdin: "{{ ns_yaml.stdout }}"
+      changed_when: false
+      tags: [prometheus]
+
+    - name: Render Prometheus values from template
+      ansible.builtin.template:
+        src: "{{ prometheus_values_template }}"
+        dest: "{{ prometheus_values_rendered }}"
+        mode: "0600"
+      tags: [prometheus]
 
     - name: Deploy Prometheus via Helm
       ansible.builtin.command: >
         helm upgrade --install prometheus
         prometheus-community/prometheus
         --namespace monitoring
-        --values {{ prometheus_values }}
+        --values {{ prometheus_values_rendered }}
         --wait
         --timeout 10m
       register: prometheus_deploy
       changed_when: "'STATUS: deployed' in prometheus_deploy.stdout"
+      tags: [prometheus]
+
+    - name: Remove rendered values file (contains secrets)
+      ansible.builtin.file:
+        path: "{{ prometheus_values_rendered }}"
+        state: absent
       tags: [prometheus]
 
     - name: Wait for Prometheus pods to be ready
@@ -61,7 +88,7 @@
       changed_when: false
       tags: [grafana]
 
-    # -- Trivy dashboard (auto-discovered by Grafana sidecar) -----------------
+    # -- Grafana dashboards (auto-discovered by Grafana sidecar) --------------
 
     - name: Deploy Trivy Operator Grafana dashboard
       ansible.builtin.shell: |
@@ -74,6 +101,18 @@
       register: trivy_dashboard
       changed_when: "'configured' in trivy_dashboard.stdout"
       tags: [grafana, trivy]
+
+    - name: Deploy Alerts overview Grafana dashboard
+      ansible.builtin.shell: |
+        kubectl create configmap alerts-dashboard \
+          --namespace monitoring \
+          --from-file=alerts.json={{ playbook_dir }}/../../k8s/monitoring/dashboards/alerts.json \
+          --dry-run=client -o yaml | \
+        kubectl label --local -f - grafana_dashboard=1 -o yaml --dry-run=client | \
+        kubectl apply -f -
+      register: alerts_dashboard
+      changed_when: "'configured' in alerts_dashboard.stdout"
+      tags: [grafana, alerts]
 
     # -- Summary ---------------------------------------------------------------
 
