@@ -13,11 +13,13 @@ import re
 import signal
 import fnmatch
 import urllib.request
+import time
 
 
 RULES_FILE = "{{ monitor_config_dir }}/alert-rules.conf"
 NTFY_URL = "http://localhost:{{ ntfy_port }}/{{ ntfy_topic }}"
 LOG_FILE = "{{ pihole_log_file }}"
+SUPPRESS_MINUTES = 15
 
 
 def log(msg):
@@ -90,6 +92,20 @@ def matches_ip(client_ip, ip_pattern):
     return client_ip == ip_pattern
 
 
+# Alert suppression: key = (label, client_ip), value = timestamp of last alert
+suppressed = {}
+
+
+def is_suppressed(label, client_ip):
+    """Check if this label+IP combo is within the suppression window."""
+    key = (label, client_ip)
+    last_alert = suppressed.get(key, 0)
+    if time.time() - last_alert < SUPPRESS_MINUTES * 60:
+        return True
+    suppressed[key] = time.time()
+    return False
+
+
 # Regex: "query[A] domain.name from 10.x.x.x"
 QUERY_RE = re.compile(r"query\[\w+\]\s+(\S+)\s+from\s+(\S+)")
 
@@ -118,7 +134,10 @@ try:
         domain, client_ip = m.group(1), m.group(2)
         for domain_pat, ip_pat, label in rules:
             if fnmatch.fnmatch(domain, domain_pat) and matches_ip(client_ip, ip_pat):
-                send_alert(domain, client_ip, label)
+                if not is_suppressed(label, client_ip):
+                    send_alert(domain, client_ip, label)
+                else:
+                    log(f"SUPPRESSED: {client_ip} / {label} ({domain})")
                 break
 except KeyboardInterrupt:
     log("Shutting down")
