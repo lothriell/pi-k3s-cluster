@@ -182,8 +182,8 @@ Pi-hole logs are monitored at two levels:
 - **Loki:** Deployed on K8s in monitoring namespace (SingleBinary mode, 10Gi PVC, 3-month retention). NodePort 31100 for external Promtail access. Grafana Loki datasource pre-configured.
 
 ### ntfy Access
-- ntfy topic and credentials are in `all.yml` (gitignored)
-- Phone app: subscribe to the topic at `https://ntfy.<cloudflare_domain>` with credentials from `all.yml`
+- ntfy topic and credentials are in `group_vars/all/vault.yml` (Ansible Vault encrypted)
+- Phone app: subscribe to the topic at `https://ntfy.<cloudflare_domain>` with credentials from `vault.yml`
 - Monitor script publishes locally (localhost:8080, anonymous write allowed on the topic)
 - Athena has old Docker (no compose plugin) — ntfy and Promtail run via `docker run`, not compose
 
@@ -210,7 +210,7 @@ ansible-playbook ansible/playbooks/10-deploy-pihole-monitor.yml
 
 ## Network Layout
 
-All IPs are configured in `ansible/inventory/hosts.yml` and `group_vars/all.yml`. See `all.yml.example` for the template.
+All IPs are configured in `ansible/inventory/hosts.yml` and `group_vars/all/main.yml`. Non-secret config lives in `main.yml`; credentials live in the vault-encrypted `vault.yml` alongside it. See the `.example` files for templates.
 
 | Resource | Description |
 |----------|-------------|
@@ -238,14 +238,19 @@ All IPs are configured in `ansible/inventory/hosts.yml` and `group_vars/all.yml`
 
 ## Service Credentials
 
-Gitea and ArgoCD credentials are defined in `group_vars/all.yml` (gitignored) and auto-created on deploy:
+Gitea and ArgoCD credentials are defined in `group_vars/all/vault.yml` (Ansible Vault encrypted, gitignored) and auto-created on deploy:
 - **Gitea:** Admin account created via `--set gitea.admin.*` on fresh install (playbook 05). Skipped on upgrades (user already exists in SQLite DB).
 - **ArgoCD:** Fixed admin password via bcrypt hash in `--set configs.secret.argocdServerAdminPassword`. Gitea repo secret auto-created.
 - **Grafana:** admin / admin (hardcoded in values file, change after first login)
 - **Open WebUI:** First signup becomes admin. Disable signup after: `kubectl set env deployment/open-webui -n open-webui ENABLE_SIGNUP=false`
 - **Wazuh:** Credentials shown during install (stored on Wazuh VM)
 
-Template: `all.yml.example` has placeholder values for `gitea_admin_user`, `gitea_admin_password`, `gitea_admin_email`, `argocd_admin_password`.
+Template: `group_vars/all/vault.yml.example` has placeholder values for `gitea_admin_user`, `gitea_admin_password`, `gitea_admin_email`, `argocd_admin_password`.
+
+## Operational references
+
+- **`docs/ops-commands.md`** — day-to-day commands cheatsheet (Ansible Vault, backups, alerts, ntfy, cluster health). First stop when you need to do a thing and forgot how.
+- **`docs/improvement-plan.md`** — living checklist of cluster hardening work (status for each task, pointers to files to touch).
 
 ## File Conventions
 
@@ -254,5 +259,5 @@ Template: `all.yml.example` has placeholder values for `gitea_admin_user`, `gite
 - Placeholder values marked with `TODO CHANGEME`
 - Dotfiles for Pi shell environment live in `dotfiles/`
 - `ansible.cfg` is at project root (not in `ansible/`) so it works from any subdirectory
-- **Local config:** `ansible/inventory/group_vars/all.yml` (gitignored) holds IPs, username, and secrets. Copy from `all.yml.example` to set up.
+- **Local config:** `ansible/inventory/group_vars/all/main.yml` (gitignored) holds IPs and non-secret vars. `all/vault.yml` (Ansible Vault encrypted, gitignored) holds secrets. Copy from the matching `.example` files to set up, then `ansible-vault encrypt vault.yml`. The vault password lives at `~/.ansible/vault_pass` and is referenced by `ansible.cfg`.
 - **Secrets:** EVE SSO credentials, Image Updater config, and private docs are all gitignored. See `.gitignore` for the full list.

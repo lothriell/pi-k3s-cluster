@@ -1,0 +1,63 @@
+---
+# Non-secret cluster configuration — copy to main.yml (gitignored) and fill in.
+#
+# Secrets live in a separate vault.yml in this same directory, encrypted with
+# Ansible Vault. See vault.yml.example for the secret schema.
+
+# Personal user account (used for bootstrap and cloud-init)
+personal_user: myuser
+
+# SSH public key (used in cloud-init for both personal and ansible users)
+ssh_pubkey: "ssh-ed25519 AAAA... your-key-here"
+
+# Node IPs — must match your network/DHCP reservations
+node_ip_1: 10.0.0.11
+node_ip_2: 10.0.0.12
+node_ip_3: 10.0.0.13
+node_ip_4: 10.0.0.14
+
+# K3s server endpoint (which node is control plane)
+k3s_server_ip: "{{ node_ip_1 }}"
+k3s_server_url: "https://{{ k3s_server_ip }}:6443"
+
+# MetalLB IP range for LoadBalancer services
+metallb_ip_range: "10.0.0.100-10.0.0.110"
+
+# Tailscale (auth key lives in vault.yml)
+tailscale_subnet_routes: "10.0.0.0/24"
+
+# x86 K3s agent node IPs (Proxmox VMs)
+x86_node_ip_1: 10.0.0.21
+x86_node_ip_2: 10.0.0.22
+
+# SFF node IPs
+sff_athena_ip: 10.0.0.30
+sff_artemis_ip: 10.0.0.31
+sff_minisforum_ip: 10.0.0.32
+
+# GPU server IP
+gpu_node_ip_1: 10.0.0.40
+
+# Wazuh manager IP
+wazuh_manager_ip: 10.0.0.50
+
+# Local domain (used for Gitea registry hostname, etc.)
+local_domain: yourdomain.local
+
+# Desktop/laptop Tailscale IPs
+tailscale_arch_t_01: 100.x.x.x
+tailscale_cachy_t_01: 100.x.x.x
+
+# Cloudflare tunnel domain
+cloudflare_domain: example.com
+
+# ntfy (public config — credentials in vault.yml)
+ntfy_topic: "dns-alerts"
+ntfy_base_url: "https://ntfy.yourdomain.com"
+ntfy_k8s_alerts_topic: "k8s-alerts"
+
+# Cloudflare R2 — backup target (credentials in vault.yml)
+r2_account_id: "your-cloudflare-account-id"
+r2_backup_bucket: "k8sbkp"
+r2_endpoint_host: "{{ r2_account_id }}.r2.cloudflarestorage.com"
+r2_endpoint_url: "https://{{ r2_endpoint_host }}"

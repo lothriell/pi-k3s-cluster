@@ -1,0 +1,38 @@
+---
+# Encrypted secrets — copy to vault.yml (gitignored), fill in, then run:
+#
+#     ansible-vault encrypt ansible/inventory/group_vars/all/vault.yml
+#
+# The vault password lives outside the repo at ~/.ansible/vault_pass
+# (referenced by ansible.cfg → vault_password_file). Create it with:
+#
+#     mkdir -p ~/.ansible && openssl rand -base64 32 > ~/.ansible/vault_pass && chmod 600 ~/.ansible/vault_pass
+#
+# Edit encrypted file with:  ansible-vault edit ansible/inventory/group_vars/all/vault.yml
+# View encrypted file with:  ansible-vault view ansible/inventory/group_vars/all/vault.yml
+
+# Personal user password hash (generate with: openssl passwd -6)
+password_hash: "$6$rounds=4096$salt$hash-here"
+
+# Tailscale auth key (reusable pre-auth key from Tailscale admin)
+tailscale_auth_key: "tskey-auth-..."
+
+# Pi-hole DNS monitor ntfy admin credentials
+ntfy_admin_user: "admin"
+ntfy_admin_password: "changeme-use-a-real-password"
+
+# Kubernetes Alertmanager → ntfy (dedicated write-only user)
+ntfy_alertmanager_user: "alertmanager"
+ntfy_alertmanager_password: "changeme-use-a-real-password"
+
+# Cloudflare R2 — S3 API credentials (Object Read & Write scoped to your bucket)
+r2_access_key_id: "your-r2-access-key-id"
+r2_secret_access_key: "your-r2-secret-access-key"
+
+# Gitea service admin (auto-created on fresh install)
+gitea_admin_user: "mygiteaadmin"
+gitea_admin_password: "changeme-use-a-real-password"
+gitea_admin_email: "admin@example.com"
+
+# ArgoCD admin password
+argocd_admin_password: "changeme-use-a-real-password"

@@ -6,7 +6,7 @@
 # node IPs, MetalLB services, and the K3s API.
 #
 # Prerequisites:
-#   - Tailscale auth key in secrets/tailscale-auth-key
+#   - tailscale_auth_key defined in group_vars/all/vault.yml (Ansible Vault encrypted)
 #   - After first run, approve subnet routes in Tailscale admin console:
 #     https://login.tailscale.com/admin/machines
 #

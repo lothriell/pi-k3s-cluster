@@ -22,7 +22,8 @@ secrets/
 *.key
 tunnel-credentials.json
 .env
-ansible/inventory/group_vars/all.yml
+ansible/inventory/group_vars/all/main.yml
+ansible/inventory/group_vars/all/vault.yml
 
 # Kubeconfig copies
 kubeconfig
@@ -38,3 +39,8 @@ k8s/argocd/eve-tracker-dev-image-updater.yml
 
 # Private runbooks with real values
 docs/13-deploy-eve-tracker-dev.md
+docs/improvement-plan.md
+docs/ops-commands.md
+
+# Local Ingress overrides (so private hostnames don't leak to public repo)
+k8s/*/ingress.local.yml
