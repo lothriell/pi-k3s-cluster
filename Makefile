@@ -26,6 +26,8 @@ PI_1 := rpi-k3s-1
 PI_2 := rpi-k3s-2
 PI_3 := rpi-k3s-3
 PI_4 := rpi-k3s-4
+X86_1 := k3s-x86-1
+X86_2 := k3s-x86-2
 PI_USER := ansible
 
 # Ansible flags
@@ -124,6 +126,10 @@ argocd: ## Deploy ArgoCD for GitOps continuous deployment
 cloudflare: ## Deploy Cloudflare tunnel for external access
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/06-deploy-cloudflare.yml
 
+.PHONY: backup
+backup: ## Configure etcd + Longhorn backups (local snapshots + R2 offsite)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/11-configure-backups.yml
+
 .PHONY: longhorn
 longhorn: ## Deploy Longhorn distributed storage
 	$(HELM) repo add longhorn https://charts.longhorn.io 2>/dev/null || true
@@ -178,3 +184,11 @@ ssh-3: ## SSH into rpi-k3s-3 (agent)
 .PHONY: ssh-4
 ssh-4: ## SSH into rpi-k3s-4 (agent)
 	ssh $(PI_USER)@$(PI_4)
+
+.PHONY: ssh-x86-1
+ssh-x86-1: ## SSH into k3s-x86-1 (Proxmox VM agent, remote site)
+	ssh $(PI_USER)@$(X86_1)
+
+.PHONY: ssh-x86-2
+ssh-x86-2: ## SSH into k3s-x86-2 (Proxmox VM agent, remote site)
+	ssh $(PI_USER)@$(X86_2)
