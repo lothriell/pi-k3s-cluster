@@ -168,6 +168,40 @@ Node-exporter is scraped by a dedicated `node-exporter` job in `extraScrapeConfi
 - Needs ~1Gi memory limit (OOMKills at 512Mi on ARM64)
 - Accessible at `chat.<local_domain>` through Traefik
 
+## Pi-hole DNS Monitoring
+
+### Architecture
+Pi-hole logs are monitored at two levels:
+- **Log retention (Promtail → Loki):** ALL DNS queries from ALL IPs shipped to Loki on K8s. 3-month retention. Searchable in Grafana via Loki datasource.
+- **Real-time alerts (Python script → ntfy):** Pattern-matched alerts with custom display labels. Sub-second latency.
+
+### Components (deployed on athena)
+- **ntfy:** Self-hosted push notification server (Docker). Subscribe via mobile app.
+- **Promtail:** Tails pihole.log, ships to Loki on K8s (Docker).
+- **pihole-dns-monitor:** Python script + systemd service. Matches DNS queries against alert rules and sends notifications via ntfy.
+- **Loki:** Deployed on K8s in monitoring namespace. Grafana Loki datasource pre-configured.
+
+### Alert Rules
+Rules live in `secrets/pihole-alert-rules.conf` (gitignored). Format:
+```
+domain_pattern | ip_or_* | display_label
+*.sme.sk | 10.0.0.42 | duck domain        # specific IP
+*.facebook.com | * | social media          # any IP
+```
+
+Day-to-day editing: SSH to athena, edit `/etc/pihole-monitor/alert-rules.conf`, then `sudo systemctl reload pihole-dns-monitor`.
+
+### Deployment
+```bash
+ansible-playbook ansible/playbooks/10-deploy-pihole-monitor.yml
+```
+
+### Files
+- Playbook: `ansible/playbooks/10-deploy-pihole-monitor.yml`
+- Role: `ansible/roles/pihole-monitor/`
+- Alert rules: `secrets/pihole-alert-rules.conf` (gitignored, copied to athena on deploy)
+- Loki datasource: `k8s/monitoring/values-grafana.yml`
+
 ## Network Layout
 
 All IPs are configured in `ansible/inventory/hosts.yml` and `group_vars/all.yml`. See `all.yml.example` for the template.
