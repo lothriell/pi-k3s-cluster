@@ -1,9 +1,9 @@
 ---
 # Pi-hole DNS monitor configuration
 
-# ntfy server
-ntfy_port: 8080
-ntfy_topic: dns-alerts
+# ntfy server (public ntfy.sh — no Tailscale needed on phone)
+ntfy_url: "https://ntfy.sh"
+ntfy_topic: "CHANGEME-use-random-topic"
 
 # Pihole log path (host-mounted from Docker container)
 pihole_log_dir: /var/log/pihole
