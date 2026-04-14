@@ -42,10 +42,15 @@
   failed_when: false
   tags: [tailscale]
 
+# Cluster nodes must NOT accept tailnet routes. If they do, LAN traffic gets
+# routed through the tailnet and breaks Flannel, MetalLB ARP, and inter-node
+# networking. We pass --accept-routes=false explicitly below and assert the
+# final state afterwards.
 - name: Configure Tailscale (regular node)
   ansible.builtin.command: >
     tailscale set
     --hostname={{ inventory_hostname }}
+    --accept-routes=false
   when: inventory_hostname not in groups['k3s_server']
   changed_when: true
   tags: [tailscale]
@@ -55,6 +60,7 @@
     tailscale set
     --hostname={{ inventory_hostname }}
     --advertise-routes={{ tailscale_subnet_routes }}
+    --accept-routes=false
   when: inventory_hostname in groups['k3s_server']
   changed_when: true
   tags: [tailscale]
@@ -64,6 +70,7 @@
     tailscale up
     --authkey={{ tailscale_auth_key }}
     --hostname={{ inventory_hostname }}
+    --accept-routes=false
   when:
     - tailscale_status.rc != 0 or (tailscale_status.stdout | from_json).BackendState != "Running"
     - inventory_hostname not in groups['k3s_server']
@@ -76,11 +83,19 @@
     --authkey={{ tailscale_auth_key }}
     --hostname={{ inventory_hostname }}
     --advertise-routes={{ tailscale_subnet_routes }}
+    --accept-routes=false
   when:
     - tailscale_status.rc != 0 or (tailscale_status.stdout | from_json).BackendState != "Running"
     - inventory_hostname in groups['k3s_server']
   changed_when: true
   tags: [tailscale]
+
+- name: Assert accept-routes is false on cluster nodes
+  ansible.builtin.shell: |
+    tailscale debug prefs | python3 -c 'import sys,json; d=json.load(sys.stdin); sys.exit(1 if d.get("RouteAll") else 0)'
+  when: inventory_hostname in groups['k3s_cluster']
+  changed_when: false
+  tags: [tailscale, assert]
 
 - name: Ensure IP forwarding is enabled for subnet routing (server node)
   ansible.builtin.sysctl:
