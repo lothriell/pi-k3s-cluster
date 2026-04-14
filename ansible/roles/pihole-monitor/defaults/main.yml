@@ -18,4 +18,5 @@ monitor_alert_rules_file: "{{ playbook_dir }}/../../secrets/pihole-alert-rules.c
 
 # Promtail config (ships ALL logs to Loki, not just alerts)
 promtail_port: 9080
-loki_url: "http://loki.monitoring.svc.cluster.local:3100"
+# Loki endpoint for Promtail (NodePort 31100 on any K3s node)
+loki_url: "http://{{ k3s_server_ip | default('10.0.0.11') }}:31100"

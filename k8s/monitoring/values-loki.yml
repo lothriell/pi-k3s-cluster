@@ -1,0 +1,72 @@
+# =============================================================================
+# Helm Values: grafana/loki
+# =============================================================================
+# Single-binary Loki for Pi-hole DNS log aggregation.
+# 3-month retention, filesystem storage on a 10Gi PVC.
+#
+# Install with:
+#   helm install loki grafana/loki -n monitoring -f values-loki.yml
+# =============================================================================
+
+deploymentMode: SingleBinary
+
+loki:
+  auth_enabled: false
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  limits_config:
+    retention_period: 2160h
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+  schemaConfig:
+    configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+
+# Single-binary mode (all-in-one, minimal resources)
+singleBinary:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  persistence:
+    size: 10Gi
+
+# Disable distributed components (using single-binary)
+backend:
+  replicas: 0
+read:
+  replicas: 0
+write:
+  replicas: 0
+
+# Disable caches (single-binary, low traffic)
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+
+# Disable monitoring overhead
+monitoring:
+  selfMonitoring:
+    enabled: false
+  lokiCanary:
+    enabled: false
+test:
+  enabled: false
+
+# Disable gateway (direct access)
+gateway:
+  enabled: false

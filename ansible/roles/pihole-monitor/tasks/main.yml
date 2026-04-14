@@ -114,9 +114,37 @@
     mode: "0644"
   become: true
 
-- name: Start ntfy + Promtail containers
+- name: Check for docker compose plugin or standalone
+  ansible.builtin.shell: sudo docker compose version 2>/dev/null && echo "plugin" || echo "standalone"
+  register: compose_check
+  changed_when: false
+
+- name: Start ntfy + Promtail containers (compose plugin)
   ansible.builtin.command: sudo docker compose -f {{ monitor_config_dir }}/docker-compose.yml up -d
   changed_when: false
+  when: "'plugin' in compose_check.stdout"
+
+- name: Start ntfy + Promtail containers (standalone docker-compose)
+  ansible.builtin.command: sudo docker-compose -f {{ monitor_config_dir }}/docker-compose.yml up -d
+  changed_when: false
+  when: "'standalone' in compose_check.stdout"
+
+- name: Start ntfy + Promtail via docker run (fallback if no compose)
+  ansible.builtin.shell: |
+    sudo docker rm -f ntfy promtail 2>/dev/null || true
+    sudo docker run -d --name ntfy --restart unless-stopped \
+      -p {{ ntfy_port }}:80 \
+      -v ntfy-cache:/var/cache/ntfy \
+      -v ntfy-etc:/etc/ntfy \
+      -e TZ=UTC \
+      binwiederhier/ntfy:latest serve
+    sudo docker run -d --name promtail --restart unless-stopped \
+      -v {{ pihole_log_dir }}:/var/log/pihole:ro \
+      -v {{ monitor_config_dir }}/promtail-config.yml:/etc/promtail/config.yml:ro \
+      grafana/promtail:latest -config.file=/etc/promtail/config.yml
+  changed_when: false
+  when: "'standalone' in compose_check.stdout and 'plugin' not in compose_check.stdout"
+  failed_when: false
 
 # -- Verify ------------------------------------------------------------------
 
