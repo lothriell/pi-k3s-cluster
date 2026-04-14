@@ -1,0 +1,63 @@
+---
+- name: Verify NVIDIA runtime is available
+  ansible.builtin.command: docker info --format '{{ "{{" }} .Runtimes {{ "}}" }}'
+  register: docker_runtimes
+  changed_when: false
+
+- name: Fail if NVIDIA runtime not found
+  ansible.builtin.fail:
+    msg: "NVIDIA Container Toolkit not installed. Install it first: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html"
+  when: "'nvidia' not in docker_runtimes.stdout"
+
+- name: Pull Ollama Docker image
+  community.docker.docker_image:
+    name: "{{ ollama_image }}"
+    tag: "{{ ollama_image_tag }}"
+    source: pull
+
+- name: Create Ollama data volume
+  community.docker.docker_volume:
+    name: "{{ ollama_data_volume }}"
+    state: present
+
+- name: Start Ollama container
+  community.docker.docker_container:
+    name: "{{ ollama_container_name }}"
+    image: "{{ ollama_image }}:{{ ollama_image_tag }}"
+    state: started
+    restart_policy: unless-stopped
+    runtime: nvidia
+    env:
+      NVIDIA_VISIBLE_DEVICES: "{{ ollama_nvidia_visible_devices }}"
+      OLLAMA_HOST: "{{ ollama_host }}"
+      OLLAMA_FLASH_ATTENTION: "{{ ollama_flash_attention }}"
+      OLLAMA_KEEP_ALIVE: "{{ ollama_keep_alive }}"
+      OLLAMA_NUM_PARALLEL: "{{ ollama_num_parallel }}"
+    ports:
+      - "{{ ollama_port }}:{{ ollama_port }}"
+    volumes:
+      - "{{ ollama_data_volume }}:/root/.ollama"
+
+- name: Wait for Ollama API to be ready
+  ansible.builtin.uri:
+    url: "http://localhost:{{ ollama_port }}/api/tags"
+    method: GET
+    status_code: 200
+  register: ollama_health
+  retries: 10
+  delay: 5
+  until: ollama_health.status == 200
+
+- name: Pull primary model ({{ ollama_model }})
+  ansible.builtin.command:
+    cmd: docker exec {{ ollama_container_name }} ollama pull {{ ollama_model }}
+  register: ollama_pull_primary
+  changed_when: "'pulling' in ollama_pull_primary.stdout"
+  when: ollama_pull_model
+
+- name: Pull fallback model ({{ ollama_model_fallback }})
+  ansible.builtin.command:
+    cmd: docker exec {{ ollama_container_name }} ollama pull {{ ollama_model_fallback }}
+  register: ollama_pull_fallback_result
+  changed_when: "'pulling' in ollama_pull_fallback_result.stdout"
+  when: ollama_pull_fallback

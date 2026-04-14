@@ -1,0 +1,19 @@
+---
+# Deploy Ollama LLM server on GPU node
+#
+# Usage:
+#   ansible-playbook ansible/playbooks/09-deploy-ollama.yml
+#
+# Override model:
+#   ansible-playbook ansible/playbooks/09-deploy-ollama.yml -e ollama_model=qwen2.5:14b-instruct-q5_K_M
+#
+# Pull both primary and fallback models:
+#   ansible-playbook ansible/playbooks/09-deploy-ollama.yml -e ollama_pull_fallback=true
+
+- name: Deploy Ollama on GPU server
+  hosts: gpu_servers
+  become: false
+  vars:
+    ansible_user: "{{ personal_user }}"
+  roles:
+    - role: ../roles/ollama

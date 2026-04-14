@@ -1,0 +1,28 @@
+---
+# Ollama configuration
+ollama_image: "ollama/ollama"
+ollama_image_tag: "latest"
+ollama_container_name: "ollama"
+ollama_port: 11434
+ollama_data_volume: "ollama_data"
+
+# GPU settings
+ollama_nvidia_visible_devices: "all"
+ollama_flash_attention: "1"
+
+# Server settings
+ollama_host: "0.0.0.0:{{ ollama_port }}"
+ollama_keep_alive: "10m"
+ollama_num_parallel: "1"
+
+# Model to pull after deployment
+ollama_model: "qwen2.5:32b-instruct-q4_K_M"
+
+# Fallback model (lighter, for testing or if VRAM is tight)
+ollama_model_fallback: "qwen2.5:14b-instruct-q5_K_M"
+
+# Whether to pull the model during deployment
+ollama_pull_model: true
+
+# Whether to also pull the fallback model
+ollama_pull_fallback: false
