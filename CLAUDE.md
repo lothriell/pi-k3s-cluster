@@ -176,10 +176,16 @@ Pi-hole logs are monitored at two levels:
 - **Real-time alerts (Python script → ntfy):** Pattern-matched alerts with custom display labels. Sub-second latency.
 
 ### Components (deployed on athena)
-- **ntfy:** Self-hosted push notification server (Docker). Subscribe via mobile app.
-- **Promtail:** Tails pihole.log, ships to Loki on K8s (Docker).
-- **pihole-dns-monitor:** Python script + systemd service. Matches DNS queries against alert rules and sends notifications via ntfy.
-- **Loki:** Deployed on K8s in monitoring namespace. Grafana Loki datasource pre-configured.
+- **ntfy:** Self-hosted push notification server (Docker). Auth enabled (deny-all default). Uses `upstream-base-url: https://ntfy.sh` for iOS push delivery. Exposed via Cloudflare tunnel at `ntfy.<cloudflare_domain>`.
+- **Promtail:** Tails pihole.log, ships to Loki on K8s via NodePort 31100 (Docker).
+- **pihole-dns-monitor:** Python script + systemd service. Matches DNS queries against alert rules and sends notifications via ntfy (localhost, no auth needed).
+- **Loki:** Deployed on K8s in monitoring namespace (SingleBinary mode, 10Gi PVC, 3-month retention). NodePort 31100 for external Promtail access. Grafana Loki datasource pre-configured.
+
+### ntfy Access
+- ntfy topic and credentials are in `all.yml` (gitignored)
+- Phone app: subscribe to the topic at `https://ntfy.<cloudflare_domain>` with credentials from `all.yml`
+- Monitor script publishes locally (localhost:8080, anonymous write allowed on the topic)
+- Athena has old Docker (no compose plugin) — ntfy and Promtail run via `docker run`, not compose
 
 ### Alert Rules
 Rules live in `secrets/pihole-alert-rules.conf` (gitignored). Format:
