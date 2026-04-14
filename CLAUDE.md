@@ -57,6 +57,12 @@ Home Site (home subnet)                Remote Site (remote subnet)
 │ rpi-k3s-3 (agent)   │    VPN         │                      │
 │ rpi-k3s-4 (agent)   │                │ wazuh-server (standalone)
 └─────────────────────┘                └──────────────────────┘
+
+Other managed nodes (via Tailscale):
+  gpu-1 (GPU server)       — Ollama LLM serving (Docker, not K8s)
+  athena, artemis,         — SFF PCs (Wazuh agents, Pi-hole on athena)
+    minisforum-c
+  arch-t-01, cachy-t-01    — Desktops (Arch/CachyOS)
 ```
 
 ### Execution Flow
@@ -66,6 +72,13 @@ Home Site (home subnet)                Remote Site (remote subnet)
 **Bootstrap playbooks (00-*)** run as personal user and must be invoked separately.
 **All other playbooks** use the `ansible` service account (configured in ansible.cfg).
 **Playbooks 03-08** run on `localhost` using kubectl/helm against the cluster (except 08-tailscale which runs on nodes).
+**Playbook 09** (Ollama) runs on `gpu_servers` group as personal user (Docker requires it).
+
+**Desktop bootstrap:** Arch/CachyOS desktops use RSA key for initial bootstrap:
+```bash
+ANSIBLE_PRIVATE_KEY_FILE=~/.ssh/id_rsa ansible-playbook ansible/playbooks/00-bootstrap-user.yml -e target_hosts=desktops -K -u <your-user>
+```
+After bootstrap, `ansible` user uses `id_ed25519` like all other nodes.
 
 ### Variable Flow
 
