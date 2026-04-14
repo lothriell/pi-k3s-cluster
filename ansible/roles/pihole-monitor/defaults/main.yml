@@ -1,9 +1,12 @@
 ---
 # Pi-hole DNS monitor configuration
 
-# ntfy server (public ntfy.sh — no Tailscale needed on phone)
-ntfy_url: "https://ntfy.sh"
+# ntfy server (self-hosted on athena, exposed via Cloudflare tunnel)
+ntfy_port: 8080
 ntfy_topic: "CHANGEME-use-random-topic"
+ntfy_base_url: "https://ntfy.example.com"
+ntfy_admin_user: "admin"
+ntfy_admin_password: "CHANGEME"
 
 # Pihole log path (host-mounted from Docker container)
 pihole_log_dir: /var/log/pihole
@@ -18,5 +21,3 @@ monitor_alert_rules_file: "{{ playbook_dir }}/../../secrets/pihole-alert-rules.c
 
 # Promtail config (ships ALL logs to Loki, not just alerts)
 promtail_port: 9080
-# Loki endpoint for Promtail (NodePort 31100 on any K3s node)
-loki_url: "http://{{ k3s_server_ip | default('10.0.0.11') }}:31100"

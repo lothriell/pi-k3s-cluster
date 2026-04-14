@@ -98,57 +98,38 @@
     daemon_reload: true
   become: true
 
-# -- Deploy ntfy + Promtail via Docker Compose -------------------------------
+# -- Deploy ntfy (self-hosted with auth + Cloudflare tunnel) -----------------
 
-- name: Deploy Promtail config
+- name: Create ntfy config directory
+  ansible.builtin.file:
+    path: /etc/ntfy
+    state: directory
+    mode: "0755"
+  become: true
+
+- name: Deploy ntfy server config
   ansible.builtin.template:
-    src: promtail-config.yml.j2
-    dest: "{{ monitor_config_dir }}/promtail-config.yml"
+    src: ntfy-server.yml.j2
+    dest: /etc/ntfy/server.yml
     mode: "0644"
   become: true
 
-- name: Deploy docker-compose for ntfy + Promtail
-  ansible.builtin.template:
-    src: docker-compose-monitoring.yml.j2
-    dest: "{{ monitor_config_dir }}/docker-compose.yml"
-    mode: "0644"
-  become: true
-
-- name: Check for docker compose plugin or standalone
-  ansible.builtin.shell: sudo docker compose version 2>/dev/null && echo "plugin" || echo "standalone"
-  register: compose_check
+- name: Stop and remove existing ntfy container
+  ansible.builtin.shell: sudo docker stop ntfy 2>/dev/null; sudo docker rm ntfy 2>/dev/null; true
   changed_when: false
 
-- name: Start ntfy + Promtail containers (compose plugin)
-  ansible.builtin.command: sudo docker compose -f {{ monitor_config_dir }}/docker-compose.yml up -d
-  changed_when: false
-  when: "'plugin' in compose_check.stdout"
-
-- name: Start ntfy + Promtail containers (standalone docker-compose)
-  ansible.builtin.command: sudo docker-compose -f {{ monitor_config_dir }}/docker-compose.yml up -d
-  changed_when: false
-  when: "'standalone' in compose_check.stdout"
-
-- name: Start ntfy + Promtail via docker run (fallback if no compose)
+- name: Start ntfy container with auth
   ansible.builtin.shell: |
-    sudo docker rm -f ntfy promtail 2>/dev/null || true
     sudo docker run -d --name ntfy --restart unless-stopped \
       -p {{ ntfy_port }}:80 \
       -v ntfy-cache:/var/cache/ntfy \
-      -v ntfy-etc:/etc/ntfy \
+      -v /etc/ntfy:/etc/ntfy:ro \
+      -v ntfy-auth:/var/lib/ntfy \
       -e TZ=UTC \
-      binwiederhier/ntfy:latest serve
-    sudo docker run -d --name promtail --restart unless-stopped \
-      -v {{ pihole_log_dir }}:/var/log/pihole:ro \
-      -v {{ monitor_config_dir }}/promtail-config.yml:/etc/promtail/config.yml:ro \
-      grafana/promtail:latest -config.file=/etc/promtail/config.yml
+      binwiederhier/ntfy:latest serve --config /etc/ntfy/server.yml
   changed_when: false
-  when: "'standalone' in compose_check.stdout and 'plugin' not in compose_check.stdout"
-  failed_when: false
 
-# -- Verify ------------------------------------------------------------------
-
-- name: Verify ntfy is running
+- name: Wait for ntfy to start
   ansible.builtin.uri:
     url: "http://localhost:{{ ntfy_port }}/v1/health"
     method: GET
@@ -158,17 +139,70 @@
   delay: 3
   until: ntfy_health.status == 200
 
+- name: Create ntfy admin user (idempotent)
+  ansible.builtin.shell: |
+    echo -e "{{ ntfy_admin_password }}\n{{ ntfy_admin_password }}" | \
+      sudo docker exec -i ntfy ntfy user add --role=admin {{ ntfy_admin_user }} 2>&1 || \
+    echo "user already exists (OK)"
+  changed_when: false
+
+- name: Allow anonymous write on alert topic (for local monitor script)
+  ansible.builtin.shell: |
+    sudo docker exec ntfy ntfy access everyone {{ ntfy_topic }} write 2>&1 || true
+  changed_when: false
+
+# -- Deploy Promtail ---------------------------------------------------------
+
+- name: Deploy Promtail config
+  ansible.builtin.template:
+    src: promtail-config.yml.j2
+    dest: "{{ monitor_config_dir }}/promtail-config.yml"
+    mode: "0644"
+  become: true
+
+- name: Stop and remove existing Promtail container
+  ansible.builtin.shell: sudo docker stop promtail 2>/dev/null; sudo docker rm promtail 2>/dev/null; true
+  changed_when: false
+
+- name: Start Promtail container
+  ansible.builtin.shell: |
+    sudo docker run -d --name promtail --restart unless-stopped \
+      -v {{ pihole_log_dir }}:/var/log/pihole:ro \
+      -v {{ monitor_config_dir }}/promtail-config.yml:/etc/promtail/config.yml:ro \
+      grafana/promtail:latest -config.file=/etc/promtail/config.yml
+  changed_when: false
+
+# -- Verify ------------------------------------------------------------------
+
+- name: Verify ntfy is healthy
+  ansible.builtin.uri:
+    url: "http://localhost:{{ ntfy_port }}/v1/health"
+    method: GET
+    status_code: 200
+
 - name: Verify monitor service is running
   ansible.builtin.systemd:
     name: pihole-dns-monitor
   register: monitor_status
   failed_when: monitor_status.status.ActiveState != "active"
 
+- name: Send test notification
+  ansible.builtin.uri:
+    url: "http://localhost:{{ ntfy_port }}/{{ ntfy_topic }}"
+    method: POST
+    body: "Pi-hole DNS monitor deployed successfully"
+    headers:
+      Title: "Monitor Deployed"
+      Priority: "default"
+      Tags: "white_check_mark"
+    status_code: 200
+
 - name: Display status
   ansible.builtin.debug:
     msg: |
       Pi-hole DNS Monitor deployed:
-        - ntfy: http://localhost:{{ ntfy_port }}/{{ ntfy_topic }}
+        - ntfy: {{ ntfy_base_url }}/{{ ntfy_topic }} (auth: {{ ntfy_admin_user }})
         - Monitor: systemctl status pihole-dns-monitor
         - Rules: {{ monitor_config_dir }}/alert-rules.conf
+        - Logs: Grafana → Explore → Loki → {job="pihole"}
         - Reload: sudo systemctl reload pihole-dns-monitor

@@ -56,7 +56,10 @@ tailscale_arch_t_01: 100.x.x.x
 tailscale_cachy_t_01: 100.x.x.x
 
 # Pi-hole DNS monitor (alert rules in secrets/pihole-alert-rules.conf)
-loki_url: "http://loki.monitoring.svc.cluster.local:3100"
+ntfy_topic: "dns-alerts"
+ntfy_base_url: "https://ntfy.yourdomain.com"
+ntfy_admin_user: "admin"
+ntfy_admin_password: "changeme-use-a-real-password"
 
 # Service credentials (survive nuke-and-rebuild)
 gitea_admin_user: mygiteaadmin

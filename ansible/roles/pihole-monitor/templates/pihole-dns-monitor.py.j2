@@ -16,7 +16,7 @@ import urllib.request
 
 
 RULES_FILE = "{{ monitor_config_dir }}/alert-rules.conf"
-NTFY_URL = "{{ ntfy_url }}/{{ ntfy_topic }}"
+NTFY_URL = "http://localhost:{{ ntfy_port }}/{{ ntfy_topic }}"
 LOG_FILE = "{{ pihole_log_file }}"
 
 
