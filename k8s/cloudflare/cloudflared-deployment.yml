@@ -72,10 +72,26 @@ spec:
       nodeSelector:
         kubernetes.io/arch: arm64
 
+      # Hardened pod securityContext
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+
       containers:
         - name: cloudflared
           # The official Cloudflare image supports linux/arm64
           image: cloudflare/cloudflared:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
           args:
             - tunnel
             # Use the config file mounted from the ConfigMap

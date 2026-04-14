@@ -43,6 +43,19 @@ spec:
       labels:
         app: open-webui
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      # NOTE on hardening: Open WebUI's client-side SvelteKit bundle throws
+      # a hydration error after login when the container runs with
+      # readOnlyRootFilesystem: true, even with initContainer-copied static
+      # dir and /tmp emptyDir. The backend logs show all 200s, but the
+      # browser navigates to /error. Root cause not identified as of
+      # 2026-04-14 — likely a runtime write we couldn't pinpoint. To avoid
+      # keeping the UI broken, readOnlyRootFilesystem is disabled for this
+      # container only. The meaningful hardening below (drop ALL caps,
+      # seccomp, allowPrivilegeEscalation: false) remains in place.
+      # Accepts 1 × KSV-0014 finding on open-webui.
       containers:
         - name: open-webui
           image: ghcr.io/open-webui/open-webui:main
@@ -66,6 +79,11 @@ spec:
             #   kubectl set env deployment/open-webui -n open-webui ENABLE_SIGNUP=false
             - name: ENABLE_SIGNUP
               value: "true"
+            # With readOnlyRootFilesystem: true, the default `.webui_secret_key`
+            # relative path is not writable. Point it at the PVC instead so the
+            # key is generated once and persisted across pod restarts.
+            - name: WEBUI_SECRET_KEY_FILE
+              value: "/app/backend/data/.webui_secret_key"
           resources:
             requests:
               cpu: 100m
@@ -73,6 +91,16 @@ spec:
             limits:
               cpu: "1"
               memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            # readOnlyRootFilesystem disabled — see note at the top of the
+            # pod template. The open-webui client bundle breaks after login
+            # when rootfs is read-only even with copy-static initContainer.
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
           volumeMounts:
             - name: data
               mountPath: /app/backend/data
@@ -94,24 +122,12 @@ spec:
     - port: 8080
       targetPort: 8080
 
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: open-webui
-  namespace: open-webui
-  annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: web
-spec:
-  rules:
-    # TODO CHANGEME -- replace with your actual domain
-    - host: chat.example.local
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: open-webui
-                port:
-                  number: 8080
+
+# NOTE: the Ingress for this service lives in a sibling file
+# `ingress.local.yml` (gitignored) so your private hostname doesn't leak to
+# the committed repo. See `ingress.local.yml.example` for the template and
+# copy it to `ingress.local.yml` with your actual domain:
+#
+#     cp k8s/open-webui/ingress.local.yml.example k8s/open-webui/ingress.local.yml
+#     # edit the host field, then
+#     kubectl apply -f k8s/open-webui/ingress.local.yml

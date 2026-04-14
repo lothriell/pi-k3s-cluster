@@ -27,6 +27,14 @@ global:
   nodeSelector:
     kubernetes.io/arch: arm64
 
+  # Pod-level security context propagated to all ArgoCD components
+  # (server, repo-server, application-controller, applicationset, etc.).
+  # The chart already sets strong container-level security; this just adds
+  # the pod-level seccomp profile to clear Trivy KSV-0118.
+  securityContext:
+    seccompProfile:
+      type: RuntimeDefault
+
 # ---------------------------------------------------------------------------
 # ArgoCD Server -- the API server and web UI.
 # This is what you interact with in the browser and via the argocd CLI.

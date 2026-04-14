@@ -19,6 +19,31 @@ image:
   rootless: true
 
 # ---------------------------------------------------------------------------
+# Hardened pod + container securityContext.
+# The rootless Gitea image already runs as the `git` user (UID 1000). The
+# chart applies containerSecurityContext to both init containers and the
+# main container. Gitea writes everything to /data (the PVC), so
+# readOnlyRootFilesystem is safe. fsGroup 1000 lets the PVC be writable by
+# the git group.
+# ---------------------------------------------------------------------------
+podSecurityContext:
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+# ---------------------------------------------------------------------------
 # Resources -- sized for a Pi node with 16GB RAM.
 # ---------------------------------------------------------------------------
 resources:

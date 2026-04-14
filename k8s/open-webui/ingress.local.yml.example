@@ -1,0 +1,31 @@
+---
+# Gitignored local Ingress for Open WebUI.
+# Copy this file to ingress.local.yml, replace the host with your actual
+# domain, then apply:
+#
+#     cp k8s/open-webui/ingress.local.yml.example k8s/open-webui/ingress.local.yml
+#     kubectl apply -f k8s/open-webui/ingress.local.yml
+#
+# This file exists alongside open-webui.yml so that re-applying the committed
+# manifest (`kubectl apply -f k8s/open-webui/open-webui.yml`) does NOT touch
+# the Ingress and therefore cannot revert your hostname.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: open-webui
+  namespace: open-webui
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  rules:
+    # TODO CHANGEME -- replace with your actual domain
+    - host: chat.example.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: open-webui
+                port:
+                  number: 8080
