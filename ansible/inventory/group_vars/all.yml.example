@@ -51,6 +51,10 @@ local_domain: yourdomain.local
 # Gitea registry hostname (resolved via /etc/hosts on nodes)
 gitea_registry_host: "gitea.{{ local_domain }}"
 
+# Desktop/laptop Tailscale IPs
+tailscale_arch_t_01: 100.x.x.x
+tailscale_cachy_t_01: 100.x.x.x
+
 # Service credentials (survive nuke-and-rebuild)
 gitea_admin_user: mygiteaadmin
 gitea_admin_password: changeme-use-a-real-password
