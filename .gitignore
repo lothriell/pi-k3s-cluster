@@ -41,6 +41,7 @@ k8s/argocd/eve-tracker-dev-image-updater.yml
 docs/13-deploy-eve-tracker-dev.md
 docs/improvement-plan.md
 docs/ops-commands.md
+docs/18-architecture.md
 
 # Local Ingress overrides (so private hostnames don't leak to public repo)
 k8s/*/ingress.local.yml

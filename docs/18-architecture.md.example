@@ -1,0 +1,31 @@
+# Cluster Architecture — template
+
+**The real `docs/18-architecture.md` is gitignored** because it contains the actual LAN IPs, Tailscale tailnet name, local domain, and real Gitea repo paths for this cluster. This template describes the shape of the document so a future rebuild or a fresh clone knows what to reconstruct.
+
+To regenerate the real version:
+
+```bash
+cp docs/18-architecture.md.example docs/18-architecture.md
+# edit with your values, commit to your gitignored local tree
+```
+
+## Required sections (mirrors the 14 sections in the real doc)
+
+1. **Topology overview** — ASCII diagram of home site + remote site, bridging VPN, jump-host overlay
+2. **Nodes** — table of cluster members (Pi + x86), non-cluster managed hosts (jump host, SFF, Wazuh, GPU)
+3. **Network** — physical VLANs + subnets, Tailscale overlay + MagicDNS, Kubernetes pod/service CIDRs, LAN access paths
+4. **K3s HA control plane** — serial:1 install order, kube-vip DaemonSet, embedded etcd + etcd-s3 snapshots, token handling
+5. **Storage** — Longhorn StorageClasses (default + `longhorn-storage` with nodeSelector), node tagging, R2 backup target + RecurringJobs, critical PVC group, restore flow
+6. **GitOps + image pipeline** — Gitea (Recreate strategy, PVC-based admin detection), ArgoCD, Image Updater v1.1 CRD-based + git write-back, eve-tracker PVC drift workaround
+7. **Monitoring** — Prometheus / Grafana / Alertmanager / alertmanager-ntfy / Loki stack, scrape targets, Pi-hole DNS logs into Loki with low-cardinality labels
+8. **Security** — NetworkPolicies, pod securityContext, Tailscale SSH, sshd hardening, Trivy, Wazuh
+9. **Make targets** — make all chain + per-stage responsibilities, manual post-steps (open-webui, pihole-monitor, cloudflare)
+10. **Vault and secrets** — what's in ansible vault, what's in main.yml, where `~/.ansible/vault_pass` lives
+11. **Version tracking** — Renovate config at repo root, what's tracked, automerge policy
+12. **Rebuild invariants** — things that must hold for `make nuke && make all` to succeed
+13. **Where to look when things break** — symptom → doc mapping
+14. **What's not in this document** — deliberately scoped-out topics
+
+## Why gitignored
+
+Per the `feedback_anonymize` pattern already used by `docs/improvement-plan.md`, `docs/ops-commands.md`, and `docs/13-deploy-eve-tracker-dev.md`: any doc that names real IPs, real domains, real repo owners, or real tailnet names stays private. Public templates (this file) describe the shape; private docs (the real `.md`) carry the values.
