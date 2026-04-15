@@ -29,6 +29,9 @@
   become: false
   gather_facts: false
 
+  vars:
+    loki_values: "{{ playbook_dir }}/../../k8s/monitoring/values-loki.yml"
+
   tasks:
     - name: Add Grafana Helm repository
       ansible.builtin.command: helm repo add grafana https://grafana.github.io/helm-charts
@@ -40,33 +43,19 @@
       ansible.builtin.command: helm repo update
       changed_when: false
 
+    # Values file at k8s/monitoring/values-loki.yml carries the required
+    # schemaConfig (newer grafana/loki charts refuse installs without it)
+    # plus the singleBinary + retention + resources config that used to be
+    # an unwieldy --set list here. Keep all Loki tunables in one place.
     - name: Deploy Loki via Helm
       ansible.builtin.command: >
         helm upgrade --install loki
         grafana/loki
         --namespace monitoring
-        --set loki.auth_enabled=false
-        --set loki.commonConfig.replication_factor=1
-        --set loki.storage.type=filesystem
-        --set loki.limits_config.retention_period=2160h
-        --set loki.compactor.retention_enabled=true
-        --set singleBinary.replicas=1
-        --set singleBinary.resources.requests.cpu=100m
-        --set singleBinary.resources.requests.memory=256Mi
-        --set singleBinary.resources.limits.cpu=500m
-        --set singleBinary.resources.limits.memory=512Mi
-        --set singleBinary.persistence.size=10Gi
-        --set monitoring.selfMonitoring.enabled=false
-        --set monitoring.lokiCanary.enabled=false
-        --set test.enabled=false
-        --set gateway.enabled=false
-        --set backend.replicas=0
-        --set read.replicas=0
-        --set write.replicas=0
-        --set chunksCache.enabled=false
-        --set resultsCache.enabled=false
+        --values {{ loki_values }}
+        --take-ownership
         --wait
-        --timeout 5m
+        --timeout 10m
       register: loki_deploy
       changed_when: "'STATUS: deployed' in loki_deploy.stdout"
 
@@ -76,6 +65,37 @@
         -l app.kubernetes.io/name=loki
         --namespace monitoring
         --timeout=300s
+      changed_when: false
+
+    # Promtail on athena (outside the cluster) POSTs logs to a fixed
+    # NodePort — see ansible/roles/pihole-monitor/templates/promtail-config.yml.j2
+    # which uses `{{ k3s_server_ip }}:31100`. The Helm-managed `loki` Service
+    # is ClusterIP, so we add a sidecar NodePort Service that points at the
+    # same singleBinary pod. Separate object (not a patch of the Helm one)
+    # so helm upgrade doesn't clobber it.
+    - name: Create Loki NodePort 31100 for external Promtail shippers
+      ansible.builtin.shell: |
+        cat <<'EOF' | kubectl apply -f -
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: loki-nodeport
+          namespace: monitoring
+          labels:
+            app.kubernetes.io/name: loki
+            app.kubernetes.io/managed-by: Ansible
+        spec:
+          type: NodePort
+          selector:
+            app.kubernetes.io/name: loki
+            app.kubernetes.io/component: single-binary
+          ports:
+            - name: http
+              port: 3100
+              targetPort: http-metrics
+              nodePort: 31100
+              protocol: TCP
+        EOF
       changed_when: false
 
     - name: Display Loki status

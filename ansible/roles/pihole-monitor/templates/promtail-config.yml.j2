@@ -20,8 +20,13 @@ scrape_configs:
     pipeline_stages:
       - regex:
           expression: '(?P<timestamp>\w+ \d+ [\d:]+) dnsmasq\[\d+\]: (?P<action>query|forwarded|reply|cached|blocked)\[?(?P<qtype>\w+)?\]?\s+(?P<domain>\S+)\s+(?:from|to|is)\s+(?P<target>\S+)'
+      # Only LOW-cardinality fields become Loki labels (job, host, action,
+      # qtype). `domain` and `target` are per-event and would explode Loki
+      # stream cardinality — pi-hole sees thousands of unique domains in a
+      # day, each becoming a new stream and tripping the default 10k
+      # max_streams_per_user limit on Loki. They stay available in the raw
+      # log line and can be filtered via LogQL line expressions:
+      #   {job="pihole"} |= "redd.it"
       - labels:
           action:
-          domain:
-          target:
           qtype:

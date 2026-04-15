@@ -18,6 +18,15 @@ loki:
     type: filesystem
   limits_config:
     retention_period: 2160h
+    # Loki has TWO stream-count limits. max_streams_per_user defaults to
+    # 10000 (per-tenant); max_global_streams_per_user defaults to 5000
+    # (per user-id across all ingesters) and is the ACTIVE limiter for
+    # single-binary Loki with tenant=fake. Pi-hole's per-domain label
+    # explosion blows through both, especially during position-file replay
+    # after a Promtail config change (old high-cardinality streams stay
+    # active in the ingester's chunk cache for ~30m). Bump both to 50k.
+    max_streams_per_user: 50000
+    max_global_streams_per_user: 50000
   compactor:
     retention_enabled: true
     delete_request_store: filesystem
@@ -43,9 +52,11 @@ singleBinary:
       memory: 512Mi
   persistence:
     size: 10Gi
-    # See values-prometheus.yml.j2 — Pi eMMC can't host a 10Gi replica
-    # comfortably alongside everything else. Route to x86 via node tag.
-    storageClass: longhorn-storage
+    # Default `longhorn` StorageClass (no nodeSelector) = 2 replicas
+    # across any healthy nodes. Pi nodes have ~22 GB free each after
+    # alertmanager/open-webui/eve-tracker replicas, so 10Gi fits with
+    # ~12 GB headroom per node. x86 is too tight (~3 GB free after the
+    # 15Gi Prometheus replicas) — don't send Loki there.
 
 # Disable distributed components (using single-binary)
 backend:
