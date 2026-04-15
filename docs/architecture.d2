@@ -1,0 +1,558 @@
+# =============================================================================
+# Cluster Architecture Diagrams — D2 source
+# =============================================================================
+# Companion to docs/18-architecture.md. Renders multiple sub-diagrams covering
+# physical topology, K3s HA control plane, storage, GitOps, and monitoring.
+#
+# How to render:
+#   Option A — Online playground (no install):
+#     Paste the full contents of this file at https://play.d2lang.com
+#
+#   Option B — Local CLI:
+#     brew install d2            # macOS
+#     d2 docs/architecture.d2 docs/architecture.svg
+#     open docs/architecture.svg
+#
+#   Option C — Watch mode (auto-rebuild on save):
+#     d2 --watch docs/architecture.d2
+#
+# All values in this file use PLACEHOLDERS (`example.local`, `10.0.0.x`) so
+# it's safe to commit. For the private version with real IPs + local domain,
+# copy to `docs/architecture.local.d2` (which is gitignored via the
+# `docs/*.local.*` pattern you can add to .gitignore) and swap the values.
+# =============================================================================
+
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 200  # Terrastruct / pastel
+    pad: 32
+  }
+}
+
+# =============================================================================
+# Diagram 1 — Physical + Tailnet topology
+# =============================================================================
+
+topology: Physical topology and overlay network {
+
+  home_site: Home site {
+    style: {
+      stroke: "#2196F3"
+      fill: "#E3F2FD"
+    }
+
+    cluster_vlan: K3s VLAN\n10.0.0.0/24 {
+      shape: rectangle
+      style.fill: "#BBDEFB"
+
+      rpi1: rpi-k3s-1 {
+        shape: hexagon
+        style.fill: "#4CAF50"
+        tooltip: Pi CM5 16GB • control-plane+etcd • 10.0.0.11
+      }
+      rpi2: rpi-k3s-2 {
+        shape: hexagon
+        style.fill: "#4CAF50"
+        tooltip: Pi CM5 16GB • control-plane+etcd • 10.0.0.12
+      }
+      rpi3: rpi-k3s-3 {
+        shape: hexagon
+        style.fill: "#4CAF50"
+        tooltip: Pi CM5 16GB • control-plane+etcd • 10.0.0.13
+      }
+      rpi4: rpi-k3s-4 {
+        shape: hexagon
+        style.fill: "#81C784"
+        tooltip: Pi CM5 16GB • agent • 10.0.0.14
+      }
+
+      vip: kube-vip VIP\n10.0.0.10 {
+        shape: diamond
+        style: {
+          fill: "#FFD54F"
+          bold: true
+        }
+      }
+
+      metallb: MetalLB pool\n10.0.0.100-110 {
+        shape: queue
+        style.fill: "#FFE082"
+      }
+    }
+
+    home_services_vlan: Home services VLAN\n10.0.1.0/24 {
+      shape: rectangle
+      style.fill: "#C8E6C9"
+
+      athena: athena {
+        shape: cylinder
+        style.fill: "#66BB6A"
+        tooltip: Pi-hole • ntfy • Promtail • Loki shipper
+      }
+      gpu1: gpu-1 {
+        shape: cylinder
+        style.fill: "#66BB6A"
+        tooltip: RTX 3090 • Ollama Docker • outside K8s
+      }
+      sff: SFF PCs {
+        shape: cylinder
+        style.fill: "#A5D6A7"
+        tooltip: artemis • minisforum-c • Wazuh agents
+      }
+    }
+  }
+
+  remote_site: Remote site {
+    style: {
+      stroke: "#9C27B0"
+      fill: "#F3E5F5"
+    }
+
+    proxmox_vlan: Proxmox VM VLAN\n10.1.0.0/24 {
+      shape: rectangle
+      style.fill: "#E1BEE7"
+
+      x86_1: k3s-x86-1 {
+        shape: hexagon
+        style.fill: "#42A5F5"
+        tooltip: Proxmox VM • agent • 80GB disk • 10.1.0.11
+      }
+      x86_2: k3s-x86-2 {
+        shape: hexagon
+        style.fill: "#42A5F5"
+        tooltip: Proxmox VM • agent • 80GB disk • 10.1.0.12
+      }
+    }
+
+    servers_vlan: Servers VLAN\n10.1.1.0/24 {
+      shape: rectangle
+      style.fill: "#F8BBD9"
+
+      wazuh: wazuh-server {
+        shape: cylinder
+        style.fill: "#EC407A"
+        tooltip: Standalone VM • Wazuh all-in-one • agents everywhere report here
+      }
+    }
+  }
+
+  macbook: MacBook\n(tailnet peer) {
+    shape: person
+    style.fill: "#FFCC80"
+  }
+
+  macmini: macmini\njump host {
+    shape: person
+    style.fill: "#FFB74D"
+    tooltip: Only tailnet node with LAN reach to 10.1.1.0/24 (Servers VLAN)
+  }
+
+  home_site <-> remote_site: Site Magic VPN {
+    style: {
+      stroke-width: 3
+      stroke: "#9E9E9E"
+      stroke-dash: 5
+    }
+  }
+
+  macbook -> home_site.cluster_vlan.vip: kubectl (via tailnet) {
+    style.stroke: "#FF5722"
+  }
+  macbook -> home_site.cluster_vlan.rpi1: ssh ansible@rpi-k3s-N\n(Tailscale SSH) {
+    style.stroke: "#FF5722"
+  }
+  macbook -> macmini: ProxyJump\nfor cross-VLAN targets {
+    style.stroke: "#FFA726"
+  }
+  macmini -> remote_site.servers_vlan.wazuh: LAN reach
+}
+
+# =============================================================================
+# Diagram 2 — K3s HA control plane
+# =============================================================================
+
+k3s_ha: K3s HA control plane + join flow {
+
+  servers: k3s_server inventory group {
+    first: rpi-k3s-1 {
+      shape: hexagon
+      style.fill: "#4CAF50"
+      label: |md
+        **rpi-k3s-1**
+        First server
+        `--cluster-init`
+        publishes node-token
+      |
+    }
+    join2: rpi-k3s-2 {
+      shape: hexagon
+      style.fill: "#66BB6A"
+      label: |md
+        **rpi-k3s-2**
+        Joins via first server
+        direct IP + token
+      |
+    }
+    join3: rpi-k3s-3 {
+      shape: hexagon
+      style.fill: "#66BB6A"
+      label: |md
+        **rpi-k3s-3**
+        Joins via first server
+        direct IP + token
+      |
+    }
+
+    first -> join2: serial:1 order:inventory\n(token via hostvars)
+    join2 -> join3: serial:1
+  }
+
+  agents: Agents {
+    rpi4: rpi-k3s-4 {shape: hexagon; style.fill: "#FFF176"}
+    x861: k3s-x86-1 {shape: hexagon; style.fill: "#FFEE58"}
+    x862: k3s-x86-2 {shape: hexagon; style.fill: "#FFEE58"}
+  }
+
+  kube_vip: kube-vip DaemonSet {
+    shape: image
+    icon: https://icons.terrastruct.com/azure%2FNetworking%20Service%20Color%2FLoad%20Balancers.svg
+    style: {
+      fill: "#FFC107"
+      bold: true
+    }
+    label: |md
+      **kube-vip DaemonSet**
+      ARP mode, leader election
+      VIP 10.0.0.10 on :6443
+    |
+  }
+
+  etcd_snapshots: R2 etcd snapshots {
+    shape: cloud
+    style.fill: "#90CAF9"
+    label: |md
+      **Cloudflare R2**
+      etcd-s3 every 6h
+      retain 12
+      bucket/k3s-etcd-snapshots/
+    |
+  }
+
+  kubectl: kubectl / ArgoCD / agents {
+    shape: person
+    style.fill: "#FFAB91"
+  }
+
+  servers.first -> kube_vip: Runs on control-plane nodes
+  servers.join2 -> kube_vip
+  servers.join3 -> kube_vip
+  kube_vip -> kubectl: VIP responds after\nfirst-server boot {style.stroke: "#FF5722"}
+  agents.rpi4 -> kube_vip: K3S_URL=VIP
+  agents.x861 -> kube_vip: K3S_URL=VIP
+  agents.x862 -> kube_vip: K3S_URL=VIP
+
+  servers.first -> etcd_snapshots: config.yaml\netcd-s3 every 6h {style.stroke: "#2196F3"}
+  servers.join2 -> etcd_snapshots: (same config on every server)
+  servers.join3 -> etcd_snapshots
+}
+
+# =============================================================================
+# Diagram 3 — Storage: Longhorn + R2 backup flow
+# =============================================================================
+
+storage: Longhorn + R2 backup / restore flow {
+
+  longhorn_sc: StorageClasses {
+    default: longhorn (default) {
+      shape: class
+      label: |md
+        **longhorn** (default)
+        numberOfReplicas: 2
+        nodeSelector: (none)
+        used by: gitea, grafana,
+        eve-tracker, open-webui,
+        alertmanager, loki
+      |
+    }
+    storage: longhorn-storage (x86 only) {
+      shape: class
+      label: |md
+        **longhorn-storage**
+        numberOfReplicas: 2
+        nodeSelector: "storage"
+        used by: prometheus 30Gi
+      |
+    }
+  }
+
+  pi_nodes: Pi nodes {
+    style.fill: "#C8E6C9"
+
+    alertmgr: alertmanager 1Gi {
+      shape: cylinder
+      style.fill: "#B3E5FC"
+    }
+    loki_vol: loki 10Gi {
+      shape: cylinder
+      style.fill: "#B3E5FC"
+    }
+    gitea_r: gitea replica A 10Gi {
+      shape: cylinder
+      style.fill: "#B3E5FC"
+    }
+    others: eve-tracker + open-webui replicas {
+      shape: cylinder
+      style.fill: "#B3E5FC"
+    }
+  }
+
+  x86_nodes: x86 nodes (storage tag) {
+    style.fill: "#E1BEE7"
+
+    prometheus: prometheus 30Gi {
+      shape: cylinder
+      style.fill: "#4FC3F7"
+    }
+    grafana_vol: grafana 5Gi (restored) {
+      shape: cylinder
+      style: {
+        fill: "#AED581"
+        stroke-dash: 3
+      }
+    }
+    gitea_r2: gitea replica B 10Gi {
+      shape: cylinder
+      style.fill: "#B3E5FC"
+    }
+  }
+
+  r2: Cloudflare R2 k8sbkp bucket {
+    shape: cloud
+    style.fill: "#90CAF9"
+    label: |md
+      **Cloudflare R2**
+      `k8sbkp/`
+      - `longhorn/` (critical backups)
+      - `k3s-etcd-snapshots/`
+    |
+  }
+
+  cronjobs: Longhorn RecurringJobs {
+    shape: queue
+    style.fill: "#FFE082"
+    label: |md
+      **critical-snapshot** — 02:00 daily
+      **critical-backup**  — 03:00 daily
+      Group: `critical`
+    |
+  }
+
+  restore: make restore-volumes {
+    shape: step
+    style.fill: "#FFAB91"
+    label: |md
+      **12-restore-volumes.yml**
+      1. Wait for BackupVolume sync
+      2. Fail-fast if any target missing
+      3. Create Volume CR with fromBackup
+      4. Wait for state=detached
+      5. Create static PV + PVC
+      6. Strip last-applied annotation
+    |
+  }
+
+  longhorn_sc.default -> pi_nodes: schedules replicas
+  longhorn_sc.default -> x86_nodes: schedules replicas
+  longhorn_sc.storage -> x86_nodes: nodeSelector=storage {
+    style.stroke: "#E91E63"
+    style.bold: true
+  }
+
+  pi_nodes -> cronjobs: scheduled backup
+  x86_nodes -> cronjobs: scheduled backup
+  cronjobs -> r2: s3://k8sbkp/longhorn/
+
+  r2 -> restore: fromBackup URL {style.stroke: "#4CAF50"}
+  restore -> x86_nodes: creates restored PVs
+  restore -> pi_nodes: creates restored PVs
+}
+
+# =============================================================================
+# Diagram 4 — GitOps + Image Updater pipeline
+# =============================================================================
+
+gitops: GitOps + container image pipeline {
+
+  dev: Developer\n(Mac ARM64 podman) {
+    shape: person
+    style.fill: "#FFCC80"
+  }
+
+  gitea: Gitea {
+    shape: image
+    icon: https://about.gitea.com/img/logo.svg
+    style: {
+      fill: "#609926"
+      font-color: white
+    }
+    label: |md
+      **Gitea**
+      git host + OCI registry
+      `gitea.example.local`
+    |
+  }
+
+  argocd: ArgoCD\n(application-controller) {
+    shape: image
+    icon: https://argo-cd.readthedocs.io/en/stable/assets/logo.png
+    style.fill: "#EF7B4D"
+  }
+
+  image_updater: ArgoCD Image Updater v1.1\n(CRD-based) {
+    shape: hexagon
+    style.fill: "#FFB74D"
+    label: |md
+      **Image Updater v1.1**
+      `ImageUpdater` CRDs
+      updateStrategy: digest
+      writeBackMethod: git
+    |
+  }
+
+  cluster_apps: Running apps {
+    shape: package
+    style.fill: "#BBDEFB"
+    label: |md
+      **eve-tracker prod**
+      **eve-tracker-dev**
+      (Kustomize overlays)
+    |
+  }
+
+  cloudflare: Cloudflare Tunnel\n`pi-cluster` {
+    shape: cloud
+    style.fill: "#F48FB1"
+  }
+
+  dev -> gitea: podman build\n+ push (main/dev)
+  gitea -> image_updater: poll registry (2m interval) {style.stroke: "#FF5722"}
+  image_updater -> gitea: commit digest\nto kustomization.yaml {style.stroke: "#4CAF50"}
+  gitea -> argocd: main branch change
+  argocd -> cluster_apps: sync\n(kustomize + digest override)
+  cluster_apps -> cloudflare: ingress via Cloudflared\n`eve.example.com` {style.stroke: "#F06292"}
+  cloudflare -> dev: HTTPS from anywhere\n(authenticated)
+}
+
+# =============================================================================
+# Diagram 5 — Monitoring + alerting
+# =============================================================================
+
+monitoring: Monitoring stack + alert flow {
+
+  scrape_targets: Scrape targets (32) {
+    shape: class
+    label: |md
+      node-exporter × 6
+      kube-state-metrics
+      alertmanager
+      traefik
+      longhorn-manager
+      trivy-operator
+      grafana
+      ...
+    |
+  }
+
+  prom: Prometheus {
+    shape: image
+    icon: https://prometheus.io/assets/prometheus_logo_grey.svg
+    style.fill: "#E6522C"
+    label: |md
+      **Prometheus**
+      30d retention
+      30Gi on longhorn-storage
+    |
+  }
+
+  grafana_img: Grafana {
+    shape: image
+    icon: https://grafana.com/static/img/menu/grafana2.svg
+    style.fill: "#F46800"
+    label: |md
+      **Grafana**
+      Loki + Prometheus
+      pre-configured
+      datasources
+    |
+  }
+
+  alertmanager_img: Alertmanager {
+    shape: image
+    icon: https://prometheus.io/assets/alertmanager_logo_grey.svg
+    style.fill: "#E6522C"
+    label: |md
+      **Alertmanager**
+      in-cluster
+      webhook receiver
+    |
+  }
+
+  bridge: alertmanager-ntfy bridge {
+    shape: hexagon
+    style.fill: "#FFCA28"
+    label: |md
+      **alertmanager-ntfy**
+      format → ntfy
+      checksum/config
+      annotation rolls
+    |
+  }
+
+  loki_img: Loki\n(single-binary) {
+    shape: image
+    icon: https://grafana.com/static/img/menu/loki2.svg
+    style.fill: "#F9C51B"
+    label: |md
+      **Loki**
+      10Gi chunks
+      3-month retention
+      low-card labels only
+    |
+  }
+
+  promtail: Promtail (athena, Docker) {
+    shape: hexagon
+    style.fill: "#FFEB3B"
+  }
+
+  pihole_log: /var/log/pihole/pihole.log {
+    shape: document
+  }
+
+  ntfy: self-hosted ntfy\n(athena, Docker) {
+    shape: cylinder
+    style.fill: "#FF7043"
+    label: |md
+      **ntfy**
+      `ntfy.example.com`
+      via Cloudflare tunnel
+    |
+  }
+
+  phone: Phone (iOS) {
+    shape: person
+    style.fill: "#FFAB91"
+  }
+
+  scrape_targets -> prom: scrape_interval: 30s
+  prom -> alertmanager_img: alerts fire
+  prom -> grafana_img: query (datasource)
+  alertmanager_img -> bridge: webhook POST
+  bridge -> ntfy: templated title + body\n+ priority + tags {style.stroke: "#E91E63"}
+  ntfy -> phone: push notification {style.stroke: "#4CAF50"}
+
+  pihole_log -> promtail: tail -f
+  promtail -> loki_img: POST /loki/api/v1/push\n:31100 NodePort sidecar {style.stroke: "#9C27B0"}
+  loki_img -> grafana_img: query (datasource)
+}
