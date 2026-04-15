@@ -209,7 +209,7 @@
     mode: "0755"
   delegate_to: localhost
   become: false
-  run_once: true
+  when: is_first_server
   tags: [k3s, kubeconfig]
 
 - name: Copy kubeconfig to local ~/.kube/config
@@ -219,7 +219,7 @@
     mode: "0600"
   delegate_to: localhost
   become: false
-  run_once: true
+  when: is_first_server
   tags: [k3s, kubeconfig]
 
 - name: Replace 127.0.0.1 with HA VIP in local kubeconfig
@@ -229,7 +229,7 @@
     replace: "{{ k3s_api_url }}"
   delegate_to: localhost
   become: false
-  run_once: true
+  when: is_first_server
   tags: [k3s, kubeconfig]
 
 - name: Clean up temporary kubeconfig
@@ -238,5 +238,5 @@
     state: absent
   delegate_to: localhost
   become: false
-  run_once: true
+  when: is_first_server
   tags: [k3s, kubeconfig]
