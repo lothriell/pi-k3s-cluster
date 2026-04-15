@@ -12,6 +12,7 @@
 
   vars:
     argocd_values: "{{ playbook_dir }}/../../k8s/argocd/values-argocd.yml"
+    image_updater_values: "{{ playbook_dir }}/../../k8s/argocd/values-image-updater.yml"
 
   tasks:
     # -- Namespace ---------------------------------------------------------------
@@ -102,6 +103,47 @@
         EOF
       changed_when: false
       tags: [argocd]
+
+    # -- ArgoCD Image Updater (CRD-based v1.1+) --------------------------------
+    # Watches the Gitea container registry and patches Application specs
+    # with digest-pinned images. Must be installed AFTER ArgoCD itself but
+    # BEFORE any ImageUpdater CRDs are applied (it brings the CRD). See
+    # k8s/argocd/values-image-updater.yml.example for the vars it reads.
+    #
+    # Skipped if the values file is missing (fresh-clone path without the
+    # gitignored real-values file; user can still `helm upgrade --install`
+    # manually once they've copied the example).
+
+    - name: Check for Image Updater values file (skip gracefully if missing)
+      ansible.builtin.stat:
+        path: "{{ image_updater_values }}"
+      register: iu_values_stat
+      tags: [argocd, image-updater]
+
+    - name: Deploy ArgoCD Image Updater via Helm
+      ansible.builtin.command: >
+        helm upgrade --install argocd-image-updater
+        argo/argocd-image-updater
+        --namespace argocd
+        --values {{ image_updater_values }}
+        --wait
+        --timeout 5m
+      register: image_updater_deploy
+      changed_when: "'STATUS: deployed' in image_updater_deploy.stdout"
+      when: iu_values_stat.stat.exists
+      tags: [argocd, image-updater]
+
+    - name: Warn when Image Updater values file is missing
+      ansible.builtin.debug:
+        msg: |
+          Skipped argocd-image-updater install — {{ image_updater_values }}
+          doesn't exist. To enable it:
+            cp k8s/argocd/values-image-updater.yml.example \
+               k8s/argocd/values-image-updater.yml
+            # edit the Gitea registry prefix and GITEA_CREDS token
+            ansible-playbook playbooks/07-deploy-argocd.yml --tags image-updater
+      when: not iu_values_stat.stat.exists
+      tags: [argocd, image-updater]
 
     # -- Summary -----------------------------------------------------------------
 
