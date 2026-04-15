@@ -1,23 +1,21 @@
+---
+# ArgoCD Application for eve-tracker DEV overlay.
+# See eve-tracker-app.yml header comment — same CRD-based Image Updater
+# pattern, same `gitea-registry` pull-secret prerequisite.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: eve-tracker-dev
   namespace: argocd
-  annotations:
-    argocd-image-updater.argoproj.io/image-list: >-
-      backend=gitea.yourdomain.com/CHANGEME/eve-tracking-jobs-backend:dev,
-      frontend=gitea.yourdomain.com/CHANGEME/eve-tracking-jobs-frontend:dev
-    argocd-image-updater.argoproj.io/backend.update-strategy: digest
-    argocd-image-updater.argoproj.io/frontend.update-strategy: digest
-    argocd-image-updater.argoproj.io/backend.pull-secret: pullsecret:eve-tracker-dev/gitea-registry
-    argocd-image-updater.argoproj.io/frontend.pull-secret: pullsecret:eve-tracker-dev/gitea-registry
-    argocd-image-updater.argoproj.io/write-back-method: git
 spec:
   project: default
   source:
     repoURL: http://gitea-http.gitea.svc.cluster.local:3000/CHANGEME/eve-tracker-k8s.git
     targetRevision: main
     path: overlays/dev
+    # Required for Image Updater v1.1+ source-type detection — see
+    # eve-tracker-app.yml header for the full explanation.
+    kustomize: {}
   destination:
     server: https://kubernetes.default.svc
     namespace: eve-tracker-dev

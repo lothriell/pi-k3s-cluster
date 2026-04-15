@@ -1,23 +1,40 @@
+---
+# ArgoCD Application for eve-tracker production overlay.
+#
+# Image Updater integration lives in a separate ImageUpdater CRD (see
+# k8s/argocd/eve-tracker-image-updater.yml.example) following the v1.1+
+# pattern. DO NOT add `argocd-image-updater.argoproj.io/*` annotations
+# to this manifest — those are the legacy v1.0 path that's been
+# deprecated. The CRD-based flow requires `kustomize: {}` in the source
+# spec so Image Updater recognises the source type as Kustomize rather
+# than plain Directory (otherwise it silently skips the app with
+# "not of supported source type").
+#
+# The `gitea-registry` image pull secret must exist in the target
+# namespace before ArgoCD syncs the workloads — create it with:
+#   kubectl create secret docker-registry gitea-registry \
+#     --docker-server=gitea.<local-domain> \
+#     --docker-username=<gitea-user> \
+#     --docker-password=<gitea-token-or-password> \
+#     -n eve-tracker
+#
+# TODO CHANGEME: replace the Gitea repo owner (`CHANGEME`) with your
+# actual username, or apply via a templated sidecar that substitutes it.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: eve-tracker
   namespace: argocd
-  annotations:
-    argocd-image-updater.argoproj.io/image-list: >-
-      backend=gitea.yourdomain.com/CHANGEME/eve-tracking-jobs-backend,
-      frontend=gitea.yourdomain.com/CHANGEME/eve-tracking-jobs-frontend
-    argocd-image-updater.argoproj.io/backend.update-strategy: digest
-    argocd-image-updater.argoproj.io/frontend.update-strategy: digest
-    argocd-image-updater.argoproj.io/backend.pull-secret: pullsecret:eve-tracker/gitea-registry
-    argocd-image-updater.argoproj.io/frontend.pull-secret: pullsecret:eve-tracker/gitea-registry
-    argocd-image-updater.argoproj.io/write-back-method: git
 spec:
   project: default
   source:
     repoURL: http://gitea-http.gitea.svc.cluster.local:3000/CHANGEME/eve-tracker-k8s.git
     targetRevision: main
     path: overlays/prod
+    # Presence of `kustomize` (even empty) tells Image Updater v1.1+ the
+    # source is Kustomize. Without this, `spec.source.type` is blank and
+    # Image Updater logs `"not of supported source type"` and skips.
+    kustomize: {}
   destination:
     server: https://kubernetes.default.svc
     namespace: eve-tracker

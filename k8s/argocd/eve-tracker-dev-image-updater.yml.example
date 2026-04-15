@@ -1,0 +1,19 @@
+---
+# ArgoCD Image Updater CRD for eve-tracker DEV overlay.
+# See eve-tracker-image-updater.yml.example for the full header.
+# This one pins the `:dev` tag instead of `:latest`.
+apiVersion: argocd-image-updater.argoproj.io/v1alpha1
+kind: ImageUpdater
+metadata:
+  name: eve-tracker-dev
+  namespace: argocd
+spec:
+  commonUpdateSettings:
+    updateStrategy: digest
+  applicationRefs:
+    - namePattern: "eve-tracker-dev"
+      images:
+        - alias: backend
+          imageName: gitea.example.local/CHANGEME/eve-tracking-jobs-backend:dev
+        - alias: frontend
+          imageName: gitea.example.local/CHANGEME/eve-tracking-jobs-frontend:dev

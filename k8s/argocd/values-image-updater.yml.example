@@ -1,0 +1,48 @@
+---
+# Helm values for argo/argocd-image-updater.
+#
+# Copy to `values-image-updater.yml` (gitignored) with real credentials
+# and install:
+#   cp k8s/argocd/values-image-updater.yml.example \
+#      k8s/argocd/values-image-updater.yml
+#   # edit the prefix + GITEA_CREDS
+#   helm upgrade --install argocd-image-updater argo/argocd-image-updater \
+#     -n argocd -f k8s/argocd/values-image-updater.yml --wait
+
+nodeSelector:
+  kubernetes.io/arch: arm64
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+extraEnv:
+  # Username + Gitea API token, used by Image Updater to query the
+  # Gitea package registry via its HTTP API. Generate a token at
+  # `http://gitea.<local-domain>/-/user/settings/applications` with
+  # `read:package` scope.
+  # TODO CHANGEME
+  - name: GITEA_CREDS
+    value: "USERNAME:GITEA_API_TOKEN"
+
+config:
+  registries:
+    - name: Gitea
+      # TODO CHANGEME — must match the registry prefix used in your
+      # ImageUpdater CRDs (see eve-tracker-image-updater.yml.example)
+      prefix: gitea.example.local
+      # In-cluster access via the Gitea service. Image Updater runs in
+      # the argocd namespace and resolves the service DNS directly —
+      # no ingress / LoadBalancer needed.
+      api_url: http://gitea-http.gitea.svc.cluster.local:3000
+      default: true
+      insecure: true
+      credentials: env:GITEA_CREDS
+
+  argocd:
+    plaintext: true
+    insecure: true

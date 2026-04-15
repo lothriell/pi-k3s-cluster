@@ -1,0 +1,31 @@
+---
+# ArgoCD Image Updater v1.1+ CRD for eve-tracker (production).
+#
+# Copy to `eve-tracker-image-updater.yml` (gitignored) with real host/user
+# values and apply:
+#   cp k8s/argocd/eve-tracker-image-updater.yml.example \
+#      k8s/argocd/eve-tracker-image-updater.yml
+#   # edit the imageName fields
+#   kubectl apply -f k8s/argocd/eve-tracker-image-updater.yml
+#
+# Image Updater will watch the Gitea registry for new digests on the
+# `:latest` tag and patch the referenced ArgoCD Application(s) whose
+# name matches `namePattern`. The Application must have
+# `spec.source.kustomize: {}` set (see eve-tracker-app.yml) or Image
+# Updater will skip it with "not of supported source type".
+apiVersion: argocd-image-updater.argoproj.io/v1alpha1
+kind: ImageUpdater
+metadata:
+  name: eve-tracker
+  namespace: argocd
+spec:
+  commonUpdateSettings:
+    updateStrategy: digest
+  applicationRefs:
+    - namePattern: "eve-tracker"
+      images:
+        # TODO CHANGEME: replace host + owner with your values
+        - alias: backend
+          imageName: gitea.example.local/CHANGEME/eve-tracking-jobs-backend:latest
+        - alias: frontend
+          imageName: gitea.example.local/CHANGEME/eve-tracking-jobs-frontend:latest
