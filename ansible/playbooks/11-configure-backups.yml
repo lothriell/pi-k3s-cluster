@@ -188,6 +188,46 @@
       changed_when: false
       tags: [backups, longhorn]
 
+    # Tag the x86 Proxmox VMs (50Gi disks) with the "storage" Longhorn node
+    # tag so big replicas can be steered there. Pi nodes (32Gi eMMC) stay
+    # untagged → they can still host small volumes via the default
+    # StorageClass, but the longhorn-storage StorageClass below uses
+    # nodeSelector=storage to keep big volumes (Prometheus TSDB 20Gi,
+    # Loki 10Gi) off the Pis where they'd never fit. See the
+    # feedback_longhorn_storage memory.
+    - name: Tag x86 Longhorn nodes with 'storage' for big-volume replicas
+      ansible.builtin.command: >
+        kubectl -n longhorn-system patch node.longhorn.io/{{ item }}
+        --type=merge
+        -p {{ ({"spec": {"tags": ["storage"]}} | to_json) | quote }}
+      loop:
+        - k3s-x86-1
+        - k3s-x86-2
+      changed_when: false
+      tags: [backups, longhorn]
+
+    - name: Create longhorn-storage StorageClass (nodeSelector=storage)
+      ansible.builtin.shell: |
+        cat <<'EOF' | kubectl apply -f -
+        apiVersion: storage.k8s.io/v1
+        kind: StorageClass
+        metadata:
+          name: longhorn-storage
+        provisioner: driver.longhorn.io
+        allowVolumeExpansion: true
+        reclaimPolicy: Delete
+        volumeBindingMode: Immediate
+        parameters:
+          numberOfReplicas: "2"
+          staleReplicaTimeout: "30"
+          fromBackup: ""
+          fsType: "ext4"
+          dataLocality: "disabled"
+          nodeSelector: "storage"
+        EOF
+      changed_when: false
+      tags: [backups, longhorn]
+
     - name: Apply critical-snapshot RecurringJob (daily, retain 7)
       ansible.builtin.shell: |
         cat <<'EOF' | kubectl apply -f -

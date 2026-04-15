@@ -132,9 +132,12 @@ server:
   persistentVolume:
     enabled: true
     size: 20Gi
-    # Uses the default StorageClass (K3s ships with local-path-provisioner).
-    # If you add Longhorn later, set storageClass: "longhorn".
-    storageClass: ""
+    # 20Gi replicas can't fit on 32Gi Pi eMMC. Use the longhorn-storage
+    # StorageClass which has nodeSelector=storage, and tag the x86 Proxmox
+    # VMs (50Gi disks) with the "storage" Longhorn node tag so replicas
+    # only land there. See feedback_longhorn_storage memory for the
+    # original strategy that this codifies.
+    storageClass: "longhorn-storage"
 
   # -- Global scrape settings. 30s is a good balance between freshness and
   #    CPU usage on resource-constrained nodes.

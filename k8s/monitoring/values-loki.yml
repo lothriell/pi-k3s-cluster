@@ -43,6 +43,9 @@ singleBinary:
       memory: 512Mi
   persistence:
     size: 10Gi
+    # See values-prometheus.yml.j2 — Pi eMMC can't host a 10Gi replica
+    # comfortably alongside everything else. Route to x86 via node tag.
+    storageClass: longhorn-storage
 
 # Disable distributed components (using single-binary)
 backend:
