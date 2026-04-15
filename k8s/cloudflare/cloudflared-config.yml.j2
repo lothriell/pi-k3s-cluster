@@ -1,0 +1,27 @@
+# =============================================================================
+# Cloudflared Tunnel Configuration — rendered by 06-deploy-cloudflare.yml
+# =============================================================================
+# DO NOT apply this file directly with `kubectl apply -f`. It is a Jinja2
+# template consumed by the Ansible playbook, which fills in the tunnel ID
+# and ingress rules from ansible/inventory/group_vars/all/main.yml.
+#
+# Source vars (main.yml, gitignored):
+#   cloudflare_tunnel_id       -- UUID from `cloudflared tunnel create`
+#   cloudflare_ingress_rules   -- list of {hostname, service} mappings
+# =============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflared-config
+  namespace: cloudflare
+data:
+  config.yml: |
+    tunnel: {{ cloudflare_tunnel_id }}
+    credentials-file: /etc/cloudflared/credentials.json
+    ingress:
+{% for rule in cloudflare_ingress_rules %}
+      - hostname: {{ rule.hostname }}
+        service: {{ rule.service }}
+{% endfor %}
+      - service: http_status:404

@@ -53,7 +53,7 @@ help: ## Show all available targets with descriptions
 	@echo ""
 
 .PHONY: all
-all: prepare k3s post-install metallb tailscale longhorn backup restore-volumes monitoring gitea argocd ## Full cluster build (prepare -> k3s -> post-install -> metallb -> tailscale -> longhorn -> backup -> restore-volumes -> monitoring -> gitea -> argocd)
+all: prepare k3s post-install metallb tailscale longhorn backup restore-volumes monitoring gitea argocd cloudflare pihole-monitor ## Full cluster build (prepare -> k3s -> post-install -> metallb -> tailscale -> longhorn -> backup -> restore-volumes -> monitoring -> gitea -> argocd -> cloudflare -> pihole-monitor)
 
 # =============================================================================
 # Provisioning Stages
@@ -134,6 +134,14 @@ argocd: ## Deploy ArgoCD for GitOps continuous deployment
 .PHONY: cloudflare
 cloudflare: ## Deploy Cloudflare tunnel for external access
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/06-deploy-cloudflare.yml
+
+.PHONY: pihole-monitor
+pihole-monitor: ## Deploy Pi-hole DNS monitor on athena (ntfy + Promtail + alert rules)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/10-deploy-pihole-monitor.yml
+
+.PHONY: wazuh-agent
+wazuh-agent: ## Install Wazuh agent on target hosts (HOSTS=sff_nodes by default)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/13-deploy-wazuh-agent.yml $(if $(HOSTS),-e "target_hosts=$(HOSTS)",)
 
 .PHONY: backup
 backup: ## Configure etcd + Longhorn backups (local snapshots + R2 offsite)

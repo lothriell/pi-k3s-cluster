@@ -1,0 +1,42 @@
+# =============================================================================
+# ntfy-external Service + Endpoints — rendered by 06-deploy-cloudflare.yml
+# =============================================================================
+# ntfy runs as a Docker container on athena (not in the cluster). This
+# manifest creates a headless Service + manual Endpoints in the default
+# namespace so that cloudflared (and any other in-cluster consumer) can
+# reach ntfy as if it were an ordinary ClusterIP service.
+#
+# Same pattern as ollama-external (which points at the GPU server outside
+# the cluster). See k8s/ingress/local-ingress.yml for that example.
+#
+# Source vars (main.yml, gitignored):
+#   sff_athena_ip  -- athena's LAN IP
+#   ntfy_port      -- ntfy host port (default 8080)
+# =============================================================================
+
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: ntfy-external
+  namespace: default
+subsets:
+  - addresses:
+      - ip: {{ sff_athena_ip }}
+    ports:
+      - name: http
+        port: {{ ntfy_port | default(8080) }}
+        protocol: TCP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ntfy-external
+  namespace: default
+spec:
+  ports:
+    - name: http
+      port: {{ ntfy_port | default(8080) }}
+      targetPort: {{ ntfy_port | default(8080) }}
+      protocol: TCP

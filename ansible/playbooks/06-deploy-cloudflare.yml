@@ -1,8 +1,17 @@
 ---
 # Playbook 06: Deploy Cloudflare Tunnel (cloudflared)
-# Applies the cloudflared deployment manifest and ingress route
-# configuration to expose cluster services via Cloudflare Tunnel.
-# Manifests should be placed under ../manifests/cloudflare/ before running.
+#
+# Fully idempotent — recreates from scratch on every run:
+#   1. Ensures the `cloudflare` namespace exists
+#   2. Creates `cloudflared-credentials` Secret from the local tunnel JSON
+#      (path defaults to ~/.cloudflared/<tunnel-id>.json, overridable)
+#   3. Renders cloudflared-config.yml.j2 using ingress rules from main.yml
+#   4. Renders ntfy-external.yml.j2 so cloudflared can reach athena's ntfy
+#   5. Applies the rendered manifests + cloudflared deployment
+#
+# Required vars in main.yml:
+#   cloudflare_tunnel_id       — UUID from `cloudflared tunnel create`
+#   cloudflare_ingress_rules   — list of {hostname, service}
 #
 # Usage: ansible-playbook playbooks/06-deploy-cloudflare.yml
 
@@ -14,37 +23,91 @@
 
   vars:
     manifests_dir: "{{ playbook_dir }}/../../k8s/cloudflare"
+    cloudflare_tunnel_credentials_file: "{{ lookup('env', 'HOME') }}/.cloudflared/{{ cloudflare_tunnel_id }}.json"
+    rendered_config: "/tmp/cloudflared-config.rendered.yml"
+    rendered_ntfy: "/tmp/ntfy-external.rendered.yml"
 
   tasks:
-    # -- Cloudflare Tunnel Deployment ------------------------------------------
+    - name: Fail fast if cloudflare_tunnel_id is unset
+      ansible.builtin.assert:
+        that:
+          - cloudflare_tunnel_id is defined
+          - cloudflare_tunnel_id | length > 0
+          - cloudflare_ingress_rules is defined
+          - cloudflare_ingress_rules | length > 0
+        fail_msg: >-
+          cloudflare_tunnel_id and cloudflare_ingress_rules must be set in
+          ansible/inventory/group_vars/all/main.yml. See main.yml.example.
 
-    - name: Apply cloudflared deployment manifest
-      ansible.builtin.command: >
-        kubectl apply -f {{ manifests_dir }}/cloudflared-config.yml -f {{ manifests_dir }}/cloudflared-deployment.yml
-      register: cloudflared_deploy
-      changed_when: "'configured' in cloudflared_deploy.stdout or 'created' in cloudflared_deploy.stdout"
-      tags: [cloudflare]
+    - name: Fail fast if the tunnel credentials file is missing
+      ansible.builtin.stat:
+        path: "{{ cloudflare_tunnel_credentials_file }}"
+      register: cf_creds_stat
 
-    # -- Wait for readiness ----------------------------------------------------
+    - name: Assert credentials file exists
+      ansible.builtin.assert:
+        that: cf_creds_stat.stat.exists
+        fail_msg: >-
+          Tunnel credentials file not found at
+          {{ cloudflare_tunnel_credentials_file }}.
+          Run `cloudflared tunnel login` and `cloudflared tunnel create`
+          to generate it.
 
-    - name: Wait for cloudflared pods to be ready
-      ansible.builtin.command: >
-        kubectl wait --for=condition=Ready pods
-        -l app=cloudflared
-        --namespace cloudflare
-        --timeout=120s
+    - name: Ensure cloudflare namespace exists
+      ansible.builtin.command: kubectl create namespace cloudflare --dry-run=client -o yaml
+      register: cf_ns_yaml
       changed_when: false
-      tags: [cloudflare]
 
-    # -- Summary ---------------------------------------------------------------
+    - name: Apply cloudflare namespace
+      ansible.builtin.command: kubectl apply -f -
+      args:
+        stdin: "{{ cf_ns_yaml.stdout }}"
+      register: cf_ns_apply
+      changed_when: "'created' in cf_ns_apply.stdout"
 
-    - name: Show cloudflare namespace pod status
-      ansible.builtin.command: kubectl get pods -n cloudflare -o wide
+    - name: Create or refresh cloudflared-credentials Secret
+      ansible.builtin.shell: |
+        kubectl -n cloudflare create secret generic cloudflared-credentials \
+          --from-file=credentials.json={{ cloudflare_tunnel_credentials_file }} \
+          --dry-run=client -o yaml | kubectl apply -f -
+      register: cf_secret
+      changed_when: "'configured' in cf_secret.stdout or 'created' in cf_secret.stdout"
+
+    - name: Render cloudflared-config ConfigMap from template
+      ansible.builtin.template:
+        src: "{{ manifests_dir }}/cloudflared-config.yml.j2"
+        dest: "{{ rendered_config }}"
+        mode: "0644"
+
+    - name: Render ntfy-external Service/Endpoints from template
+      ansible.builtin.template:
+        src: "{{ manifests_dir }}/ntfy-external.yml.j2"
+        dest: "{{ rendered_ntfy }}"
+        mode: "0644"
+
+    - name: Apply cloudflared config, ntfy-external, and deployment
+      ansible.builtin.command: >
+        kubectl apply
+        -f {{ rendered_config }}
+        -f {{ rendered_ntfy }}
+        -f {{ manifests_dir }}/cloudflared-deployment.yml
+      register: cloudflared_apply
+      changed_when: "'configured' in cloudflared_apply.stdout or 'created' in cloudflared_apply.stdout"
+
+    - name: Restart cloudflared to pick up config/secret changes
+      ansible.builtin.command: kubectl -n cloudflare rollout restart deploy/cloudflared
+      changed_when: false
+
+    - name: Wait for cloudflared rollout to finish
+      ansible.builtin.command: >
+        kubectl -n cloudflare rollout status deploy/cloudflared --timeout=120s
+      changed_when: false
+
+    - name: Show cloudflared pod status
+      ansible.builtin.command: kubectl -n cloudflare get pods -o wide
       register: cloudflare_pods
       changed_when: false
-      tags: [verify]
 
-    - name: Display cloudflare pods
+    - name: Display cloudflared pods
       ansible.builtin.debug:
         var: cloudflare_pods.stdout_lines
-      tags: [verify]

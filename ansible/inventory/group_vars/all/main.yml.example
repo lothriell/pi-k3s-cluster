@@ -65,6 +65,19 @@ tailscale_wazuh_server: 100.x.x.x
 # Cloudflare tunnel domain
 cloudflare_domain: example.com
 
+# Cloudflare Tunnel — UUID from `cloudflared tunnel create pi-cluster`
+# The matching credentials JSON must exist at ~/.cloudflared/<UUID>.json.
+cloudflare_tunnel_id: "00000000-0000-0000-0000-000000000000"
+
+# Public-facing ingress rules for the tunnel. Every request to <hostname>
+# is proxied to the given in-cluster <service> URL. The playbook appends a
+# catch-all http_status:404 automatically.
+cloudflare_ingress_rules:
+  - hostname: "ntfy.{{ cloudflare_domain }}"
+    service: "http://ntfy-external.default.svc.cluster.local:8080"
+  - hostname: "app.{{ cloudflare_domain }}"
+    service: "http://app-frontend.app-namespace.svc.cluster.local:80"
+
 # ntfy (public config — credentials in vault.yml)
 ntfy_topic: "dns-alerts"
 ntfy_base_url: "https://ntfy.yourdomain.com"

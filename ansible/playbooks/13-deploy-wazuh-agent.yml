@@ -1,11 +1,11 @@
 ---
-# Playbook 10: Deploy Wazuh agent
+# Playbook 13: Deploy Wazuh agent
 # Installs Wazuh agent on target nodes and registers with the Wazuh manager.
 # Supports both Debian/Ubuntu (apt) and Arch-based (pacman/yay) systems.
 #
 # Usage:
-#   ansible-playbook ansible/playbooks/10-deploy-wazuh-agent.yml -e "target_hosts=sff_nodes"
-#   ansible-playbook ansible/playbooks/10-deploy-wazuh-agent.yml --limit athena
+#   ansible-playbook ansible/playbooks/13-deploy-wazuh-agent.yml -e "target_hosts=sff_nodes"
+#   ansible-playbook ansible/playbooks/13-deploy-wazuh-agent.yml --limit athena
 
 - name: Deploy Wazuh agent
   hosts: "{{ target_hosts | default('sff_nodes') }}"
