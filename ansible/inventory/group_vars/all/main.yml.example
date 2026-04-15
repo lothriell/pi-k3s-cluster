@@ -44,9 +44,15 @@ wazuh_manager_ip: 10.0.0.50
 # Local domain (used for Gitea registry hostname, etc.)
 local_domain: yourdomain.local
 
+# System timezone applied to all nodes by the common role. Default: UTC.
+# Any IANA tz name (e.g. "Europe/Prague", "America/New_York", "UTC").
+timezone: "UTC"
+
 # Desktop/laptop Tailscale IPs
 tailscale_arch_t_01: 100.x.x.x
 tailscale_cachy_t_01: 100.x.x.x
+tailscale_macmini: 100.x.x.x
+tailscale_wazuh_server: 100.x.x.x
 
 # Cloudflare tunnel domain
 cloudflare_domain: example.com

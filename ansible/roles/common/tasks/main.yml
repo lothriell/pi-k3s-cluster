@@ -16,10 +16,10 @@
     cache_valid_time: 3600
   tags: [packages]
 
-- name: Set timezone to UTC
+- name: Set system timezone
   ansible.builtin.timezone:
     name: "{{ timezone | default('UTC') }}"
-  tags: [system]
+  tags: [system, timezone]
 
 - name: Install common packages required for K3s and storage backends
   ansible.builtin.apt:
@@ -42,6 +42,26 @@
     enabled: true
     state: started
   tags: [services]
+
+# qemu-guest-agent is only useful on real KVM/Proxmox guests. Gate on
+# ansible_system_vendor == "QEMU" rather than ansible_virtualization_type, because
+# on ARM64 Raspberry Pi 5 the kernel reports virtualization_type=kvm (due to the
+# hypervisor extensions in the boot chain) even though the Pi is bare metal.
+# ansible_system_vendor is "" on the Pi and "QEMU" on Proxmox VMs.
+# Proxmox side must also have 'agent: 1' in the VM config (qm set <vmid> --agent 1).
+- name: Install qemu-guest-agent on KVM guests
+  ansible.builtin.apt:
+    name: qemu-guest-agent
+    state: present
+  when: ansible_system_vendor == "QEMU"
+  tags: [packages, qemu-guest-agent]
+
+- name: Start qemu-guest-agent on KVM guests
+  ansible.builtin.systemd:
+    name: qemu-guest-agent
+    state: started
+  when: ansible_system_vendor == "QEMU"
+  tags: [services, qemu-guest-agent]
 
 - name: Disable swap immediately (K3s/Kubernetes requirement)
   ansible.builtin.command: swapoff -a
