@@ -109,15 +109,23 @@
     # 1. Discover — wait for Longhorn to sync BackupVolume CRs from R2
     # ------------------------------------------------------------------
 
-    - name: Wait for BackupVolume CRs to sync from R2
+    # Wait until Longhorn has discovered AT LEAST as many BackupVolumes as we
+    # have restore targets. The previous `count > 0` check raced — it caught
+    # an intermediate state where only 1 of 5 BVs had synced and proceeded,
+    # leaving 4 targets with has_backup=false and nearly causing silent data
+    # loss on 2026-04-15. `failed_when: false` lets us fall through to the
+    # fail-fast validation below instead of aborting here, so the error
+    # message is about what's actually missing rather than a generic timeout.
+    - name: Wait for BackupVolume CRs to fully sync from R2
       ansible.builtin.shell: |
         kubectl -n longhorn-system get backupvolumes.longhorn.io \
           --no-headers 2>/dev/null | wc -l
       register: bv_count
       retries: "{{ (backup_sync_timeout_seconds / 15) | int }}"
       delay: 15
-      until: bv_count.stdout | int > 0
+      until: bv_count.stdout | int >= (restore_targets | length)
       changed_when: false
+      failed_when: false
       tags: [discover]
 
     - name: Walk BackupVolumes and extract (ns/pvc → bv_name, last_backup, size)
@@ -200,8 +208,8 @@
                 'from_backup_url': (item.stdout.split('|')[0] if item.stdout != 'NO_BACKUP' else ''),
                 'source_volume': (item.stdout.split('|')[1] if item.stdout != 'NO_BACKUP' else ''),
                 'size_bytes': (item.stdout.split('|')[2] if item.stdout != 'NO_BACKUP' else ''),
-                'restored_volume_name': ('restored-' + item.item.namespace + '-' + item.item.pvc) | regex_replace('[^a-z0-9-]', '-'),
-                'pv_name': ('restored-pv-' + item.item.namespace + '-' + item.item.pvc) | regex_replace('[^a-z0-9-]', '-'),
+                'restored_volume_name': 'restored-' + ((item.item.namespace ~ '-' ~ item.item.pvc) | hash('md5'))[:12],
+                'pv_name': 'restored-pv-' + ((item.item.namespace ~ '-' ~ item.item.pvc) | hash('md5'))[:12],
               })
             ]
           }}
@@ -214,6 +222,32 @@
       ansible.builtin.debug:
         var: restore_plan
       tags: [resolve, summary]
+
+    # Fail loudly if any restore target is missing a backup. This prevents
+    # the silent "create empty PVC" data-loss path that nearly burned us on
+    # 2026-04-15 when the BackupVolume sync task raced and only 1 of 5 BVs
+    # had appeared before discovery ran. On a fresh install with no R2
+    # content, override with `-e allow_empty_restore=true`.
+    - name: Fail fast if any restore target has no backup (prevents silent data loss)
+      ansible.builtin.fail:
+        msg: |
+          {{ missing_entries | length }} restore target(s) have no R2 backup resolved:
+          {% for m in missing_entries %}
+            - {{ m.namespace }}/{{ m.pvc }}  (size {{ m.size }})
+          {% endfor %}
+          Possible causes:
+            1. Longhorn BackupVolume sync from R2 still in progress — wait 2-3 min, re-run.
+            2. The backup was never taken for this PVC.
+            3. `restore_targets` list is out of sync with what's actually in R2.
+          Verify with: make restore-volumes-dry-run
+          To bypass and create empty PVCs (fresh-install path):
+            ansible-playbook playbooks/12-restore-volumes.yml -e allow_empty_restore=true
+      vars:
+        missing_entries: "{{ restore_plan | rejectattr('has_backup') | list }}"
+      when:
+        - missing_entries | length > 0
+        - not (allow_empty_restore | default(false) | bool)
+      tags: [resolve, validate]
 
     # ------------------------------------------------------------------
     # 3. Create Longhorn Volume CRs (triggers R2 restore)
