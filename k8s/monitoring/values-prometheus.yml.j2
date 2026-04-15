@@ -113,10 +113,12 @@ kube-state-metrics:
 # ---------------------------------------------------------------------------
 server:
   # -- How long to keep metrics. Actual rate measured 2026-04-14 is
-  #    ~770 MB/day across 30 scrape targets. 20d retention fits in 20Gi
-  #    with headroom (20 × 0.77 ≈ 15.4 GB actual, leaving ~4.5 GB buffer).
-  #    To go to 30d+, first expand the x86 VM disks and then bump PVC.
-  retention: "20d"
+  #    ~770 MB/day across 30 scrape targets.
+  #    30d × 770 MB ≈ 23 GB actual, fits in 30Gi with ~7 GB compaction
+  #    headroom. x86 VM disks were expanded 50→80GB on 2026-04-15 in a
+  #    parallel session, which unblocked this bump from the earlier
+  #    emergency 15Gi/20d → current 30Gi/30d.
+  retention: "30d"
 
   # -- Resource requests/limits sized for a Pi with 16GB RAM.
   #    Prometheus is the heaviest component; 1Gi limit needed for 6 nodes.
@@ -131,18 +133,22 @@ server:
   # -- Persistent storage so metrics survive pod restarts.
   persistentVolume:
     enabled: true
-    # 15Gi (not 20Gi) because x86 VMs have ~19Gi free under the 25%
-    # storage-minimal-available-percentage limit after Gitea (2x10Gi) +
-    # Grafana (2x5Gi) + EVE + open-webui + alertmanager replicas are in
-    # place. 15Gi × 2 replicas on x86 fits; 20Gi doesn't. Retention drops
-    # from ~26d to ~19d at the current ~770 MB/day rate. Follow-up work
-    # in task #21: migrate Gitea replicas off x86 OR expand x86 VM disks,
-    # then raise this back to 20Gi+.
-    size: 15Gi
+    # 30Gi × 2 replicas = 60 GB total across the two x86 nodes (now 80GB
+    # each after the 2026-04-15 disk expansion). Per-node free space
+    # budget: x86-1 ~60 GB free, x86-2 ~66 GB free → 30Gi replica each
+    # leaves ~30 GB headroom per node. At ~770 MB/day burn rate this
+    # buys ~30d of retention with ~7 GB compaction buffer.
+    #
+    # Online-expand path: Longhorn can grow this live (allowVolumeExpansion
+    # is true on longhorn-storage). Bump the number + re-run the Prometheus
+    # tag: `ansible-playbook 04-deploy-monitoring.yml --tags prometheus`.
+    # Do NOT use `make monitoring` — it re-rolls Grafana too and trips the
+    # RWO PVC deadlock documented in CLAUDE.md.
+    size: 30Gi
     # Uses the longhorn-storage StorageClass (nodeSelector=storage) which
-    # only schedules replicas on x86 Proxmox VMs (50Gi disks) — the 32Gi
-    # Pi eMMCs can't host a 15Gi replica alongside everything else.
-    # See feedback_longhorn_storage memory for the strategy.
+    # only schedules replicas on x86 Proxmox VMs — the 32Gi Pi eMMCs can't
+    # host a 30Gi replica. See feedback_longhorn_storage memory for the
+    # strategy; the `storage` node tag is applied in 11-configure-backups.yml.
     storageClass: "longhorn-storage"
 
   # -- Global scrape settings. 30s is a good balance between freshness and
