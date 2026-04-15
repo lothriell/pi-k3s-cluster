@@ -1,0 +1,118 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits"
+  ],
+  "timezone": "Europe/Bratislava",
+  "schedule": ["before 9am on Monday"],
+  "labels": ["renovate"],
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 0,
+  "rebaseWhen": "conflicted",
+
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "K3s version pinned in Ansible inventory (format: v1.34.6+k3s1)",
+      "fileMatch": ["^ansible/inventory/hosts\\.yml$"],
+      "matchStrings": [
+        "k3s_version:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "k3s-io/k3s",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "loose"
+    },
+    {
+      "customType": "regex",
+      "description": "kube-vip image version in k3s-server role defaults",
+      "fileMatch": ["^ansible/roles/k3s-server/defaults/main\\.yml$"],
+      "matchStrings": [
+        "kube_vip_version:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "ghcr.io/kube-vip/kube-vip",
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "alertmanager-ntfy bridge image in rendered template",
+      "fileMatch": ["^k8s/monitoring/alertmanager-ntfy\\.yml\\.j2$"],
+      "matchStrings": [
+        "image:\\s+ghcr\\.io/alexbakker/alertmanager-ntfy:(?<currentValue>[^\\s]+)"
+      ],
+      "depNameTemplate": "ghcr.io/alexbakker/alertmanager-ntfy",
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Wazuh agent version in deploy playbook",
+      "fileMatch": ["^ansible/playbooks/10-deploy-wazuh-agent\\.yml$"],
+      "matchStrings": [
+        "wazuh_version:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "wazuh/wazuh",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v?(?<version>.*)$"
+    }
+  ],
+
+  "packageRules": [
+    {
+      "description": "K3s: never auto-merge. Minor upgrades MUST step through each version per CLAUDE.md K3s upgrade pitfalls section.",
+      "matchDatasources": ["github-releases"],
+      "matchPackageNames": ["k3s-io/k3s"],
+      "automerge": false,
+      "labels": ["renovate", "k3s-upgrade", "manual-review"],
+      "commitMessagePrefix": "chore(k3s):",
+      "prBodyNotes": [
+        "⚠️ **Manual review required.** K3s minor upgrades must step through each version — no skipping (see CLAUDE.md 'K3s Agent Token Loss on Upgrade').",
+        "Pre-merge checklist:",
+        "- [ ] Verify this is the NEXT minor (e.g. 1.34 → 1.35, not 1.34 → 1.36)",
+        "- [ ] Check the K3s release notes for breaking changes: https://github.com/k3s-io/k3s/releases",
+        "- [ ] Test on a single node first (drain + reinstall)",
+        "- [ ] Watch Longhorn engine compat (storageClass+driver+manager chart versions)",
+        "- [ ] Snapshot etcd before merging: `k3s etcd-snapshot save` on any server node"
+      ]
+    },
+    {
+      "description": "kube-vip: patch versions safe to review quickly",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["ghcr.io/kube-vip/kube-vip"],
+      "matchUpdateTypes": ["patch"],
+      "labels": ["renovate", "kube-vip", "patch"]
+    },
+    {
+      "description": "kube-vip minor/major: manual review",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["ghcr.io/kube-vip/kube-vip"],
+      "matchUpdateTypes": ["minor", "major"],
+      "labels": ["renovate", "kube-vip", "manual-review"],
+      "prBodyNotes": [
+        "Review kube-vip changelog — ARP mode behavior and leader-election defaults have shifted across versions."
+      ]
+    },
+    {
+      "description": "Wazuh: manual review — agent/manager must match major.minor",
+      "matchDatasources": ["github-releases"],
+      "matchPackageNames": ["wazuh/wazuh"],
+      "automerge": false,
+      "labels": ["renovate", "wazuh", "manual-review"],
+      "prBodyNotes": [
+        "Wazuh agents MUST match the manager's major.minor. Only merge after upgrading the Wazuh server VM (VMID 112 on lab Proxmox) to the same version."
+      ]
+    },
+    {
+      "description": "Container images: group under one PR, avoid notification spam",
+      "matchDatasources": ["docker"],
+      "excludePackageNames": ["ghcr.io/kube-vip/kube-vip"],
+      "groupName": "container-images"
+    }
+  ],
+
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["renovate", "security"],
+    "schedule": "at any time"
+  }
+}
