@@ -15,13 +15,58 @@
     gitea_values: "{{ playbook_dir }}/../../k8s/gitea/values-gitea.yml"
 
   tasks:
-    # -- Check if this is a fresh install or upgrade ---------------------------
+    # -- Detect install vs. upgrade-or-restore ---------------------------------
+    #
+    # Old logic used `helm status gitea -n gitea` to decide fresh-install vs.
+    # upgrade. That was wrong on a freshly rebuilt cluster where 12-restore-
+    # volumes.yml has already pre-created gitea-shared-storage with the
+    # restored SQLite DB from R2 — the helm release doesn't exist yet (fresh
+    # cluster) but the DB already has the admin user. The old "fresh install"
+    # path would then pass `--set gitea.admin.*`, the init container would
+    # run `gitea admin user create {{ gitea_admin_user }}`, and SQLite would
+    # reject with:
+    #   Command error: CreateUser: user already exists [name: sann]
+    # and the pod crashloops forever.
+    #
+    # New logic: treat the presence of the `gitea-shared-storage` PVC as the
+    # authoritative signal. If it exists (restored OR from a previous
+    # install), assume the DB is populated and DON'T pass admin creation
+    # flags. If it doesn't exist, this really is a fresh-install — create
+    # the admin. Annotate the namespace after a successful fresh install so
+    # re-runs of the playbook also correctly pick the upgrade path even if
+    # someone temporarily deletes the PVC.
 
-    - name: Check if Gitea is already deployed
-      ansible.builtin.command: helm status gitea -n gitea
-      register: gitea_status
+    - name: Check if gitea-shared-storage PVC already has data (restored or upgraded)
+      ansible.builtin.command: kubectl -n gitea get pvc gitea-shared-storage -o name
+      register: gitea_pvc_exists
       changed_when: false
       failed_when: false
+      tags: [gitea]
+
+    - name: Check if gitea namespace is marked admin-initialized (from prior run)
+      ansible.builtin.command: >
+        kubectl get namespace gitea
+        -o jsonpath={.metadata.annotations.{{ local_domain }}/gitea-admin-initialized}
+      register: gitea_admin_initialized
+      changed_when: false
+      failed_when: false
+      tags: [gitea]
+
+    - name: Decide whether a fresh admin create is needed
+      ansible.builtin.set_fact:
+        gitea_needs_admin_create: >-
+          {{
+            gitea_pvc_exists.rc != 0 and
+            gitea_admin_initialized.stdout != 'true'
+          }}
+      tags: [gitea]
+
+    - name: Show detected Gitea install state
+      ansible.builtin.debug:
+        msg: >-
+          gitea_pvc_exists={{ gitea_pvc_exists.rc == 0 }},
+          gitea_admin_initialized={{ gitea_admin_initialized.stdout == 'true' }},
+          gitea_needs_admin_create={{ gitea_needs_admin_create }}
       tags: [gitea]
 
     # -- Fresh install: create admin account -----------------------------------
@@ -40,12 +85,12 @@
         --timeout 10m
       register: gitea_deploy
       changed_when: "'STATUS: deployed' in gitea_deploy.stdout"
-      when: gitea_status.rc != 0
+      when: gitea_needs_admin_create | bool
       tags: [gitea]
 
-    # -- Upgrade: skip admin creation (user already exists in DB) --------------
+    # -- Upgrade or restored DB: skip admin creation ---------------------------
 
-    - name: Deploy Gitea via Helm (upgrade without admin creation)
+    - name: Deploy Gitea via Helm (upgrade or restored DB — no admin creation)
       ansible.builtin.command: >
         helm upgrade --install gitea
         gitea/gitea
@@ -56,7 +101,15 @@
         --timeout 10m
       register: gitea_deploy
       changed_when: "'STATUS: deployed' in gitea_deploy.stdout"
-      when: gitea_status.rc == 0
+      when: not (gitea_needs_admin_create | bool)
+      tags: [gitea]
+
+    - name: Annotate gitea namespace as admin-initialized (belt-and-suspenders)
+      ansible.builtin.command: >
+        kubectl annotate namespace gitea
+        {{ local_domain }}/gitea-admin-initialized=true
+        --overwrite
+      changed_when: false
       tags: [gitea]
 
     - name: Wait for Gitea pods to be ready

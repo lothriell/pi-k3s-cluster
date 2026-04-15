@@ -55,6 +55,22 @@ resources:
     memory: 512Mi
 
 # ---------------------------------------------------------------------------
+# Deployment strategy -- MUST be Recreate (not RollingUpdate).
+# ---------------------------------------------------------------------------
+# Gitea uses a ReadWriteOnce PVC. The chart default is RollingUpdate with
+# maxSurge: 100% / maxUnavailable: 0, which tries to create a new pod before
+# terminating the old one — but the new pod can never mount the PVC while the
+# old pod still holds it, and the old pod is waiting for the new pod to be
+# ready. Infinite deadlock documented in CLAUDE.md under "Gitea Helm Rolling
+# Update Deadlock".
+#
+# Recreate tells Kubernetes: kill old pod FIRST, then create new. Single-
+# replica app, ~15 s of unavailability on each upgrade, zero deadlock risk.
+strategy:
+  type: Recreate
+  rollingUpdate: null
+
+# ---------------------------------------------------------------------------
 # Node selector -- schedule on ARM64 nodes.
 # ---------------------------------------------------------------------------
 nodeSelector:
