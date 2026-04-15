@@ -1,0 +1,55 @@
+# =============================================================================
+# Trivy Operator — Helm values
+# =============================================================================
+# Installed via `make trivy-operator` into the trivy-system namespace.
+# Chart defaults already expose Prometheus metrics on pod port 8080 via a
+# Service named `trivy-operator` with a named port `metrics`. Prometheus
+# picks this up through extraScrapeConfigs (see
+# k8s/monitoring/values-prometheus.yml.j2, job_name=trivy-operator).
+# =============================================================================
+
+# Keep scan pressure light on a 6-node mixed-arch cluster (4 Pi + 2 x86)
+operator:
+  scanJobsConcurrentLimit: 5
+  scanJobsRetryDelay: 30s
+  vulnerabilityScannerEnabled: true
+  configAuditScannerEnabled: true
+  rbacAssessmentScannerEnabled: true
+  infraAssessmentScannerEnabled: true
+  clusterComplianceEnabled: true
+  exposedSecretScannerEnabled: true
+  metricsVulnIdEnabled: false
+
+# Pin scan jobs to the x86 agents so ARM64 Pis stay responsive. The tag
+# `storage=true` is also applied to both x86 nodes (see 03-post-install)
+# and reliably survives rebuilds.
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+trivy:
+  # Same arch constraint for the scanner sidecars spawned by scan jobs
+  nodeSelector:
+    kubernetes.io/arch: amd64
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  ignoreUnfixed: true
+  severity: "CRITICAL,HIGH,MEDIUM"
+
+# ServiceMonitor is off — monitoring scrapes via extraScrapeConfigs with
+# kubernetes_sd_configs (works before/without kube-prometheus-stack CRDs).
+serviceMonitor:
+  enabled: false
+
+# Minimal resources for the operator pod itself
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi

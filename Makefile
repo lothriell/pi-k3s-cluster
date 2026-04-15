@@ -53,7 +53,7 @@ help: ## Show all available targets with descriptions
 	@echo ""
 
 .PHONY: all
-all: prepare k3s post-install metallb tailscale longhorn backup restore-volumes monitoring gitea argocd cloudflare pihole-monitor ## Full cluster build (prepare -> k3s -> post-install -> metallb -> tailscale -> longhorn -> backup -> restore-volumes -> monitoring -> gitea -> argocd -> cloudflare -> pihole-monitor)
+all: prepare k3s post-install metallb tailscale longhorn backup restore-volumes monitoring gitea argocd cloudflare trivy-operator network-policies pihole-monitor ## Full cluster build (prepare -> k3s -> post-install -> metallb -> tailscale -> longhorn -> backup -> restore-volumes -> monitoring -> gitea -> argocd -> cloudflare -> trivy-operator -> network-policies -> pihole-monitor)
 
 # =============================================================================
 # Provisioning Stages
@@ -138,6 +138,20 @@ cloudflare: ## Deploy Cloudflare tunnel for external access
 .PHONY: pihole-monitor
 pihole-monitor: ## Deploy Pi-hole DNS monitor on athena (ntfy + Promtail + alert rules)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/10-deploy-pihole-monitor.yml
+
+.PHONY: trivy-operator
+trivy-operator: ## Install Trivy Operator (Helm) into trivy-system ns and scrape CVEs/configs
+	$(HELM) repo add aqua https://aquasecurity.github.io/helm-charts/ 2>/dev/null || true
+	$(HELM) repo update aqua
+	$(HELM) upgrade --install trivy-operator aqua/trivy-operator \
+		-n trivy-system \
+		--create-namespace \
+		-f k8s/trivy/values-trivy-operator.yml \
+		--wait --timeout 5m
+
+.PHONY: network-policies
+network-policies: ## Apply all namespace NetworkPolicies (requires target namespaces to exist)
+	$(KUBECTL) apply -f k8s/network-policies/
 
 .PHONY: wazuh-agent
 wazuh-agent: ## Install Wazuh agent on target hosts (HOSTS=sff_nodes by default)
