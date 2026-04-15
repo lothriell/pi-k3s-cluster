@@ -1,0 +1,374 @@
+# =============================================================================
+# Infrastructure Architecture — Simform-style static view
+# =============================================================================
+# Render:
+#   Playground: https://play.d2lang.com → paste this file
+#   Local:      d2 docs/architecture-infrastructure.d2 docs/arch-infra.svg
+#   Watch:      d2 --watch docs/architecture-infrastructure.d2
+#
+# Placeholder values (example.local, 10.0.0.x). For private version with
+# real IPs/domain: cp to architecture-infrastructure.local.d2.
+# =============================================================================
+
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 200
+    pad: 40
+    center: true
+  }
+}
+
+title: |md
+  # Cluster Infrastructure
+  ### 3-server HA K3s · ARM64 Pi + AMD64 Proxmox VMs · hybrid home + remote
+| {near: top-center}
+
+# =============================================================================
+# Actors (sit outside the cluster box)
+# =============================================================================
+
+operator: Operator {
+  shape: person
+  style: {
+    fill: "#FFE0B2"
+    stroke: "#FB8C00"
+    stroke-width: 2
+  }
+}
+
+developer: Developer {
+  shape: person
+  style: {
+    fill: "#FFE0B2"
+    stroke: "#FB8C00"
+    stroke-width: 2
+  }
+}
+
+end_users: End users {
+  shape: person
+  style: {
+    fill: "#FFE0B2"
+    stroke: "#FB8C00"
+    stroke-width: 2
+  }
+}
+
+# =============================================================================
+# The K3s cluster (main container)
+# =============================================================================
+
+cluster: K3s cluster v1.34.6 {
+  style: {
+    fill: "#F5F5FB"
+    stroke: "#7986CB"
+    stroke-width: 3
+    border-radius: 16
+  }
+
+  # ---------------------------------------------------------------------------
+  # Control Plane — 3 Pi servers with embedded etcd
+  # ---------------------------------------------------------------------------
+  control_plane: Control Plane (Home site · ARM64) {
+    style: {
+      fill: "#E8EAF6"
+      stroke: "#3F51B5"
+      stroke-width: 2
+      border-radius: 12
+    }
+
+    rpi1: rpi-k3s-1 (server) {
+      style.fill: "#C5CAE9"
+
+      etcd1: etcd {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fetcd.svg
+      }
+      api1: kube-apiserver {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fk8s.svg
+      }
+      sched1: scheduler {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fk8s.svg
+      }
+      cm1: controller-manager {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fk8s.svg
+      }
+    }
+
+    rpi2: rpi-k3s-2 (server) {
+      style.fill: "#C5CAE9"
+
+      etcd2: etcd {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fetcd.svg
+      }
+      api2: kube-apiserver {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fk8s.svg
+      }
+      sched2: scheduler {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fk8s.svg
+      }
+      cm2: controller-manager {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fk8s.svg
+      }
+    }
+
+    rpi3: rpi-k3s-3 (server) {
+      style.fill: "#C5CAE9"
+
+      etcd3: etcd {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fetcd.svg
+      }
+      api3: kube-apiserver {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fk8s.svg
+      }
+      sched3: scheduler {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fk8s.svg
+      }
+      cm3: controller-manager {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fk8s.svg
+      }
+    }
+
+    # etcd members form a raft cluster across all 3 servers
+    rpi1.etcd1 <-> rpi2.etcd2: raft {style.stroke: "#5C6BC0"}
+    rpi2.etcd2 <-> rpi3.etcd3: raft {style.stroke: "#5C6BC0"}
+    rpi1.etcd1 <-> rpi3.etcd3: raft {style.stroke: "#5C6BC0"}
+  }
+
+  # ---------------------------------------------------------------------------
+  # Data Plane — agent nodes
+  # ---------------------------------------------------------------------------
+  data_plane: Data Plane · Worker nodes {
+    style: {
+      fill: "#E8F5E9"
+      stroke: "#43A047"
+      stroke-width: 2
+      border-radius: 12
+    }
+
+    rpi4: rpi-k3s-4 (home · agent) {
+      style.fill: "#C8E6C9"
+
+      kubelet4: kubelet {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fk8s.svg
+      }
+      runtime4: containerd {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fdocker.svg
+      }
+      proxy4: kube-proxy {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fk8s.svg
+      }
+    }
+
+    x86_1: k3s-x86-1 (remote · agent · 80GB) {
+      style.fill: "#A5D6A7"
+
+      kubelet51: kubelet {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fk8s.svg
+      }
+      runtime51: containerd {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fdocker.svg
+      }
+      proxy51: kube-proxy {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fk8s.svg
+      }
+    }
+
+    x86_2: k3s-x86-2 (remote · agent · 80GB) {
+      style.fill: "#A5D6A7"
+
+      kubelet52: kubelet {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fk8s.svg
+      }
+      runtime52: containerd {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fdocker.svg
+      }
+      proxy52: kube-proxy {
+        shape: image
+        icon: https://icons.terrastruct.com/dev%2Fk8s.svg
+      }
+    }
+  }
+
+  # ---------------------------------------------------------------------------
+  # HA API endpoint
+  # ---------------------------------------------------------------------------
+  vip: kube-vip VIP\n10.0.0.10:6443 {
+    shape: diamond
+    style: {
+      fill: "#FFD54F"
+      stroke: "#F57F17"
+      stroke-width: 3
+      bold: true
+    }
+  }
+
+  # ---------------------------------------------------------------------------
+  # Platform services (run as DaemonSets / Deployments across the cluster)
+  # ---------------------------------------------------------------------------
+  platform: Platform services {
+    style: {
+      fill: "#FFF3E0"
+      stroke: "#FB8C00"
+      stroke-width: 2
+      border-radius: 12
+    }
+
+    metallb: MetalLB\n10.0.0.100-110 {
+      shape: image
+      icon: https://metallb.universe.tf/images/logo/metallb-white.png
+      style.fill: "#3F51B5"
+    }
+    traefik: Traefik\nIngress {
+      shape: image
+      icon: https://doc.traefik.io/traefik/assets/img/traefik.logo.png
+    }
+    longhorn: Longhorn\nStorage {
+      shape: image
+      icon: https://longhorn.io/img/logos/longhorn-icon-color.png
+    }
+    flannel: Flannel CNI {
+      shape: image
+      icon: https://icons.terrastruct.com/dev%2Fk8s.svg
+    }
+    coredns: CoreDNS {
+      shape: image
+      icon: https://icons.terrastruct.com/dev%2Fk8s.svg
+    }
+  }
+
+  # ---------------------------------------------------------------------------
+  # Application workloads (by namespace)
+  # ---------------------------------------------------------------------------
+  workloads: Workloads {
+    style: {
+      fill: "#E1F5FE"
+      stroke: "#0288D1"
+      stroke-width: 2
+      border-radius: 12
+    }
+
+    gitops: gitea + argocd + image-updater {
+      shape: image
+      icon: https://argo-cd.readthedocs.io/en/stable/assets/logo.png
+    }
+    monitoring: Prometheus + Grafana\n+ Alertmanager + Loki {
+      shape: image
+      icon: https://prometheus.io/assets/prometheus_logo_grey.svg
+    }
+    evetracker: eve-tracker\nprod + dev {
+      shape: package
+      style.fill: "#B3E5FC"
+    }
+    openwebui: open-webui {
+      shape: package
+      style.fill: "#B3E5FC"
+    }
+    alertbridge: alertmanager-ntfy\nbridge {
+      shape: package
+      style.fill: "#FFE0B2"
+    }
+  }
+}
+
+# =============================================================================
+# External dependencies (outside the cluster box)
+# =============================================================================
+
+r2: Cloudflare R2 {
+  shape: cloud
+  style: {
+    fill: "#F48FB1"
+    stroke: "#C2185B"
+    stroke-width: 2
+  }
+  label: |md
+    **Cloudflare R2**
+    - k8sbkp/longhorn/ — PVC backups
+    - k8sbkp/k3s-etcd-snapshots/
+  |
+}
+
+tunnel: Cloudflare Tunnel\npi-cluster {
+  shape: cloud
+  style: {
+    fill: "#F48FB1"
+    stroke: "#C2185B"
+    stroke-width: 2
+  }
+}
+
+tailnet: Tailscale tailnet\n(overlay) {
+  shape: cloud
+  style: {
+    fill: "#B39DDB"
+    stroke: "#512DA8"
+    stroke-width: 2
+  }
+}
+
+ollama: GPU server\n(Ollama, Docker) {
+  shape: cylinder
+  style.fill: "#FFCC80"
+}
+
+wazuh: Wazuh VM\n(standalone) {
+  shape: cylinder
+  style.fill: "#EF9A9A"
+}
+
+# =============================================================================
+# Actor / external flows
+# =============================================================================
+
+operator -> tailnet: ssh ansible@rpi-k3s-N {style.stroke: "#FB8C00"}
+tailnet -> cluster.vip: kubectl API via VIP {style.stroke: "#FB8C00"}
+operator -> cluster.vip: kubectl {style.stroke: "#FB8C00"}
+
+cluster.control_plane -> r2: etcd-s3 snapshots\nevery 6h {style.stroke: "#C2185B"}
+cluster.platform.longhorn -> r2: Longhorn backups\ndaily 03:00 {style.stroke: "#C2185B"}
+
+cluster.workloads.evetracker -> tunnel: egress HTTP {style.stroke: "#F06292"}
+tunnel -> end_users: HTTPS eve.example.com {style.stroke: "#F06292"}
+
+developer -> cluster.workloads.gitops: podman push\nto Gitea registry {style.stroke: "#FB8C00"}
+
+cluster.platform.traefik -> cluster.workloads: routes Ingress traffic
+cluster.vip -> cluster.control_plane: kube-apiserver endpoint
+
+cluster.workloads.openwebui -> ollama: HTTP proxy\nvia ollama-external Service {style.stroke: "#FFA726"}
+wazuh <- operator: dashboard (tailnet)
+
+# Note placements
+note: |md
+  **Legend**
+  - Blue = K8s control plane
+  - Green = K8s data plane
+  - Orange = Platform services (DaemonSets)
+  - Light blue = Workloads (per-namespace)
+  - Pink = Cloudflare edge
+  - Purple = Tailscale overlay
+| {
+  near: bottom-right
+  style.font-size: 12
+}

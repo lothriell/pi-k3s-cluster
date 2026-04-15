@@ -1,0 +1,343 @@
+# =============================================================================
+# Workflow Architecture — 4 operational flows
+# =============================================================================
+# Render:
+#   Playground: https://play.d2lang.com → paste this file
+#   Local:      d2 docs/architecture-workflows.d2 docs/arch-flows.svg
+#   Watch:      d2 --watch docs/architecture-workflows.d2
+# =============================================================================
+
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 200
+    pad: 40
+  }
+}
+
+title: |md
+  # Cluster Workflows
+  ### 4 operational flows: deploy · restore · alert · backup
+| {near: top-center}
+
+# =============================================================================
+# Flow 1 — Deployment pipeline (developer → users)
+# =============================================================================
+
+deploy_flow: "1 · Deployment pipeline (GitOps + Image Updater)" {
+  style: {
+    fill: "#E3F2FD"
+    stroke: "#1976D2"
+    stroke-width: 2
+    border-radius: 12
+  }
+  direction: right
+
+  dev: Developer {
+    shape: person
+    style.fill: "#FFE0B2"
+  }
+
+  build: podman build\n(ARM64 native) {
+    shape: step
+    style.fill: "#BBDEFB"
+  }
+
+  push: podman push {
+    shape: step
+    style.fill: "#BBDEFB"
+  }
+
+  gitea_reg: Gitea OCI registry {
+    shape: image
+    icon: https://about.gitea.com/img/logo.svg
+    style.fill: "#609926"
+  }
+
+  updater: Image Updater v1.1 {
+    shape: image
+    icon: https://argo-cd.readthedocs.io/en/stable/assets/logo.png
+    style.fill: "#EF7B4D"
+    tooltip: polls registry every 2 min, CRD-based
+  }
+
+  gitea_git: Gitea Kustomize repo {
+    shape: image
+    icon: https://about.gitea.com/img/logo.svg
+    style.fill: "#609926"
+  }
+
+  argocd: ArgoCD {
+    shape: image
+    icon: https://argo-cd.readthedocs.io/en/stable/assets/logo.png
+    style.fill: "#EF7B4D"
+  }
+
+  pods: Running pods\n(eve-tracker prod + dev) {
+    shape: package
+    style.fill: "#B3E5FC"
+  }
+
+  tunnel: Cloudflare Tunnel {
+    shape: cloud
+    style.fill: "#F48FB1"
+  }
+
+  users: End users {
+    shape: person
+    style.fill: "#FFE0B2"
+  }
+
+  dev -> build
+  build -> push
+  push -> gitea_reg: :latest or :dev {style.bold: true}
+  gitea_reg -> updater: new digest detected
+  updater -> gitea_git: writeBackMethod=git\ncommits kustomization patch {style.stroke: "#4CAF50"}
+  gitea_git -> argocd: webhook / polling
+  argocd -> pods: sync (Kustomize + digest override) {style.bold: true}
+  pods -> tunnel: egress via cloudflared DaemonSet
+  tunnel -> users: HTTPS eve.example.com
+}
+
+# =============================================================================
+# Flow 2 — Restore from R2 (make restore-volumes)
+# =============================================================================
+
+restore_flow: "2 · R2 restore workflow (make restore-volumes)" {
+  style: {
+    fill: "#F3E5F5"
+    stroke: "#7B1FA2"
+    stroke-width: 2
+    border-radius: 12
+  }
+  direction: right
+
+  operator: Operator\nmake restore-volumes {
+    shape: person
+    style.fill: "#FFE0B2"
+  }
+
+  r2: Cloudflare R2\nk8sbkp/longhorn/ {
+    shape: cloud
+    style.fill: "#F48FB1"
+  }
+
+  backup_target: Longhorn BackupTarget {
+    shape: image
+    icon: https://longhorn.io/img/logos/longhorn-icon-color.png
+  }
+
+  bv: BackupVolume CRs\n(synced from R2) {
+    shape: class
+    label: |md
+      **BackupVolume CRs**
+      status.labels.KubernetesStatus
+      ↓
+      {namespace, pvcName}
+    |
+  }
+
+  discover: Discover\njq KubernetesStatus {
+    shape: step
+    style.fill: "#E1BEE7"
+  }
+
+  resolve: Resolve latest Backup URL {
+    shape: step
+    style.fill: "#E1BEE7"
+  }
+
+  validate: Fail-fast validation\n(missing backup = abort) {
+    shape: step
+    style.fill: "#FFAB91"
+  }
+
+  volume_cr: Volume CR\nrestored-<md5:12> {
+    shape: hexagon
+    style.fill: "#CE93D8"
+    label: |md
+      **longhorn.io/Volume**
+      `fromBackup: s3://...`
+    |
+  }
+
+  detached: Wait for state=detached\n(Longhorn pulls blocks) {
+    shape: step
+    style.fill: "#CE93D8"
+  }
+
+  pv: Static PersistentVolume\n(csi driver.longhorn.io) {
+    shape: page
+    style.fill: "#BA68C8"
+  }
+
+  pvc: PersistentVolumeClaim\n+ strip last-applied-config {
+    shape: page
+    style.fill: "#BA68C8"
+  }
+
+  pod: Workload pod\n(mounts restored data) {
+    shape: package
+    style.fill: "#B3E5FC"
+  }
+
+  operator -> backup_target: apply BackupTarget CR
+  backup_target -> r2: poll every 5 min
+  r2 -> bv: discover backups
+  bv -> discover
+  discover -> resolve
+  resolve -> validate
+  validate -> volume_cr: create per target
+  volume_cr -> detached
+  detached -> pv: bind statically
+  pv -> pvc: claim
+  pvc -> pod: mount {style.bold: true}
+}
+
+# =============================================================================
+# Flow 3 — Alert pipeline
+# =============================================================================
+
+alert_flow: "3 · Alert pipeline (Prometheus → phone)" {
+  style: {
+    fill: "#FFEBEE"
+    stroke: "#C62828"
+    stroke-width: 2
+    border-radius: 12
+  }
+  direction: right
+
+  targets: 32 scrape targets {
+    shape: class
+    label: |md
+      node-exporter × 6
+      kube-state-metrics
+      Longhorn, Traefik
+      Trivy, alertmanager...
+    |
+  }
+
+  prom: Prometheus {
+    shape: image
+    icon: https://prometheus.io/assets/prometheus_logo_grey.svg
+    style.fill: "#E6522C"
+  }
+
+  rules: PromQL alert rules\n(trivy, node, longhorn, etc.) {
+    shape: document
+    style.fill: "#FFCDD2"
+  }
+
+  am: Alertmanager {
+    shape: image
+    icon: https://prometheus.io/assets/alertmanager_logo_grey.svg
+    style.fill: "#E6522C"
+  }
+
+  bridge: alertmanager-ntfy\nbridge {
+    shape: hexagon
+    style.fill: "#FFCA28"
+    label: |md
+      **alertmanager-ntfy**
+      formats webhook →
+      priority + tags +
+      templated title/body
+    |
+  }
+
+  ntfy_srv: self-hosted ntfy\n(athena · Docker) {
+    shape: cylinder
+    style.fill: "#FF7043"
+  }
+
+  cf_tunnel: Cloudflare Tunnel {
+    shape: cloud
+    style.fill: "#F48FB1"
+  }
+
+  ntfy_sh: ntfy.sh relay\n(iOS push) {
+    shape: cloud
+    style.fill: "#FFAB91"
+  }
+
+  phone: Phone (iOS) {
+    shape: person
+    style.fill: "#FFE0B2"
+  }
+
+  targets -> prom: scrape 30s
+  prom -> rules: evaluate 30s
+  rules -> am: fire (critical / warning)
+  am -> bridge: webhook POST /hook
+  bridge -> ntfy_srv: POST to localhost:8080/k8s-alerts
+  ntfy_srv -> cf_tunnel: publish via tunnel
+  cf_tunnel -> ntfy_sh: upstream-base-url
+  ntfy_sh -> phone: push notification {style.bold: true}
+}
+
+# =============================================================================
+# Flow 4 — Backup pipeline (PVC + etcd → R2)
+# =============================================================================
+
+backup_flow: "4 · Backup pipeline (PVC data + etcd state → R2)" {
+  style: {
+    fill: "#E8F5E9"
+    stroke: "#2E7D32"
+    stroke-width: 2
+    border-radius: 12
+  }
+  direction: right
+
+  cronjob: Longhorn RecurringJob\ncritical-backup {
+    shape: document
+    style.fill: "#C8E6C9"
+    label: |md
+      **critical-backup**
+      cron: 0 3 * * *
+      groups: [critical]
+      retain: 30
+    |
+  }
+
+  critical_pvcs: 5 critical PVCs {
+    shape: class
+    label: |md
+      gitea-shared-storage 10Gi
+      monitoring/grafana 5Gi
+      eve-tracker-data × 2
+      open-webui-data 2Gi
+    |
+  }
+
+  snapshot: Longhorn snapshot {
+    shape: image
+    icon: https://longhorn.io/img/logos/longhorn-icon-color.png
+  }
+
+  backup_engine: Longhorn backup engine {
+    shape: image
+    icon: https://longhorn.io/img/logos/longhorn-icon-color.png
+  }
+
+  etcd_cron: K3s embedded etcd\n(config.yaml) {
+    shape: image
+    icon: https://icons.terrastruct.com/dev%2Fetcd.svg
+  }
+
+  r2: Cloudflare R2 {
+    shape: cloud
+    style.fill: "#F48FB1"
+    label: |md
+      **k8sbkp bucket**
+      - longhorn/ (PVC backups)
+      - k3s-etcd-snapshots/
+    |
+  }
+
+  cronjob -> critical_pvcs: select by group label
+  critical_pvcs -> snapshot: crash-consistent
+  snapshot -> backup_engine: incremental diff {style.bold: true}
+  backup_engine -> r2: s3 PUT
+
+  etcd_cron -> r2: etcd-s3 every 6h\nretain 12 {style.stroke: "#3F51B5"}
+}
