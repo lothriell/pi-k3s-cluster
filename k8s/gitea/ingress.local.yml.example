@@ -1,0 +1,33 @@
+---
+# Gitignored LAN Ingress for Gitea.
+# Copy this file to ingress.local.yml, replace the host with your actual
+# local domain, then apply:
+#
+#     cp k8s/gitea/ingress.local.yml.example k8s/gitea/ingress.local.yml
+#     # edit the host in the new file
+#     kubectl apply -f k8s/gitea/ingress.local.yml
+#
+# The committed Gitea Helm chart deploys its own Ingress with a placeholder
+# host (`gitea.yourdomain.com`) — this sidecar adds a real hostname via a
+# second Ingress object, which the Helm chart won't touch on upgrade.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gitea-local
+  namespace: gitea
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    # TODO CHANGEME -- replace with your actual local domain
+    - host: gitea.example.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gitea-http
+                port:
+                  number: 3000

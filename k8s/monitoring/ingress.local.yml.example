@@ -1,0 +1,77 @@
+---
+# Gitignored LAN Ingress for the monitoring stack (Grafana + Prometheus + Alertmanager).
+# Copy this file to ingress.local.yml, replace hosts with your actual local
+# domain, then apply:
+#
+#     cp k8s/monitoring/ingress.local.yml.example k8s/monitoring/ingress.local.yml
+#     # edit the three hosts in the new file
+#     kubectl apply -f k8s/monitoring/ingress.local.yml
+#
+# Grafana additionally has its own MetalLB LoadBalancer IP (see
+# kubectl get svc -n monitoring grafana) — these ingresses are a
+# nice-to-have for named URLs, not required for Grafana access.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana-local
+  namespace: monitoring
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    # TODO CHANGEME
+    - host: grafana.example.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana
+                port:
+                  number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: prometheus-local
+  namespace: monitoring
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    # TODO CHANGEME
+    - host: prometheus.example.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: prometheus-server
+                port:
+                  number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: alertmanager-local
+  namespace: monitoring
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    # TODO CHANGEME
+    - host: alertmanager.example.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: prometheus-alertmanager
+                port:
+                  number: 9093

@@ -1,0 +1,34 @@
+---
+# Gitignored LAN Ingress for ArgoCD.
+# Copy this file to ingress.local.yml, replace the host with your actual
+# local domain, then apply:
+#
+#     cp k8s/argocd/ingress.local.yml.example k8s/argocd/ingress.local.yml
+#     # edit the host in the new file
+#     kubectl apply -f k8s/argocd/ingress.local.yml
+#
+# ArgoCD server defaults to TLS+redirect unless run with `--insecure`. If
+# your values-argocd.yml sets `configs.params.server.insecure=true`, plain
+# HTTP on port 80 works. Otherwise terminate TLS at Traefik (not shown here).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-server-local
+  namespace: argocd
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/service.serversscheme: http
+spec:
+  ingressClassName: traefik
+  rules:
+    # TODO CHANGEME
+    - host: argocd.example.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: argocd-server
+                port:
+                  number: 80
