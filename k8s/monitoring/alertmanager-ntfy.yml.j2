@@ -78,6 +78,12 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: alertmanager-ntfy
+      annotations:
+        # Forces a Deployment rollout whenever the rendered config (or the
+        # template file itself) changes. Without this, a new Secret content
+        # gets mounted but the running process has already read the old
+        # file at startup and won't re-read on its own.
+        checksum/config: "{{ alertmanager_ntfy_checksum }}"
     spec:
       automountServiceAccountToken: false
       securityContext:

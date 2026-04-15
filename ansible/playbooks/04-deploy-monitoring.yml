@@ -89,6 +89,36 @@
     # Formats Alertmanager webhook JSON into nice ntfy notifications. Must be
     # ready before Alertmanager fires anything, hence its place between the
     # Prometheus and Grafana steps.
+    #
+    # Rollout model: a `checksum/config` annotation on the pod template carries
+    # a sha256 of (the raw template file + all vault inputs). When anything
+    # drifts, the annotation changes, and Kubernetes's native Deployment
+    # reconciliation rolls the pod. No explicit `kubectl rollout restart`.
+    # Ansible `changed` is driven by a before/after comparison of the live
+    # deployment's annotation so `-v` output accurately reflects reality.
+
+    - name: Read currently-deployed alertmanager-ntfy config checksum
+      ansible.builtin.shell: |
+        kubectl -n monitoring get deployment alertmanager-ntfy \
+          -o jsonpath='{.spec.template.metadata.annotations.checksum/config}' 2>/dev/null || true
+      register: anf_deployed_checksum
+      changed_when: false
+      failed_when: false
+      tags: [alertmanager-ntfy]
+
+    - name: Compute alertmanager-ntfy config checksum (template + vault inputs)
+      ansible.builtin.set_fact:
+        alertmanager_ntfy_checksum: >-
+          {{
+            (
+              lookup('file', alertmanager_ntfy_template)
+              + ntfy_alertmanager_user
+              + ntfy_alertmanager_password
+              + ntfy_base_url
+              + ntfy_k8s_alerts_topic
+            ) | hash('sha256')
+          }}
+      tags: [alertmanager-ntfy]
 
     - name: Render alertmanager-ntfy manifest from template
       ansible.builtin.template:
@@ -101,23 +131,13 @@
     - name: Apply alertmanager-ntfy manifest
       ansible.builtin.command: kubectl apply -f {{ alertmanager_ntfy_rendered }}
       register: anf_apply
-      changed_when: "'configured' in anf_apply.stdout or 'created' in anf_apply.stdout"
+      changed_when: alertmanager_ntfy_checksum != anf_deployed_checksum.stdout
       tags: [alertmanager-ntfy]
 
     - name: Remove rendered alertmanager-ntfy manifest (contains secrets)
       ansible.builtin.file:
         path: "{{ alertmanager_ntfy_rendered }}"
         state: absent
-      tags: [alertmanager-ntfy]
-
-    # Pods don't auto-reload a Secret-mounted file; force a rollout when the
-    # manifest actually changed (kubectl reported "configured", not "unchanged").
-    - name: Roll alertmanager-ntfy to pick up config changes
-      ansible.builtin.command: >
-        kubectl rollout restart deployment/alertmanager-ntfy
-        --namespace monitoring
-      when: "'configured' in anf_apply.stdout"
-      changed_when: true
       tags: [alertmanager-ntfy]
 
     - name: Wait for alertmanager-ntfy to be ready
