@@ -52,6 +52,58 @@
 # policy — enabling --ssh on the node is a prerequisite, not a grant.
 # Rescue path: if the botched nuke-cluster.sh recurs, tailnet-direct SSH
 # still works even when the subnet route is flapping.
+
+# ----------------------------------------------------------------------------
+# Self-heal MagicDNS `-N` suffix drift.
+#
+# 2026-04-15 incident: the Pi nodes enrolled in the tailnet on 2026-03-28
+# during a 24h name-reservation cooldown from an earlier cluster iteration
+# and ended up with `rpi-k3s-1-1.tail713e5.ts.net` instead of the clean
+# `rpi-k3s-1.tail713e5.ts.net`. Subsequent `make tailscale` runs couldn't
+# fix it because `tailscale set --hostname=rpi-k3s-1` is a no-op when
+# HostName already equals rpi-k3s-1 — no rename RPC is sent, so the
+# control plane never re-runs the collision check on the now-expired
+# reservation. The stale `-1` DNSName persists forever.
+#
+# Fix: detect the drift (current DNSName short form != inventory_hostname)
+# and force a two-step rename through a temp hostname, which DOES send
+# the rename RPC on each hop and triggers a fresh collision check. On the
+# way back to the clean name the control plane finds the reservation has
+# expired, and grants the clean DNSName.
+# ----------------------------------------------------------------------------
+- name: Detect Tailscale DNSName short-form drift
+  ansible.builtin.shell: |
+    tailscale status --json 2>/dev/null | python3 -c "
+    import json, sys
+    d = json.load(sys.stdin)
+    dns = d.get('Self', {}).get('DNSName', '').rstrip('.')
+    print(dns.split('.', 1)[0] if dns else '')
+    "
+  register: ts_current_shortname
+  changed_when: false
+  failed_when: false
+  tags: [tailscale, magicdns]
+
+- name: Two-step rename to reclaim clean MagicDNS name (only when drifted)
+  when:
+    - ts_current_shortname.stdout | length > 0
+    - ts_current_shortname.stdout != inventory_hostname
+  block:
+    - name: Rename to temp hostname
+      ansible.builtin.command: >
+        tailscale set --hostname={{ inventory_hostname }}-rename-temp
+      changed_when: true
+
+    - name: Pause for rename to propagate
+      ansible.builtin.pause:
+        seconds: 3
+
+    - name: Rename back to clean inventory_hostname
+      ansible.builtin.command: >
+        tailscale set --hostname={{ inventory_hostname }}
+      changed_when: true
+  tags: [tailscale, magicdns]
+
 - name: Configure Tailscale (regular node)
   ansible.builtin.command: >
     tailscale set
