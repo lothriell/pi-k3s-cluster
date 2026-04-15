@@ -1,0 +1,198 @@
+---
+# Playbook 00: Bootstrap the Ansible service account on macOS hosts
+# =============================================================================
+# Companion to 00-bootstrap-user.yml (Ubuntu). macOS doesn't have useradd /
+# usermod — user management goes through Directory Service (dscl) and SSH
+# access is gated by the com.apple.access_ssh group, not file perms.
+#
+# Targets hosts in the macos_nodes group by default. Connects as the personal
+# user (from `personal_user` in group_vars/all/main.yml) because the ansible
+# user doesn't exist yet, and uses -K to prompt for the personal user's sudo
+# password (macOS sudo is password-by-default unless configured otherwise).
+#
+# Usage (first time only):
+#   make bootstrap-macos
+#   # or directly:
+#   ansible-playbook ansible/playbooks/00-bootstrap-macos-user.yml --ask-become-pass
+#
+# After this playbook runs, all subsequent runs can use ansible@<host> with
+# passwordless sudo.
+# =============================================================================
+
+- name: Create Ansible service account on macOS nodes
+  hosts: "{{ target_hosts | default('macos_nodes') }}"
+  gather_facts: true
+  vars:
+    ansible_user: "{{ personal_user }}"
+    service_account: ansible
+    # macOS convention: 500+ is the "regular user" range; 600 is above typical
+    # local user IDs and below the system range reset (1-499).
+    service_account_uid: 600
+    # Group 20 = staff, the default group for macOS GUI users.
+    service_account_gid: 20
+    service_account_home: "/Users/{{ service_account }}"
+
+  tasks:
+    - name: Assert target is macOS
+      ansible.builtin.assert:
+        that: ansible_facts.os_family == "Darwin"
+        fail_msg: >-
+          This playbook is macOS-only. For Ubuntu / Linux hosts use
+          00-bootstrap-user.yml (same inventory, different OS tasks).
+      tags: [always]
+
+    # -----------------------------------------------------------------------
+    # 1. Create the account via dscl (Directory Service CLI).
+    # -----------------------------------------------------------------------
+    # Ansible's `user` module works on macOS but uses sysadminctl which is
+    # fussy about ordering and silently ignores some fields. dscl is
+    # explicit and matches the one-off bootstrap script we ran by hand on
+    # 2026-04-15 when first onboarding macmini.
+
+    - name: Check if ansible user already exists
+      ansible.builtin.command: dscl . -read /Users/{{ service_account }} UniqueID
+      register: dscl_check
+      changed_when: false
+      failed_when: false
+      tags: [user]
+
+    - name: Create ansible user record
+      ansible.builtin.command: dscl . -create /Users/{{ service_account }}
+      become: true
+      when: dscl_check.rc != 0
+      tags: [user]
+
+    - name: Set user shell
+      ansible.builtin.command: >
+        dscl . -create /Users/{{ service_account }} UserShell /bin/zsh
+      become: true
+      when: dscl_check.rc != 0
+      tags: [user]
+
+    - name: Set user real name
+      ansible.builtin.command: >
+        dscl . -create /Users/{{ service_account }} RealName "Ansible Service Account"
+      become: true
+      when: dscl_check.rc != 0
+      tags: [user]
+
+    - name: Set user UID
+      ansible.builtin.command: >
+        dscl . -create /Users/{{ service_account }} UniqueID {{ service_account_uid }}
+      become: true
+      when: dscl_check.rc != 0
+      tags: [user]
+
+    - name: Set user primary GID (staff=20)
+      ansible.builtin.command: >
+        dscl . -create /Users/{{ service_account }} PrimaryGroupID {{ service_account_gid }}
+      become: true
+      when: dscl_check.rc != 0
+      tags: [user]
+
+    - name: Set NFSHomeDirectory
+      ansible.builtin.command: >
+        dscl . -create /Users/{{ service_account }} NFSHomeDirectory {{ service_account_home }}
+      become: true
+      when: dscl_check.rc != 0
+      tags: [user]
+
+    - name: Create home directory
+      ansible.builtin.file:
+        path: "{{ service_account_home }}"
+        state: directory
+        owner: "{{ service_account }}"
+        group: staff
+        mode: "0755"
+      become: true
+      tags: [user]
+
+    # -----------------------------------------------------------------------
+    # 2. Allow SSH by adding to com.apple.access_ssh.
+    # -----------------------------------------------------------------------
+    # macOS sshd checks this group when "Allow access for: Only these users"
+    # is set in System Settings > Sharing > Remote Login. Default install is
+    # "All users" but we want explicit allow-list membership to be resilient
+    # to future setting changes.
+
+    - name: Check if already in com.apple.access_ssh group
+      ansible.builtin.command: >
+        dseditgroup -o checkmember -u {{ service_account }} com.apple.access_ssh
+      register: ssh_group_check
+      changed_when: false
+      failed_when: false
+      tags: [ssh]
+
+    - name: Add to com.apple.access_ssh group
+      ansible.builtin.command: >
+        dseditgroup -o edit -a {{ service_account }} -t user com.apple.access_ssh
+      become: true
+      when: "'yes' not in (ssh_group_check.stdout | default(''))"
+      tags: [ssh]
+
+    # -----------------------------------------------------------------------
+    # 3. Passwordless sudo via a drop-in.
+    # -----------------------------------------------------------------------
+    # macOS ships with /etc/sudoers that reads /etc/sudoers.d via
+    # `#includedir`. The drop-in is visudo-validated for safety.
+
+    - name: Grant passwordless sudo via /etc/sudoers.d/{{ service_account }}
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/{{ service_account }}"
+        content: "{{ service_account }} ALL=(ALL) NOPASSWD: ALL\n"
+        owner: root
+        group: wheel
+        mode: "0440"
+        validate: "visudo -cf %s"
+      become: true
+      tags: [sudo]
+
+    # -----------------------------------------------------------------------
+    # 4. Seed SSH authorized_keys with the MacBook's pubkey.
+    # -----------------------------------------------------------------------
+
+    - name: Create .ssh directory
+      ansible.builtin.file:
+        path: "{{ service_account_home }}/.ssh"
+        state: directory
+        owner: "{{ service_account }}"
+        group: staff
+        mode: "0700"
+      become: true
+      tags: [ssh]
+
+    - name: Install MacBook pubkey in authorized_keys
+      ansible.builtin.copy:
+        dest: "{{ service_account_home }}/.ssh/authorized_keys"
+        content: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_ed25519.pub') }}\n"
+        owner: "{{ service_account }}"
+        group: staff
+        mode: "0600"
+      become: true
+      tags: [ssh]
+
+    # -----------------------------------------------------------------------
+    # 5. Verify.
+    # -----------------------------------------------------------------------
+
+    - name: Verify passwordless sudo + SSH from MacBook
+      ansible.builtin.command: >
+        ssh -i {{ lookup('env', 'HOME') }}/.ssh/id_ed25519
+        -o BatchMode=yes -o StrictHostKeyChecking=no
+        {{ service_account }}@{{ ansible_host }}
+        "sudo -n whoami"
+      delegate_to: localhost
+      become: false
+      register: verify
+      changed_when: false
+      failed_when: verify.stdout | trim != 'root'
+      tags: [verify]
+
+    - name: Display success
+      ansible.builtin.debug:
+        msg: >-
+          macOS user '{{ service_account }}' on {{ inventory_hostname }}:
+          UID {{ service_account_uid }}, home {{ service_account_home }},
+          passwordless sudo verified (sudo whoami → {{ verify.stdout | trim }}),
+          SSH key-auth working from the MacBook.
+      tags: [verify]

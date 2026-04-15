@@ -80,6 +80,20 @@ ANSIBLE_PRIVATE_KEY_FILE=~/.ssh/id_rsa ansible-playbook ansible/playbooks/00-boo
 ```
 After bootstrap, `ansible` user uses `id_ed25519` like all other nodes.
 
+**macOS bootstrap** (macmini and any other Mac host in `macos_nodes`): uses Directory Service (`dscl`) because macOS has no `useradd`. Run once with your personal account:
+```bash
+make bootstrap-macos           # runs 00-bootstrap-macos-user.yml --ask-become-pass
+```
+UID 600, primary group staff (20), shell `/bin/zsh`, home `/Users/ansible`, added to `com.apple.access_ssh` for sshd access, passwordless sudo via `/etc/sudoers.d/ansible`. Idempotent — re-runs detect existing state and skip.
+
+**Manual-node bootstrap** (standalone Ubuntu VMs not in `k3s_cluster` — Wazuh in `security_stack`, future SFF pattern, etc.): reuses the Linux `00-bootstrap-user.yml` with a `target_hosts` override:
+```bash
+make bootstrap-manual-node HOSTS=security_stack
+# equivalent to:
+# ansible-playbook 00-bootstrap-user.yml --ask-become-pass -e target_hosts=security_stack
+```
+Prerequisite: cloud-init (or the OS installer) has already seeded the personal user with the MacBook pubkey. For an already-deployed VM where all creds are lost, use the Proxmox NoVNC GRUB-edit recovery procedure documented in `project_wazuh_access` memory, THEN run this bootstrap.
+
 ### Variable Flow
 
 Inventory (`ansible/inventory/hosts.yml`) defines global vars (k3s_version, server IP, metallb range) that flow to all playbooks and roles. The K3s server role sets `k3s_node_token` as a fact, which agents consume via `hostvars[groups['k3s_server'][0]]['k3s_node_token']`.

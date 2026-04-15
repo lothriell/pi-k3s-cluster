@@ -64,8 +64,16 @@ flash: ## Flash a CM5 node: make flash NODE=rpi-k3s-1 [IMAGE=path/to/image]
 	@scripts/flash-node.sh $(NODE) $(IMAGE)
 
 .PHONY: bootstrap
-bootstrap: ## Create 'ansible' service account on all nodes (run once, uses your personal account)
+bootstrap: ## Create 'ansible' service account on all Linux cluster nodes (run once, uses your personal account)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/00-bootstrap-user.yml --ask-become-pass
+
+.PHONY: bootstrap-macos
+bootstrap-macos: ## Create 'ansible' service account on macOS hosts (macmini, etc.) — run once
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/00-bootstrap-macos-user.yml --ask-become-pass
+
+.PHONY: bootstrap-manual-node
+bootstrap-manual-node: ## Create 'ansible' service account on a standalone Ubuntu node (Wazuh etc.) — pass HOSTS=security_stack
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/00-bootstrap-user.yml --ask-become-pass -e "target_hosts=$(HOSTS)"
 
 .PHONY: shell
 shell: ## Setup zsh + oh-my-posh + eza on all nodes (for personal user)
