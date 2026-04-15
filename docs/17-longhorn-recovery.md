@@ -49,6 +49,30 @@ Runs the `preflight`, `discover`, and `resolve` tags only. Prints the full resto
 
 If R2 is empty (first rebuild, retention wiped, etc.), `discover` finds no `BackupVolume` CRs matching the target list. The `restore` stage then falls back to creating empty PVCs with dynamic provisioning — the downstream Helm install still finds a PVC to mount, just starts with no data. No change needed to the chain.
 
+### Gotcha: ArgoCD-managed PVCs hit immutable-field OutOfSync
+
+Restored PVCs have `spec.volumeName` set (statically bound to the restored PV). If the PVC is managed by an ArgoCD Application that renders the PVC from a Kustomize source WITHOUT `volumeName` (normal for fresh installs), ArgoCD's 3-way merge will try to unset `volumeName` during sync and fail with:
+
+```
+PersistentVolumeClaim "X" is invalid: spec: Forbidden: spec is immutable after
+creation except resources.requests and volumeAttributesClassName for bound claims
+```
+
+Hit this 2026-04-15 on `eve-tracker` + `eve-tracker-dev`. Two fixes required:
+
+1. On the Application, add `ignoreDifferences` for `/spec/volumeName` and any labels the restore added (`/metadata/labels/longhorn-restore`), plus `syncOptions: [RespectIgnoreDifferences=true, ServerSideApply=true]`. This is already baked into `k8s/argocd/eve-tracker-app.yml` and `eve-tracker-dev-app.yml`.
+
+2. After the initial `kubectl apply` of the restored PVC, strip the `kubectl.kubernetes.io/last-applied-configuration` annotation:
+   ```bash
+   for ns in eve-tracker eve-tracker-dev; do
+     kubectl -n $ns annotate pvc eve-tracker-data \
+       kubectl.kubernetes.io/last-applied-configuration-
+   done
+   ```
+   Without this, ArgoCD's 3-way merge uses the restore playbook's kubectl-apply history (which baked in `volumeName`) as the "previous state", and the merge still tries to unset the field even with `RespectIgnoreDifferences`. Stripping the annotation drops 3-way merge to 2-way (source vs live), which correctly honors the field-manager ownership.
+
+Follow-up: fold the annotation-strip step into `12-restore-volumes.yml` so this is automatic on the next rebuild.
+
 ## 2. Post-rebuild validation
 
 After `make all` finishes:

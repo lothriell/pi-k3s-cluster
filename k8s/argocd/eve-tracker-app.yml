@@ -38,9 +38,29 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: eve-tracker
+  # `eve-tracker-data` PVC is pre-created during R2 restore (see
+  # ansible/playbooks/12-restore-volumes.yml) with `spec.volumeName`
+  # pointing at the restored Longhorn volume. The Kustomize source in
+  # Gitea has no volumeName (correct — fresh installs don't need one),
+  # so ArgoCD would otherwise try to unset the live volumeName and hit
+  # "PersistentVolumeClaim spec is immutable after creation". Ignore
+  # that field + the restore label.
+  ignoreDifferences:
+    - group: ""
+      kind: PersistentVolumeClaim
+      jsonPointers:
+        - /spec/volumeName
+        - /metadata/labels/longhorn-restore
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+      # RespectIgnoreDifferences applies ignoreDifferences during the
+      # sync apply (not just drift reporting). ServerSideApply activates
+      # field-manager-aware merging so the ignored fields stay with
+      # whatever manager first wrote them. Required together for this
+      # pattern on ArgoCD v2.8+.
+      - RespectIgnoreDifferences=true
+      - ServerSideApply=true

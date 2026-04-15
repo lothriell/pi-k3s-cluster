@@ -402,6 +402,25 @@
       changed_when: false
       tags: [restore, verify]
 
+    # Strip kubectl.kubernetes.io/last-applied-configuration so ArgoCD-
+    # managed PVCs don't trip the 3-way-merge immutable-field trap on
+    # their first sync. Without this, ArgoCD sees "last-apply had
+    # volumeName, source doesn't, live has it" and tries to unset it,
+    # hitting "spec: Forbidden: spec is immutable". Dropping to 2-way
+    # merge via annotation removal makes the sync a no-op for those
+    # fields. See docs/17-longhorn-recovery.md §"Gotcha: ArgoCD-managed
+    # PVCs hit immutable-field OutOfSync".
+    - name: Strip last-applied-configuration from restored PVCs (ArgoCD merge fix)
+      ansible.builtin.shell: |
+        kubectl -n {{ item.namespace }} annotate pvc {{ item.pvc }} \
+          kubectl.kubernetes.io/last-applied-configuration- 2>&1 || true
+      loop: "{{ restore_plan }}"
+      loop_control:
+        label: "{{ item.namespace }}/{{ item.pvc }}"
+      when: item.has_backup
+      changed_when: false
+      tags: [restore]
+
     - name: Final restore summary
       ansible.builtin.debug:
         msg: |

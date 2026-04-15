@@ -19,9 +19,19 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: eve-tracker-dev
+  # See eve-tracker-app.yml for the ignoreDifferences rationale —
+  # pre-bound restored PVC has volumeName set; source doesn't.
+  ignoreDifferences:
+    - group: ""
+      kind: PersistentVolumeClaim
+      jsonPointers:
+        - /spec/volumeName
+        - /metadata/labels/longhorn-restore
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+      - RespectIgnoreDifferences=true
+      - ServerSideApply=true
