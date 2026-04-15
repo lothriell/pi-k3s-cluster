@@ -33,6 +33,7 @@
       - nfs-common           # Required for NFS-based persistent volumes
       - jq
       - unzip
+      - chrony              # NTP client; Pi cloud image ships with it, Proxmox VMs don't
     state: present
   tags: [packages]
 
@@ -114,6 +115,15 @@
   ansible.builtin.command: sysctl --system
   changed_when: false
   tags: [kernel]
+
+- name: Ensure /etc/chrony/sources.d exists (some chrony builds don't create it)
+  ansible.builtin.file:
+    path: /etc/chrony/sources.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [ntp]
 
 - name: Replace Ubuntu NTS-only NTP sources with reliable pool.ntp.org
   ansible.builtin.copy:
