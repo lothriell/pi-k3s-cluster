@@ -46,11 +46,19 @@
 # routed through the tailnet and breaks Flannel, MetalLB ARP, and inter-node
 # networking. We pass --accept-routes=false explicitly below and assert the
 # final state afterwards.
+#
+# --ssh turns on the in-tailscaled SSH server so tailnet peers can SSH in
+# without managing authorized_keys. Access is still gated by the tailnet ACL
+# policy — enabling --ssh on the node is a prerequisite, not a grant.
+# Rescue path: if the botched nuke-cluster.sh recurs, tailnet-direct SSH
+# still works even when the subnet route is flapping.
 - name: Configure Tailscale (regular node)
   ansible.builtin.command: >
     tailscale set
     --hostname={{ inventory_hostname }}
     --accept-routes=false
+    --ssh
+    --accept-risk=lose-ssh
   when: inventory_hostname not in groups['k3s_server']
   changed_when: true
   tags: [tailscale]
@@ -61,6 +69,8 @@
     --hostname={{ inventory_hostname }}
     --advertise-routes={{ tailscale_subnet_routes }}
     --accept-routes=false
+    --ssh
+    --accept-risk=lose-ssh
   when: inventory_hostname in groups['k3s_server']
   changed_when: true
   tags: [tailscale]
@@ -71,6 +81,8 @@
     --authkey={{ tailscale_auth_key }}
     --hostname={{ inventory_hostname }}
     --accept-routes=false
+    --ssh
+    --accept-risk=lose-ssh
   when:
     - tailscale_status.rc != 0 or (tailscale_status.stdout | from_json).BackendState != "Running"
     - inventory_hostname not in groups['k3s_server']
@@ -84,6 +96,8 @@
     --hostname={{ inventory_hostname }}
     --advertise-routes={{ tailscale_subnet_routes }}
     --accept-routes=false
+    --ssh
+    --accept-risk=lose-ssh
   when:
     - tailscale_status.rc != 0 or (tailscale_status.stdout | from_json).BackendState != "Running"
     - inventory_hostname in groups['k3s_server']
