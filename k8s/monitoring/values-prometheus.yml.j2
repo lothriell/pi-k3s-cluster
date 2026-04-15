@@ -131,12 +131,18 @@ server:
   # -- Persistent storage so metrics survive pod restarts.
   persistentVolume:
     enabled: true
-    size: 20Gi
-    # 20Gi replicas can't fit on 32Gi Pi eMMC. Use the longhorn-storage
-    # StorageClass which has nodeSelector=storage, and tag the x86 Proxmox
-    # VMs (50Gi disks) with the "storage" Longhorn node tag so replicas
-    # only land there. See feedback_longhorn_storage memory for the
-    # original strategy that this codifies.
+    # 15Gi (not 20Gi) because x86 VMs have ~19Gi free under the 25%
+    # storage-minimal-available-percentage limit after Gitea (2x10Gi) +
+    # Grafana (2x5Gi) + EVE + open-webui + alertmanager replicas are in
+    # place. 15Gi × 2 replicas on x86 fits; 20Gi doesn't. Retention drops
+    # from ~26d to ~19d at the current ~770 MB/day rate. Follow-up work
+    # in task #21: migrate Gitea replicas off x86 OR expand x86 VM disks,
+    # then raise this back to 20Gi+.
+    size: 15Gi
+    # Uses the longhorn-storage StorageClass (nodeSelector=storage) which
+    # only schedules replicas on x86 Proxmox VMs (50Gi disks) — the 32Gi
+    # Pi eMMCs can't host a 15Gi replica alongside everything else.
+    # See feedback_longhorn_storage memory for the strategy.
     storageClass: "longhorn-storage"
 
   # -- Global scrape settings. 30s is a good balance between freshness and
