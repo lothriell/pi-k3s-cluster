@@ -6,11 +6,11 @@
     path: /usr/local/bin/k3s
   register: k3s_agent_binary
 
-- name: Download and install K3s in agent mode joining the server
+- name: Download and install K3s in agent mode joining the HA control plane
   ansible.builtin.shell: |
     curl -sfL https://get.k3s.io | \
       INSTALL_K3S_VERSION="{{ k3s_version }}" \
-      K3S_URL="{{ k3s_server_url }}" \
+      K3S_URL="{{ k3s_api_url }}" \
       K3S_TOKEN="{{ hostvars[groups['k3s_server'][0]]['k3s_node_token'] }}" \
       sh -s - agent
   args:

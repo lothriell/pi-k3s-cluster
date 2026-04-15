@@ -35,6 +35,7 @@
         --set gitea.admin.username={{ gitea_admin_user }}
         --set gitea.admin.password={{ gitea_admin_password }}
         --set gitea.admin.email={{ gitea_admin_email }}
+        --take-ownership
         --wait
         --timeout 10m
       register: gitea_deploy
@@ -50,6 +51,7 @@
         gitea/gitea
         --namespace gitea
         --values {{ gitea_values }}
+        --take-ownership
         --wait
         --timeout 10m
       register: gitea_deploy

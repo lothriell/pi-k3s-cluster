@@ -1,0 +1,379 @@
+---
+# Playbook 12: Restore Longhorn volumes from R2 backups on a fresh cluster.
+#
+# Runs between `make longhorn` and the per-app deploys (`make monitoring`,
+# `make gitea`, `make open-webui`, eve-tracker ArgoCD sync). The goal: when
+# Helm/ArgoCD/kubectl later applies an app that expects a PVC named
+# `<ns>/<name>`, it finds the PVC already there, pre-populated with the data
+# from the last R2 backup. Helm installs use `--take-ownership` to adopt the
+# PVC into release state.
+#
+# For each entry in `restore_targets`:
+#   1. Find the BackupVolume CR whose `status.labels.KubernetesStatus` says
+#      `{"namespace": "<ns>", "pvcName": "<name>"}`. Longhorn auto-populates
+#      these from R2 after `make longhorn` configures the backup target.
+#   2. Read the latest `Backup.status.url` — this is the ready-to-use
+#      `fromBackup` URL for a new Longhorn Volume.
+#   3. Create Longhorn Volume CR `restored-<ns>-<name>` with `fromBackup` set.
+#      Longhorn starts pulling blocks from R2 immediately.
+#   4. Wait for the volume to reach state=detached (restore complete).
+#   5. Create a static PV backed by that volume (CSI driver.longhorn.io).
+#   6. Create the target namespace if missing.
+#   7. Create the target PVC with `spec.volumeName` = our PV → static bind.
+#   8. Fallback: if no BackupVolume matches (e.g. first-ever install with an
+#      empty R2 bucket), create an empty PVC so the downstream app still has
+#      something to mount. Same code path, just no restore.
+#
+# Usage:
+#   make restore-volumes               # run the full restore
+#   ansible-playbook playbooks/12-restore-volumes.yml --tags discover  # just
+#     print what would be restored (dry run via the discover+summary stages).
+
+- name: Restore Longhorn volumes from R2 before app deploys
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: true
+
+  vars:
+    # Stateful PVCs that must survive cluster rebuilds.
+    # Order doesn't matter — each entry is independent.
+    restore_targets:
+      - namespace: gitea
+        pvc: gitea-shared-storage
+        size: 10Gi
+        access_mode: ReadWriteOnce
+        storage_class: longhorn
+      - namespace: monitoring
+        pvc: grafana
+        size: 5Gi
+        access_mode: ReadWriteOnce
+        storage_class: longhorn
+      - namespace: eve-tracker
+        pvc: eve-tracker-data
+        size: 1Gi
+        access_mode: ReadWriteOnce
+        storage_class: longhorn
+      - namespace: eve-tracker-dev
+        pvc: eve-tracker-data
+        size: 1Gi
+        access_mode: ReadWriteOnce
+        storage_class: longhorn
+      - namespace: open-webui
+        pvc: open-webui-data
+        size: 2Gi
+        access_mode: ReadWriteOnce
+        storage_class: longhorn
+
+    # How long to wait for Longhorn to sync BackupVolume CRs from R2 after
+    # backup target config. The backup target pollInterval defaults to 5m.
+    backup_sync_timeout_seconds: 420
+
+    # How long to wait for a single Volume to restore (size-dependent).
+    # 10Gi on a decent R2 link completes in ~3-5 min.
+    restore_timeout_seconds: 900
+
+  tasks:
+    # ------------------------------------------------------------------
+    # 0. Preconditions — Longhorn + backup target ready
+    # ------------------------------------------------------------------
+
+    - name: Verify Longhorn manager pods are ready
+      ansible.builtin.shell: |
+        kubectl -n longhorn-system get pods -l app=longhorn-manager \
+          -o jsonpath='{.items[*].status.phase}' | tr ' ' '\n' | sort -u
+      register: lh_phases
+      retries: 30
+      delay: 10
+      until: lh_phases.stdout == "Running"
+      changed_when: false
+      tags: [preflight]
+
+    - name: Verify Longhorn BackupTarget is configured
+      ansible.builtin.shell: |
+        kubectl -n longhorn-system get backuptargets.longhorn.io default \
+          -o jsonpath='{.spec.backupTargetURL}'
+      register: bt
+      retries: 10
+      delay: 5
+      until: bt.stdout | length > 0
+      changed_when: false
+      tags: [preflight]
+
+    - name: Show configured backup target URL
+      ansible.builtin.debug:
+        msg: "Longhorn backup target: {{ bt.stdout }}"
+      tags: [preflight]
+
+    # ------------------------------------------------------------------
+    # 1. Discover — wait for Longhorn to sync BackupVolume CRs from R2
+    # ------------------------------------------------------------------
+
+    - name: Wait for BackupVolume CRs to sync from R2
+      ansible.builtin.shell: |
+        kubectl -n longhorn-system get backupvolumes.longhorn.io \
+          --no-headers 2>/dev/null | wc -l
+      register: bv_count
+      retries: "{{ (backup_sync_timeout_seconds / 15) | int }}"
+      delay: 15
+      until: bv_count.stdout | int > 0
+      changed_when: false
+      tags: [discover]
+
+    - name: Walk BackupVolumes and extract (ns/pvc → bv_name, last_backup, size)
+      ansible.builtin.shell: |
+        kubectl -n longhorn-system get backupvolumes.longhorn.io -o json | \
+          jq -r '
+            .items[]
+            | select(.status.labels.KubernetesStatus != null)
+            | (.status.labels.KubernetesStatus | fromjson) as $ks
+            | select($ks.namespace != null and $ks.pvcName != null)
+            | "\($ks.namespace)/\($ks.pvcName)|\(.metadata.name)|\(.status.lastBackupName)|\(.status.size // "0")"
+          '
+      register: discovery_raw
+      changed_when: false
+      tags: [discover]
+
+    - name: Build discovered_backups dict (ns/pvc → metadata)
+      ansible.builtin.set_fact:
+        discovered_backups: >-
+          {{
+            discovered_backups | default({}) | combine({
+              (item.split('|')[0]): {
+                'backup_volume_name': item.split('|')[1],
+                'last_backup_name': item.split('|')[2],
+                'size_bytes': item.split('|')[3],
+              }
+            })
+          }}
+      loop: "{{ discovery_raw.stdout_lines }}"
+      loop_control:
+        label: "{{ item.split('|')[0] }}"
+      when: discovery_raw.stdout_lines | length > 0
+      tags: [discover]
+
+    - name: Summarise discovered backups vs. target list
+      ansible.builtin.debug:
+        msg: |
+          Target: {{ item.namespace }}/{{ item.pvc }}  ({{ item.size }})
+          {% set key = item.namespace + '/' + item.pvc %}
+          {% if discovered_backups is defined and key in discovered_backups %}
+          ✓ backup found — {{ discovered_backups[key].backup_volume_name }}, latest {{ discovered_backups[key].last_backup_name }}
+          {% else %}
+          ✗ no backup — will create empty PVC
+          {% endif %}
+      loop: "{{ restore_targets }}"
+      loop_control:
+        label: "{{ item.namespace }}/{{ item.pvc }}"
+      tags: [discover, summary]
+
+    # ------------------------------------------------------------------
+    # 2. Resolve — grab fromBackup URL from each matching Backup CR
+    # ------------------------------------------------------------------
+
+    - name: Resolve restore URL per target (from Backup CR status.url)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        KEY="{{ item.namespace }}/{{ item.pvc }}"
+        {% set key = item.namespace + '/' + item.pvc %}
+        {% if discovered_backups is defined and key in discovered_backups %}
+        BACKUP="{{ discovered_backups[key].last_backup_name }}"
+        kubectl -n longhorn-system get backups.longhorn.io "$BACKUP" \
+          -o jsonpath='{.status.url}|{.status.volumeName}|{.status.size}'
+        {% else %}
+        echo "NO_BACKUP"
+        {% endif %}
+      loop: "{{ restore_targets }}"
+      loop_control:
+        label: "{{ item.namespace }}/{{ item.pvc }}"
+      register: resolved_urls
+      changed_when: false
+      tags: [resolve]
+
+    - name: Build restore_plan (final list with URL / source volume / size)
+      ansible.builtin.set_fact:
+        restore_plan: >-
+          {{
+            restore_plan | default([]) + [
+              item.item | combine({
+                'has_backup': (item.stdout != 'NO_BACKUP'),
+                'from_backup_url': (item.stdout.split('|')[0] if item.stdout != 'NO_BACKUP' else ''),
+                'source_volume': (item.stdout.split('|')[1] if item.stdout != 'NO_BACKUP' else ''),
+                'size_bytes': (item.stdout.split('|')[2] if item.stdout != 'NO_BACKUP' else ''),
+                'restored_volume_name': ('restored-' + item.item.namespace + '-' + item.item.pvc) | regex_replace('[^a-z0-9-]', '-'),
+                'pv_name': ('restored-pv-' + item.item.namespace + '-' + item.item.pvc) | regex_replace('[^a-z0-9-]', '-'),
+              })
+            ]
+          }}
+      loop: "{{ resolved_urls.results }}"
+      loop_control:
+        label: "{{ item.item.namespace }}/{{ item.item.pvc }}"
+      tags: [resolve]
+
+    - name: Show resolved restore plan
+      ansible.builtin.debug:
+        var: restore_plan
+      tags: [resolve, summary]
+
+    # ------------------------------------------------------------------
+    # 3. Create Longhorn Volume CRs (triggers R2 restore)
+    # ------------------------------------------------------------------
+
+    - name: Create Longhorn Volume CRs with fromBackup URLs
+      ansible.builtin.shell: |
+        kubectl apply -f - <<EOF
+        apiVersion: longhorn.io/v1beta2
+        kind: Volume
+        metadata:
+          name: {{ item.restored_volume_name }}
+          namespace: longhorn-system
+        spec:
+          frontend: blockdev
+          fromBackup: "{{ item.from_backup_url }}"
+          numberOfReplicas: 2
+          size: "{{ item.size_bytes }}"
+          staleReplicaTimeout: 30
+        EOF
+      loop: "{{ restore_plan }}"
+      loop_control:
+        label: "{{ item.namespace }}/{{ item.pvc }}"
+      when: item.has_backup
+      tags: [restore]
+
+    - name: Wait for each restored Volume to finish (state=detached)
+      ansible.builtin.shell: |
+        kubectl -n longhorn-system get volume {{ item.restored_volume_name }} \
+          -o jsonpath='{.status.state}'
+      loop: "{{ restore_plan }}"
+      loop_control:
+        label: "{{ item.namespace }}/{{ item.pvc }}"
+      when: item.has_backup
+      register: vol_state
+      retries: "{{ (restore_timeout_seconds / 15) | int }}"
+      delay: 15
+      until: vol_state.stdout == "detached"
+      changed_when: false
+      tags: [restore]
+
+    # ------------------------------------------------------------------
+    # 4. Create static PVs pointing at the restored Longhorn volumes
+    # ------------------------------------------------------------------
+
+    - name: Create static PVs for restored volumes
+      ansible.builtin.shell: |
+        kubectl apply -f - <<EOF
+        apiVersion: v1
+        kind: PersistentVolume
+        metadata:
+          name: {{ item.pv_name }}
+          labels:
+            longhorn-restore: "{{ item.namespace }}-{{ item.pvc }}"
+        spec:
+          capacity:
+            storage: {{ item.size }}
+          accessModes:
+            - {{ item.access_mode }}
+          persistentVolumeReclaimPolicy: Retain
+          storageClassName: {{ item.storage_class }}
+          volumeMode: Filesystem
+          csi:
+            driver: driver.longhorn.io
+            fsType: ext4
+            volumeHandle: {{ item.restored_volume_name }}
+            volumeAttributes:
+              numberOfReplicas: "2"
+              staleReplicaTimeout: "30"
+          claimRef:
+            namespace: {{ item.namespace }}
+            name: {{ item.pvc }}
+        EOF
+      loop: "{{ restore_plan }}"
+      loop_control:
+        label: "{{ item.namespace }}/{{ item.pvc }}"
+      when: item.has_backup
+      tags: [restore]
+
+    # ------------------------------------------------------------------
+    # 5. Ensure target namespaces exist + create PVCs
+    # ------------------------------------------------------------------
+
+    - name: Create target namespaces if missing
+      ansible.builtin.shell: |
+        kubectl create namespace {{ item.namespace }} \
+          --dry-run=client -o yaml | kubectl apply -f -
+      loop: "{{ restore_plan }}"
+      loop_control:
+        label: "{{ item.namespace }}"
+      changed_when: false
+      tags: [restore]
+
+    - name: Create PVCs bound to restored PVs (when backup exists)
+      ansible.builtin.shell: |
+        kubectl apply -f - <<EOF
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: {{ item.pvc }}
+          namespace: {{ item.namespace }}
+          labels:
+            longhorn-restore: "{{ item.namespace }}-{{ item.pvc }}"
+        spec:
+          accessModes:
+            - {{ item.access_mode }}
+          storageClassName: {{ item.storage_class }}
+          resources:
+            requests:
+              storage: {{ item.size }}
+          volumeName: {{ item.pv_name }}
+        EOF
+      loop: "{{ restore_plan }}"
+      loop_control:
+        label: "{{ item.namespace }}/{{ item.pvc }}"
+      when: item.has_backup
+      tags: [restore]
+
+    - name: Create empty PVCs for targets with no backup (fresh install path)
+      ansible.builtin.shell: |
+        kubectl apply -f - <<EOF
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: {{ item.pvc }}
+          namespace: {{ item.namespace }}
+        spec:
+          accessModes:
+            - {{ item.access_mode }}
+          storageClassName: {{ item.storage_class }}
+          resources:
+            requests:
+              storage: {{ item.size }}
+        EOF
+      loop: "{{ restore_plan }}"
+      loop_control:
+        label: "{{ item.namespace }}/{{ item.pvc }}"
+      when: not item.has_backup
+      tags: [restore]
+
+    - name: Wait for all PVCs to be Bound
+      ansible.builtin.shell: |
+        kubectl -n {{ item.namespace }} get pvc {{ item.pvc }} \
+          -o jsonpath='{.status.phase}'
+      loop: "{{ restore_plan }}"
+      loop_control:
+        label: "{{ item.namespace }}/{{ item.pvc }}"
+      register: pvc_phase
+      retries: 40
+      delay: 15
+      until: pvc_phase.stdout == "Bound"
+      changed_when: false
+      tags: [restore, verify]
+
+    - name: Final restore summary
+      ansible.builtin.debug:
+        msg: |
+          ┌─ Longhorn volume restore complete ─
+          {% for item in restore_plan %}
+          │ {{ '%-35s' | format(item.namespace + '/' + item.pvc) }} {{ '[RESTORED]' if item.has_backup else '[empty    ]' }}{% if item.has_backup %}  pv={{ item.pv_name }}{% endif %}
+          {% endfor %}
+          └───
+      tags: [restore, verify, summary]

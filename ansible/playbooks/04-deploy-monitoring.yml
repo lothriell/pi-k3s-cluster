@@ -136,6 +136,7 @@
         grafana/grafana
         --namespace monitoring
         --values {{ grafana_values }}
+        --take-ownership
         --wait
         --timeout 10m
       register: grafana_deploy

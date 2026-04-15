@@ -1,0 +1,23 @@
+---
+# /etc/rancher/k3s/config.yaml — persistent K3s server config.
+#
+# CLI flags in the install command handle one-time bootstrap options
+# (`--cluster-init`, `--server`, token). This file holds ongoing runtime
+# config that must survive reinstalls; K3s's install script does NOT
+# overwrite this file (unlike /etc/systemd/system/k3s.service.env).
+#
+# Mode 0600, owned by root — do not put secrets in the systemd unit file.
+
+{% if r2_access_key_id is defined %}
+# --- Embedded etcd offsite snapshots (Cloudflare R2 via S3 API) ---
+# K3s's built-in snapshot loop handles scheduling, retention, and upload.
+# Replaces the SQLite-era /usr/local/bin/k3s-sqlite-backup.sh timer.
+etcd-s3: true
+etcd-s3-access-key: "{{ r2_access_key_id }}"
+etcd-s3-secret-key: "{{ r2_secret_access_key }}"
+etcd-s3-endpoint: "{{ r2_endpoint_host }}"
+etcd-s3-bucket: "{{ r2_backup_bucket }}"
+etcd-s3-folder: "k3s-etcd-snapshots"
+etcd-snapshot-schedule-cron: "0 */6 * * *"
+etcd-snapshot-retention: 12
+{% endif %}

@@ -32,6 +32,20 @@
   gather_facts: false
 
   tasks:
+    # After task #8 (HA migration) this playbook is a no-op — embedded etcd
+    # replaces SQLite, and K3s's native --etcd-s3 flags should take over
+    # offsite snapshots. This short-circuit keeps `make backup` idempotent
+    # on both old and new clusters.
+    - name: Detect datastore mode (SQLite vs embedded etcd)
+      ansible.builtin.stat:
+        path: /var/lib/rancher/k3s/server/db/state.db
+      register: sqlite_db
+      tags: [always]
+
+    - name: Skip SQLite backup config on etcd clusters (HA)
+      ansible.builtin.meta: end_host
+      when: not sqlite_db.stat.exists
+
     - name: Remove any leftover etcd-s3 config from earlier attempts
       ansible.builtin.file:
         path: /etc/rancher/k3s/config.yaml.d/10-backups.yaml

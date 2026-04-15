@@ -1,5 +1,29 @@
 ---
-# K3s server (control plane) installation tasks
+# K3s HA control plane installation.
+#
+# Called with `serial: 1` from 02-install-k3s.yml so hosts install sequentially:
+#   - First host in `k3s_server` → `--cluster-init` (bootstraps embedded etcd).
+#   - Subsequent hosts → `--server https://<first-server-ip>:6443` with the
+#     shared token fetched from the first server's hostvars.
+#
+# Joining servers bootstrap against the first server's **direct IP**, not the
+# VIP, because kube-vip can't assign the VIP until at least one server's API
+# is up. Once the cluster is running, kube-vip's DaemonSet (dropped as an
+# auto-apply manifest in /var/lib/rancher/k3s/server/manifests/) owns the VIP
+# and client traffic (kubectl, agents) uses it.
+
+- name: Compute role-local facts (first server, tls-sans, join URL)
+  ansible.builtin.set_fact:
+    is_first_server: "{{ inventory_hostname == groups['k3s_server'][0] }}"
+    k3s_first_server_host: "{{ groups['k3s_server'][0] }}"
+    k3s_first_server_ip: "{{ hostvars[groups['k3s_server'][0]].ansible_host }}"
+    k3s_tls_sans: >-
+      {{
+        ([k3s_api_vip] +
+         (groups['k3s_server'] | map('extract', hostvars, 'ansible_host') | list))
+        | unique
+      }}
+  tags: [always]
 
 - name: Check if K3s is already installed
   ansible.builtin.stat:
@@ -7,65 +31,175 @@
   register: k3s_binary
   tags: [always]
 
-- name: Download and install K3s in server mode
+# --- Persistent K3s config (etcd-s3 snapshots) ------------------------------
+# Dropped BEFORE the install command so first-boot reads it. K3s's install
+# script does not overwrite /etc/rancher/k3s/config.yaml, so secrets here
+# survive reinstalls. Mode 0600 keeps R2 credentials off systemd unit files.
+
+- name: Ensure /etc/rancher/k3s exists
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [k3s, config]
+
+- name: Deploy K3s server config.yaml (etcd-s3 snapshot settings)
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  notify: restart k3s
+  tags: [k3s, config, backups]
+
+# --- First server (embedded etcd bootstrap) ---------------------------------
+
+- name: Install K3s on first server (cluster-init, embedded etcd)
   ansible.builtin.shell: |
     curl -sfL https://get.k3s.io | \
       INSTALL_K3S_VERSION="{{ k3s_version }}" \
       sh -s - server \
+        --cluster-init \
         --disable servicelb \
         --write-kubeconfig-mode 600 \
-        --tls-san "{{ k3s_server_ip }}"
+        {% for san in k3s_tls_sans %}--tls-san "{{ san }}" {% endfor %}
   args:
     creates: /usr/local/bin/k3s
-  when: not k3s_binary.stat.exists
+  when:
+    - is_first_server
+    - not k3s_binary.stat.exists
   notify: restart k3s
   tags: [k3s, install]
 
-- name: Ensure K3s service is enabled and running
+# --- kube-vip manifest (drop on all servers; K3s auto-applies) --------------
+#
+# The manifest must exist *before* a server starts so K3s's bootstrap picks
+# it up on the first boot. For joining servers, it also guarantees the VIP
+# DaemonSet re-schedules onto them as soon as they register.
+
+- name: Ensure K3s server manifests directory exists
+  ansible.builtin.file:
+    path: /var/lib/rancher/k3s/server/manifests
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [k3s, kube-vip]
+
+- name: Deploy kube-vip manifest (auto-applied by K3s on startup)
+  ansible.builtin.template:
+    src: kube-vip.yaml.j2
+    dest: /var/lib/rancher/k3s/server/manifests/kube-vip.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  tags: [k3s, kube-vip]
+
+# --- Enable + wait on first server ------------------------------------------
+
+- name: Ensure K3s service is enabled and running (first server)
   ansible.builtin.systemd:
     name: k3s
     enabled: true
     state: started
     daemon_reload: true
+  when: is_first_server
   tags: [k3s, service]
 
 - name: Enforce kubeconfig mode 0600 (idempotent on existing installs)
   ansible.builtin.file:
     path: /etc/rancher/k3s/k3s.yaml
     mode: "0600"
+  when: is_first_server
   tags: [k3s, kubeconfig, security]
 
-- name: Wait for K3s to be ready (node-token must exist)
+- name: Wait for first server node-token to exist
   ansible.builtin.wait_for:
     path: /var/lib/rancher/k3s/server/node-token
-    timeout: 120
+    timeout: 180
+  when: is_first_server
   tags: [k3s]
 
-- name: Wait for K3s API server to respond
+- name: Wait for first server API to respond
   ansible.builtin.command: k3s kubectl get nodes
   register: k3s_ready
   retries: 30
   delay: 10
   until: k3s_ready.rc == 0
   changed_when: false
+  when: is_first_server
   tags: [k3s]
 
-- name: Read node token for agent registration
+- name: Read node token on first server
   ansible.builtin.slurp:
     src: /var/lib/rancher/k3s/server/node-token
   register: k3s_node_token_raw
+  when: is_first_server
   tags: [k3s, token]
 
-- name: Store node token as fact for agent nodes to consume
+- name: Publish node token as fact (consumed by joining servers + agents)
   ansible.builtin.set_fact:
     k3s_node_token: "{{ k3s_node_token_raw.content | b64decode | trim }}"
+  when: is_first_server
   tags: [k3s, token]
 
-- name: Fetch kubeconfig from server to local machine
+# --- Joining servers (HA etcd members) --------------------------------------
+
+- name: Install K3s on joining server (HA, etcd join)
+  ansible.builtin.shell: |
+    curl -sfL https://get.k3s.io | \
+      INSTALL_K3S_VERSION="{{ k3s_version }}" \
+      K3S_TOKEN="{{ hostvars[k3s_first_server_host]['k3s_node_token'] }}" \
+      sh -s - server \
+        --server "https://{{ k3s_first_server_ip }}:6443" \
+        --disable servicelb \
+        --write-kubeconfig-mode 600 \
+        {% for san in k3s_tls_sans %}--tls-san "{{ san }}" {% endfor %}
+  args:
+    creates: /usr/local/bin/k3s
+  when:
+    - not is_first_server
+    - not k3s_binary.stat.exists
+  notify: restart k3s
+  tags: [k3s, install]
+
+- name: Ensure K3s service is enabled and running (joining server)
+  ansible.builtin.systemd:
+    name: k3s
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: not is_first_server
+  tags: [k3s, service]
+
+- name: Enforce kubeconfig mode 0600 on joining server
+  ansible.builtin.file:
+    path: /etc/rancher/k3s/k3s.yaml
+    mode: "0600"
+  when: not is_first_server
+  tags: [k3s, kubeconfig, security]
+
+- name: Wait for joining server API to respond
+  ansible.builtin.command: k3s kubectl get nodes
+  register: k3s_ready_joining
+  retries: 30
+  delay: 10
+  until: k3s_ready_joining.rc == 0
+  changed_when: false
+  when: not is_first_server
+  tags: [k3s]
+
+# --- Local kubeconfig fetch (first server only, points at VIP) --------------
+
+- name: Fetch kubeconfig from first server to local machine
   ansible.builtin.fetch:
     src: /etc/rancher/k3s/k3s.yaml
     dest: /tmp/k3s-kubeconfig.yaml
     flat: true
+  when: is_first_server
   tags: [k3s, kubeconfig]
 
 - name: Ensure local ~/.kube directory exists
@@ -75,24 +209,27 @@
     mode: "0755"
   delegate_to: localhost
   become: false
+  run_once: true
   tags: [k3s, kubeconfig]
 
-- name: Copy kubeconfig to local ~/.kube/config with correct server IP
+- name: Copy kubeconfig to local ~/.kube/config
   ansible.builtin.copy:
     src: /tmp/k3s-kubeconfig.yaml
     dest: "{{ lookup('env', 'HOME') }}/.kube/config"
     mode: "0600"
   delegate_to: localhost
   become: false
+  run_once: true
   tags: [k3s, kubeconfig]
 
-- name: Replace 127.0.0.1 with actual server IP in local kubeconfig
+- name: Replace 127.0.0.1 with HA VIP in local kubeconfig
   ansible.builtin.replace:
     path: "{{ lookup('env', 'HOME') }}/.kube/config"
     regexp: 'https://127\.0\.0\.1:6443'
-    replace: "https://{{ k3s_server_ip }}:6443"
+    replace: "{{ k3s_api_url }}"
   delegate_to: localhost
   become: false
+  run_once: true
   tags: [k3s, kubeconfig]
 
 - name: Clean up temporary kubeconfig
@@ -101,4 +238,5 @@
     state: absent
   delegate_to: localhost
   become: false
+  run_once: true
   tags: [k3s, kubeconfig]

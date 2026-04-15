@@ -5,9 +5,10 @@ set -euo pipefail
 # Raspberry Pi CM5 K3s Cluster - Nuke Script
 # =============================================================================
 
-# Node list (adjust to match your network)
-SERVER="rpi-k3s-1"
-AGENTS=("rpi-k3s-2" "rpi-k3s-3" "rpi-k3s-4")
+# Node list — matches the HA topology (3 Pi servers + 1 Pi agent + 2 x86 agents).
+# x86 nodes use ~/.ssh/config ProxyJump aliases (see reference_ssh_routing memory).
+SERVERS=("rpi-k3s-1" "rpi-k3s-2" "rpi-k3s-3")
+AGENTS=("rpi-k3s-4" "k3s-x86-1" "k3s-x86-2")
 SSH_USER="ansible"
 
 # -----------------------------------------------------------------------------
@@ -63,15 +64,17 @@ done
 echo ""
 
 # -----------------------------------------------------------------------------
-# Uninstall K3s server
+# Uninstall K3s servers (HA control plane)
 # -----------------------------------------------------------------------------
-echo "  Uninstalling K3s server on ${SERVER}..."
-if ssh -o ConnectTimeout=10 "${SSH_USER}@${SERVER}" \
-    "sudo /usr/local/bin/k3s-uninstall.sh" 2>/dev/null; then
-    echo "    ${SERVER}: done"
-else
-    echo "    ${SERVER}: skipped (not reachable or already uninstalled)"
-fi
+for server in "${SERVERS[@]}"; do
+    echo "  Uninstalling K3s server on ${server}..."
+    if ssh -o ConnectTimeout=10 "${SSH_USER}@${server}" \
+        "sudo /usr/local/bin/k3s-uninstall.sh" 2>/dev/null; then
+        echo "    ${server}: done"
+    else
+        echo "    ${server}: skipped (not reachable or already uninstalled)"
+    fi
+done
 
 echo ""
 

@@ -53,7 +53,7 @@ help: ## Show all available targets with descriptions
 	@echo ""
 
 .PHONY: all
-all: prepare k3s post-install metallb tailscale longhorn monitoring gitea argocd ## Full cluster build (prepare -> k3s -> post-install -> metallb -> tailscale -> longhorn -> monitoring -> gitea -> argocd)
+all: prepare k3s post-install metallb tailscale longhorn backup restore-volumes monitoring gitea argocd ## Full cluster build (prepare -> k3s -> post-install -> metallb -> tailscale -> longhorn -> backup -> restore-volumes -> monitoring -> gitea -> argocd)
 
 # =============================================================================
 # Provisioning Stages
@@ -130,6 +130,14 @@ cloudflare: ## Deploy Cloudflare tunnel for external access
 backup: ## Configure etcd + Longhorn backups (local snapshots + R2 offsite)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/11-configure-backups.yml
 
+.PHONY: restore-volumes
+restore-volumes: ## Restore stateful PVCs from R2 backups (runs after longhorn+backup on rebuild)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/12-restore-volumes.yml
+
+.PHONY: restore-volumes-dry-run
+restore-volumes-dry-run: ## Print which PVCs would be restored from R2 (safe, read-only)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/12-restore-volumes.yml --tags "preflight,discover,resolve"
+
 .PHONY: longhorn
 longhorn: ## Deploy Longhorn distributed storage
 	$(HELM) repo add longhorn https://charts.longhorn.io 2>/dev/null || true
@@ -170,15 +178,15 @@ ping: ## Test Ansible connectivity to all nodes
 # =============================================================================
 
 .PHONY: ssh-1
-ssh-1: ## SSH into rpi-k3s-1 (agent)
+ssh-1: ## SSH into rpi-k3s-1 (HA server, cluster-init)
 	ssh $(PI_USER)@$(PI_1)
 
 .PHONY: ssh-2
-ssh-2: ## SSH into rpi-k3s-2 (server/control plane)
+ssh-2: ## SSH into rpi-k3s-2 (HA server, joining)
 	ssh $(PI_USER)@$(PI_2)
 
 .PHONY: ssh-3
-ssh-3: ## SSH into rpi-k3s-3 (agent)
+ssh-3: ## SSH into rpi-k3s-3 (HA server, joining)
 	ssh $(PI_USER)@$(PI_3)
 
 .PHONY: ssh-4

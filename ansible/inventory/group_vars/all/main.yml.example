@@ -16,9 +16,17 @@ node_ip_2: 10.0.0.12
 node_ip_3: 10.0.0.13
 node_ip_4: 10.0.0.14
 
-# K3s server endpoint (which node is control plane)
+# K3s HA control plane VIP (kube-vip ARP mode).
+# Pick an IP in the cluster subnet that's outside the MetalLB pool and not
+# assigned to any node. This is what kubectl, agents, and ArgoCD connect to.
+k3s_api_vip: 10.0.0.10
+k3s_api_url: "https://{{ k3s_api_vip }}:6443"
+
+# Legacy alias — kept for out-of-cluster consumers that hit a NodePort on a
+# specific Pi (e.g. Promtail → Loki NodePort 31100). NodePort routing is
+# node-local, so these need a concrete node IP, not the VIP.
 k3s_server_ip: "{{ node_ip_1 }}"
-k3s_server_url: "https://{{ k3s_server_ip }}:6443"
+k3s_server_url: "{{ k3s_api_url }}"
 
 # MetalLB IP range for LoadBalancer services
 metallb_ip_range: "10.0.0.100-10.0.0.110"
