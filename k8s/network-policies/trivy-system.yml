@@ -1,7 +1,11 @@
 # NetworkPolicy: trivy-system namespace
 #
-# Trivy Operator scans workloads and exposes metrics on port 80. Prometheus
-# (monitoring ns) scrapes via extraScrapeConfigs in values-prometheus.yml.
+# Trivy Operator scans workloads and exposes metrics on pod port 8080.
+# (The `trivy-operator` Service publishes port 80 but maps to targetPort
+# 8080 on the pod, and the service is headless — Prometheus scrapes the
+# endpoint directly on 8080. NetworkPolicy enforces on pod ports, not
+# service ports, so this rule must allow 8080.)
+# Prometheus (monitoring ns) scrapes via extraScrapeConfigs in values-prometheus.yml.
 # Nothing else needs to talk to it — the operator is purely a watcher.
 ---
 apiVersion: networking.k8s.io/v1
@@ -20,4 +24,4 @@ spec:
               kubernetes.io/metadata.name: monitoring
       ports:
         - protocol: TCP
-          port: 80
+          port: 8080

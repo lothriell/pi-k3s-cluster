@@ -1,0 +1,151 @@
+---
+# =============================================================================
+# alertmanager-ntfy bridge  (Jinja2 template — rendered by 04-deploy-monitoring)
+# =============================================================================
+# Sits between Alertmanager and the self-hosted ntfy server, formatting raw
+# webhook JSON into nice human-readable notifications with priority + tags.
+# Upstream: https://github.com/alexbakker/alertmanager-ntfy  (multi-arch image)
+#
+# Credentials (vault.yml) are inlined at deploy time, then the rendered file
+# is removed. Same pattern as values-prometheus.yml.j2.
+# =============================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alertmanager-ntfy
+  namespace: monitoring
+type: Opaque
+stringData:
+  config.yml: |
+    http:
+      addr: :8000
+      auth:
+        # Credentials Alertmanager presents when POSTing to the bridge.
+        username: "{{ ntfy_alertmanager_user }}"
+        password: "{{ ntfy_alertmanager_password }}"
+    ntfy:
+      baseurl: "{{ ntfy_base_url }}"
+      auth:
+        basic:
+          username: "{{ ntfy_alertmanager_user }}"
+          password: "{{ ntfy_alertmanager_password }}"
+      notification:
+        topic: "{{ ntfy_k8s_alerts_topic }}"
+{% raw %}
+        # gval expression — sees the alert struct as JSON keys
+        # (status, labels.*). Critical → urgent; warning → default;
+        # resolved → low.
+        priority: |
+          status == "resolved" ? "low" : (labels.severity == "critical" ? "urgent" : "default")
+        tags:
+          - tag: white_check_mark
+            condition: status == "resolved"
+          - tag: rotating_light
+            condition: status == "firing" && labels.severity == "critical"
+          - tag: warning
+            condition: status == "firing" && labels.severity == "warning"
+        templates:
+          # Go text/template — uses Go field names (.Status, .Labels, .Annotations).
+          title: |
+            {{- if eq .Status "resolved" -}}
+            Resolved: {{ index .Labels "alertname" }}
+            {{- else -}}
+            [{{ index .Labels "severity" }}] {{ index .Labels "alertname" }}{{ if index .Labels "instance" }} on {{ index .Labels "instance" }}{{ end }}
+            {{- end }}
+          description: |
+            {{ index .Annotations "summary" }}
+
+            {{ index .Annotations "description" }}
+          headers:
+            X-Click: |
+              {{ .GeneratorURL }}
+      async: false
+{% endraw %}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager-ntfy
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: alertmanager-ntfy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alertmanager-ntfy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: alertmanager-ntfy
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: alertmanager-ntfy
+          image: ghcr.io/alexbakker/alertmanager-ntfy:1.2.1
+          imagePullPolicy: IfNotPresent
+          args:
+            - --configs
+            - /etc/alertmanager-ntfy/config.yml
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager-ntfy
+              readOnly: true
+      volumes:
+        - name: config
+          secret:
+            secretName: alertmanager-ntfy
+            defaultMode: 0400
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager-ntfy
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: alertmanager-ntfy
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: alertmanager-ntfy
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP

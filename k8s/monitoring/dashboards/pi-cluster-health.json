@@ -849,7 +849,7 @@
     "to": "now"
   },
   "timepicker": {},
-  "timezone": "utc",
+  "timezone": "browser",
   "title": "Pi K3s Cluster Health",
   "uid": "pi-k3s-health",
   "version": 1

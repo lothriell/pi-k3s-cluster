@@ -49,9 +49,12 @@ alertmanager:
           continue: false
     receivers:
       - name: 'null'
+      # Routed through the alertmanager-ntfy bridge so notifications arrive
+      # nicely formatted (title / body / priority / tags) instead of raw
+      # Alertmanager JSON. Bridge config: k8s/monitoring/alertmanager-ntfy.yml.j2
       - name: ntfy
         webhook_configs:
-          - url: "{{ ntfy_base_url }}/{{ ntfy_k8s_alerts_topic }}"
+          - url: "http://alertmanager-ntfy.monitoring.svc.cluster.local:8000/hook"
             send_resolved: true
             http_config:
               basic_auth:
@@ -302,6 +305,20 @@ serverFiles:
             annotations:
               summary: "Pod {{ '{{' }} $labels.namespace {{ '}}' }}/{{ '{{' }} $labels.pod {{ '}}' }} not ready"
               description: "Pod has been in a non-ready phase for 15 minutes."
+      - name: trivy
+        rules:
+          # Delta-based: fires when the cluster-wide CRITICAL count rises vs
+          # 6 h ago. Avoids paging on the existing baseline (~88 CVEs in
+          # upstream-managed workloads). Resolves automatically when a chart
+          # upgrade or image rebuild drives the count back down.
+          - alert: TrivyCriticalVulnerabilityIncrease
+            expr: sum(trivy_image_vulnerabilities{severity="Critical"}) - sum(trivy_image_vulnerabilities{severity="Critical"} offset 6h) > 0
+            for: 30m
+            labels:
+              severity: critical
+            annotations:
+              summary: "{{ '{{' }} $value {{ '}}' }} new critical CVE(s) detected in cluster images"
+              description: "Cluster-wide Trivy CRITICAL count rose vs 6h ago. Inspect: kubectl get vulnerabilityreports -A -o json | jq '[.items[] | select(.report.summary.criticalCount > 0)]'"
       - name: longhorn
         rules:
           - alert: LonghornVolumeDegraded

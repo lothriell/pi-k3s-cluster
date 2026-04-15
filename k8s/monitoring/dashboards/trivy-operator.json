@@ -199,18 +199,15 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "description": "One bar per namespace, severities stacked. Sorted by total count desc. Always shows the whole cluster — the $namespace filter above does NOT apply here on purpose.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": {
             "axisLabel": "",
-            "drawStyle": "bars",
-            "fillOpacity": 80,
-            "stacking": { "mode": "normal", "group": "A" },
-            "barAlignment": 0,
-            "lineWidth": 0,
-            "pointSize": 5,
-            "showPoints": "never"
+            "fillOpacity": 90,
+            "lineWidth": 1,
+            "axisPlacement": "auto"
           },
           "thresholds": { "mode": "off", "steps": [] }
         },
@@ -221,46 +218,182 @@
           { "matcher": { "id": "byName", "options": "Low" }, "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }] }
         ]
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 6 },
+      "gridPos": { "h": 20, "w": 12, "x": 0, "y": 6 },
       "id": 6,
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "multi" }
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "showValue": "auto",
+        "stacking": "normal",
+        "groupWidth": 0.7,
+        "barWidth": 0.85,
+        "barRadius": 0,
+        "xField": "namespace",
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true, "calcs": [] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
       },
-      "title": "Vulnerabilities by Namespace & Severity",
+      "title": "Vulnerabilities by Namespace (all severities, stacked)",
       "type": "barchart",
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "__name__": true, "instance": true, "job": true },
+            "renameByName": {
+              "Value #A": "Critical",
+              "Value #B": "High",
+              "Value #C": "Medium",
+              "Value #D": "Low"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              { "field": "Critical", "desc": true }
+            ]
+          }
+        }
+      ],
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
           "expr": "sum by (namespace) (trivy_image_vulnerabilities{severity=\"Critical\"})",
-          "legendFormat": "Critical",
+          "format": "table",
+          "instant": true,
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
           "expr": "sum by (namespace) (trivy_image_vulnerabilities{severity=\"High\"})",
-          "legendFormat": "High",
+          "format": "table",
+          "instant": true,
           "refId": "B"
         },
         {
           "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
           "expr": "sum by (namespace) (trivy_image_vulnerabilities{severity=\"Medium\"})",
-          "legendFormat": "Medium",
+          "format": "table",
+          "instant": true,
           "refId": "C"
         },
         {
           "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
           "expr": "sum by (namespace) (trivy_image_vulnerabilities{severity=\"Low\"})",
-          "legendFormat": "Low",
+          "format": "table",
+          "instant": true,
+          "refId": "D"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "description": "Drill-down: one bar per image in the currently-selected $namespace(s). Pick a namespace from the top-of-dashboard filter to scope this panel. Use 'All' to see every image.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "",
+            "fillOpacity": 90,
+            "lineWidth": 1,
+            "axisPlacement": "auto"
+          },
+          "thresholds": { "mode": "off", "steps": [] }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Critical" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "High" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Medium" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Low" }, "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 20, "w": 12, "x": 12, "y": 6 },
+      "id": 14,
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "showValue": "auto",
+        "stacking": "normal",
+        "groupWidth": 0.7,
+        "barWidth": 0.85,
+        "barRadius": 0,
+        "xField": "image_repository",
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true, "calcs": [] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Vulnerabilities by Image — namespace: $namespace",
+      "type": "barchart",
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "__name__": true, "instance": true, "job": true, "namespace": true },
+            "renameByName": {
+              "Value #A": "Critical",
+              "Value #B": "High",
+              "Value #C": "Medium",
+              "Value #D": "Low"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              { "field": "Critical", "desc": true }
+            ]
+          }
+        }
+      ],
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "sum by (image_repository) (trivy_image_vulnerabilities{severity=\"Critical\",namespace=~\"$namespace\"})",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "sum by (image_repository) (trivy_image_vulnerabilities{severity=\"High\",namespace=~\"$namespace\"})",
+          "format": "table",
+          "instant": true,
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "sum by (image_repository) (trivy_image_vulnerabilities{severity=\"Medium\",namespace=~\"$namespace\"})",
+          "format": "table",
+          "instant": true,
+          "refId": "C"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "sum by (image_repository) (trivy_image_vulnerabilities{severity=\"Low\",namespace=~\"$namespace\"})",
+          "format": "table",
+          "instant": true,
           "refId": "D"
         }
       ]
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 },
       "id": 102,
-      "title": "Vulnerabilities by Image",
+      "title": "Vulnerabilities by Image (filtered table)",
       "type": "row"
     },
     {
@@ -322,14 +455,15 @@
           }
         ]
       },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 15 },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 27 },
       "id": 7,
+      "description": "Obeys the $namespace filter at the top of the dashboard.",
       "options": {
         "showHeader": true,
         "sortBy": [{ "displayName": "Critical", "desc": true }],
         "footer": { "show": false }
       },
-      "title": "Vulnerabilities per Image",
+      "title": "Vulnerabilities per Image — namespace: $namespace",
       "type": "table",
       "transformations": [
         { "id": "seriesToColumns", "options": { "byField": "image_repository" } },
@@ -351,7 +485,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
-          "expr": "sum by (image_repository, namespace) (trivy_image_vulnerabilities{severity=\"Critical\"})",
+          "expr": "sum by (image_repository, namespace) (trivy_image_vulnerabilities{severity=\"Critical\",namespace=~\"$namespace\"})",
           "legendFormat": "",
           "refId": "A",
           "format": "table",
@@ -359,7 +493,7 @@
         },
         {
           "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
-          "expr": "sum by (image_repository, namespace) (trivy_image_vulnerabilities{severity=\"High\"})",
+          "expr": "sum by (image_repository, namespace) (trivy_image_vulnerabilities{severity=\"High\",namespace=~\"$namespace\"})",
           "legendFormat": "",
           "refId": "B",
           "format": "table",
@@ -367,7 +501,7 @@
         },
         {
           "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
-          "expr": "sum by (image_repository, namespace) (trivy_image_vulnerabilities{severity=\"Medium\"})",
+          "expr": "sum by (image_repository, namespace) (trivy_image_vulnerabilities{severity=\"Medium\",namespace=~\"$namespace\"})",
           "legendFormat": "",
           "refId": "C",
           "format": "table",
@@ -375,7 +509,7 @@
         },
         {
           "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
-          "expr": "sum by (image_repository, namespace) (trivy_image_vulnerabilities{severity=\"Low\"})",
+          "expr": "sum by (image_repository, namespace) (trivy_image_vulnerabilities{severity=\"Low\",namespace=~\"$namespace\"})",
           "legendFormat": "",
           "refId": "D",
           "format": "table",
@@ -385,7 +519,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 37 },
       "id": 103,
       "title": "Config Audit",
       "type": "row"
@@ -405,7 +539,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 26 },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 38 },
       "id": 8,
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
@@ -440,7 +574,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 26 },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 38 },
       "id": 9,
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
@@ -475,7 +609,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 26 },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 38 },
       "id": 10,
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
@@ -509,7 +643,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 26 },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 38 },
       "id": 11,
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
@@ -588,7 +722,7 @@
           }
         ]
       },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 30 },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 42 },
       "id": 12,
       "options": {
         "showHeader": true,
@@ -652,7 +786,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 52 },
       "id": 104,
       "title": "Cluster Compliance",
       "type": "row"
@@ -677,7 +811,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 41 },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 53 },
       "id": 13,
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
@@ -686,12 +820,13 @@
         "colorMode": "background",
         "graphMode": "none"
       },
-      "title": "Compliance Pass Rate",
+      "title": "Compliance Pass Rate (per framework)",
+      "description": "Ratio of Pass checks to total checks for each compliance framework scanned by Trivy. Values come from the ClusterComplianceReport CRDs (k8s-cis-1.23, k8s-nsa-1.0, k8s-pss-baseline-0.1, k8s-pss-restricted-0.1).",
       "type": "stat",
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
-          "expr": "trivy_cluster_compliance{status=\"Pass\"} / (trivy_cluster_compliance{status=\"Pass\"} + trivy_cluster_compliance{status=\"Fail\"}) * 100",
+          "expr": "sum by (title) (trivy_cluster_compliance{status=\"Pass\"}) / sum by (title) (trivy_cluster_compliance) * 100",
           "legendFormat": "{{title}}",
           "refId": "A"
         }
@@ -700,10 +835,30 @@
   ],
   "schemaVersion": 39,
   "tags": ["trivy", "security"],
-  "templating": { "list": [] },
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "All", "value": "$__all" },
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "definition": "label_values(trivy_image_vulnerabilities, namespace)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Namespace",
+        "multi": true,
+        "name": "namespace",
+        "options": [],
+        "query": { "query": "label_values(trivy_image_vulnerabilities, namespace)", "refId": "StandardVariableQuery" },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
   "time": { "from": "now-1h", "to": "now" },
   "timepicker": {},
-  "timezone": "",
+  "timezone": "browser",
   "title": "Trivy Operator",
   "uid": "trivy-operator",
   "version": 1
