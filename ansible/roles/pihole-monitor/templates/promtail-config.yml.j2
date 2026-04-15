@@ -3,7 +3,13 @@ server:
   grpc_listen_port: 0
 
 positions:
-  filename: /tmp/positions.yaml
+  # NOT /tmp — /tmp is cleared on reboot AND on Docker container restart
+  # (the promtail container uses a tmpfs on newer Docker). If the file
+  # disappears, Promtail reads the pihole.log from offset 0 and re-ships
+  # the entire retained log, which (a) blows past Loki stream limits and
+  # (b) makes every old line land in Loki with a bogus "now" ingestion
+  # timestamp. Persisted under /var/lib/promtail instead.
+  filename: /var/lib/promtail/positions.yaml
 
 clients:
   - url: http://{{ k3s_server_ip }}:31100/loki/api/v1/push
@@ -20,6 +26,24 @@ scrape_configs:
     pipeline_stages:
       - regex:
           expression: '(?P<timestamp>\w+ \d+ [\d:]+) dnsmasq\[\d+\]: (?P<action>query|forwarded|reply|cached|blocked)\[?(?P<qtype>\w+)?\]?\s+(?P<domain>\S+)\s+(?:from|to|is)\s+(?P<target>\S+)'
+
+      # CRITICAL: feed the parsed timestamp back into Loki's entry time.
+      # Without this stage, Loki timestamps every line with ingestion
+      # wall-clock ("now()"), causing two visible problems in Grafana:
+      #   1. All lines in a batch share the same Loki timestamp
+      #      (looks like `2026-04-15 20:14:36` on 5 different events)
+      #   2. Replayed logs (after Promtail restart or position file
+      #      loss) are off by hours — line content says 17:22 CET but
+      #      Loki plots them at 20:14 CET.
+      # Go reference time: `_2` handles both `Apr 5` (space-padded) and
+      # `Apr 15` (no pad) — dnsmasq uses space-padding for single-digit
+      # days. `Local` interprets in athena's TZ (CET) since dnsmasq
+      # writes local time, not UTC.
+      - timestamp:
+          source: timestamp
+          format: "Jan _2 15:04:05"
+          location: Local
+
       # Only LOW-cardinality fields become Loki labels (job, host, action,
       # qtype). `domain` and `target` are per-event and would explode Loki
       # stream cardinality — pi-hole sees thousands of unique domains in a

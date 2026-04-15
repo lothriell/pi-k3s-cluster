@@ -12,6 +12,11 @@ ntfy_admin_password: "CHANGEME"
 pihole_log_dir: /var/log/pihole
 pihole_log_file: "{{ pihole_log_dir }}/pihole.log"
 
+# Timezone to pass to the Pi-hole container. dnsmasq writes timestamps
+# in whatever TZ the container has — if unset, it defaults to UTC and
+# shows a 1-2h offset against the CET/CEST host in Grafana.
+pihole_container_tz: Europe/Bratislava
+
 # Monitor config directory
 monitor_config_dir: /etc/pihole-monitor
 

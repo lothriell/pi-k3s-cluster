@@ -3,20 +3,29 @@
 
 # -- Mount pihole log volume to host ----------------------------------------
 
-- name: Add pihole log volume mount to Pi-hole container
+- name: Check Pi-hole container state (log mount + TZ env)
   ansible.builtin.shell: |
-    # Check if volume is already mounted
+    set -e
+    MOUNT_OK=no
+    TZ_OK=no
     if sudo docker inspect pihole --format '{{ '{{' }}json .Mounts{{ '}}' }}' | grep -q '/var/log/pihole'; then
-      echo "ALREADY_MOUNTED"
-    else
-      echo "NEEDS_MOUNT"
+      MOUNT_OK=yes
     fi
-  register: pihole_mount_check
+    if sudo docker inspect pihole --format '{{ '{{' }}range .Config.Env{{ '}}' }}{{ '{{' }}println .{{ '}}' }}{{ '{{' }}end{{ '}}' }}' \
+        | grep -q '^TZ={{ pihole_container_tz }}$'; then
+      TZ_OK=yes
+    fi
+    if [ "$MOUNT_OK" = yes ] && [ "$TZ_OK" = yes ]; then
+      echo OK
+    else
+      echo "NEEDS_RECREATE mount=$MOUNT_OK tz=$TZ_OK"
+    fi
+  register: pihole_container_check
   changed_when: false
 
-- name: Stop Pi-hole container for volume remount
+- name: Stop Pi-hole container for recreate
   ansible.builtin.command: sudo docker stop pihole
-  when: "'NEEDS_MOUNT' in pihole_mount_check.stdout"
+  when: "'NEEDS_RECREATE' in pihole_container_check.stdout"
 
 - name: Create host log directory
   ansible.builtin.file:
@@ -25,24 +34,23 @@
     mode: "0755"
   become: true
 
-- name: Recreate Pi-hole container with log volume
+- name: Recreate Pi-hole container with log volume and TZ
   ansible.builtin.shell: |
-    # Get current container config for recreation
+    # Preserve the currently-running image tag across the recreate
     CURRENT_IMAGE=$(sudo docker inspect pihole --format '{{ '{{' }}.Config.Image{{ '}}' }}')
-    # Remove old container (data is in other volumes)
     sudo docker rm pihole
-    # Recreate with additional log volume mount
     sudo docker run -d \
       --name pihole \
       --restart unless-stopped \
       -p 53:53/tcp -p 53:53/udp \
       -p 67:67/udp -p 547:547/udp \
       -p 8800:80/tcp \
+      -e TZ={{ pihole_container_tz }} \
       -v /DATA/AppData/pihole/etc/pihole:/etc/pihole \
       -v /DATA/AppData/pihole/etc/dnsmasq.d:/etc/dnsmasq.d \
       -v {{ pihole_log_dir }}:/var/log/pihole \
       "$CURRENT_IMAGE"
-  when: "'NEEDS_MOUNT' in pihole_mount_check.stdout"
+  when: "'NEEDS_RECREATE' in pihole_container_check.stdout"
 
 - name: Wait for Pi-hole to be healthy
   ansible.builtin.command: sudo docker exec pihole pihole status
@@ -51,7 +59,7 @@
   delay: 5
   until: pihole_status.rc == 0
   changed_when: false
-  when: "'NEEDS_MOUNT' in pihole_mount_check.stdout"
+  when: "'NEEDS_RECREATE' in pihole_container_check.stdout"
 
 # -- Config directory -------------------------------------------------------
 
@@ -181,6 +189,21 @@
     mode: "0644"
   become: true
 
+# Persist the Promtail positions file outside /tmp. On athena's old
+# Docker, the container's root fs uses tmpfs-ish semantics and anything
+# under /tmp is wiped on restart — which causes Promtail to re-read
+# pihole.log from offset 0 and replay the entire file with NOW()
+# timestamps. Bind-mount a host directory under /var/lib/promtail to
+# make positions survive container restarts.
+- name: Create Promtail positions host directory
+  ansible.builtin.file:
+    path: /var/lib/promtail
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
 - name: Stop and remove existing Promtail container
   ansible.builtin.shell: sudo docker stop promtail 2>/dev/null; sudo docker rm promtail 2>/dev/null; true
   changed_when: false
@@ -190,6 +213,7 @@
     sudo docker run -d --name promtail --restart unless-stopped \
       -v {{ pihole_log_dir }}:/var/log/pihole:ro \
       -v {{ monitor_config_dir }}/promtail-config.yml:/etc/promtail/config.yml:ro \
+      -v /var/lib/promtail:/var/lib/promtail \
       grafana/promtail:latest -config.file=/etc/promtail/config.yml
   changed_when: false
 
