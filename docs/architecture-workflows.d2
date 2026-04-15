@@ -341,3 +341,407 @@ backup_flow: "4 · Backup pipeline (PVC data + etcd state → R2)" {
 
   etcd_cron -> r2: etcd-s3 every 6h\nretain 12 {style.stroke: "#3F51B5"}
 }
+
+# =============================================================================
+# Flow 5 — Version upgrade pipeline (Renovate → PR → manual review → apply)
+# =============================================================================
+
+upgrade_flow: "5 · Upgrade pipeline (Renovate → PR → apply)" {
+  style: {
+    fill: "#FFF8E1"
+    stroke: "#F9A825"
+    stroke-width: 2
+    border-radius: 12
+  }
+  direction: right
+
+  renovate: Mend Renovate\n(GitHub App) {
+    shape: cloud
+    style.fill: "#FFE082"
+    label: |md
+      **Renovate (Mend)**
+      weekly scan Mon < 9am CET
+      free tier, hosted
+    |
+  }
+
+  repo: GitHub repo {
+    shape: image
+    icon: https://github.githubassets.com/assets/GitHub-Mark-ea2971cee799.png
+    style.fill: "#24292E"
+  }
+
+  managers: 4 custom regex managers {
+    shape: class
+    label: |md
+      **renovate.json customManagers**
+      - k3s_version (inventory)
+      - kube_vip_version (role defaults)
+      - alertmanager-ntfy image tag
+      - wazuh_version (playbook)
+    |
+  }
+
+  dashboard: Dependency Dashboard\n(GitHub issue) {
+    shape: document
+    style.fill: "#FFECB3"
+  }
+
+  pr: Renovate PR\n(per dependency / group) {
+    shape: document
+    style.fill: "#FFE082"
+    label: |md
+      **PR body**
+      - checklist from packageRules
+      - release notes link
+      - K3s: manual-review label
+    |
+  }
+
+  reviewer: Operator\n(manual review) {
+    shape: person
+    style.fill: "#FFE0B2"
+  }
+
+  checklist: K3s review checklist {
+    shape: document
+    style.fill: "#FFCC80"
+    label: |md
+      - [ ] Next-minor only (no skip)
+      - [ ] Read release notes
+      - [ ] Longhorn compat OK
+      - [ ] etcd snapshot saved
+      - [ ] Test on 1 node first
+    |
+  }
+
+  merge: Merge PR {
+    shape: step
+    style.fill: "#FFB74D"
+  }
+
+  apply: ansible-playbook with\n--tags <stage> {
+    shape: step
+    style.fill: "#FFB74D"
+    label: |md
+      **Apply**
+      - `make k3s` (K3s bump)
+      - `--tags prometheus` (monitoring)
+      - `make gitea` (Gitea)
+      - etc.
+    |
+  }
+
+  verify: Verify {
+    shape: step
+    style.fill: "#FFB74D"
+    label: |md
+      kubectl get nodes
+      helm list -A
+      /ready endpoints
+    |
+  }
+
+  renovate -> repo: scan
+  repo -> managers: parse customManagers
+  managers -> dashboard: write summary
+  managers -> pr: open PR per dep
+  dashboard -> reviewer: notification
+  pr -> reviewer: GitHub email
+  reviewer -> checklist: K3s only
+  checklist -> merge
+  reviewer -> merge: approve
+  merge -> apply: operator-driven\n(no auto-merge for K3s/Wazuh) {style.bold: true}
+  apply -> verify
+}
+
+# =============================================================================
+# Flow 6 — Nuke + full rebuild (make nuke && make all)
+# =============================================================================
+
+rebuild_flow: "6 · Full rebuild workflow (make nuke && make all)" {
+  style: {
+    fill: "#FCE4EC"
+    stroke: "#AD1457"
+    stroke-width: 2
+    border-radius: 12
+  }
+  direction: right
+
+  preflight: Pre-flight {
+    shape: step
+    style.fill: "#F8BBD9"
+    label: |md
+      **Pre-flight**
+      - make backup
+      - make restore-volumes-dry-run
+      - verify R2 creds + 5 PVCs
+      - approve Tailscale maint
+      - note current helm versions
+    |
+  }
+
+  nuke: make nuke {
+    shape: step
+    style.fill: "#F48FB1"
+    label: |md
+      **nuke-cluster.sh**
+      - resolve hosts via tailnet IPs
+      - detached nohup uninstall
+      - poll until k3s binary gone
+      - backup + remove kubeconfig
+    |
+  }
+
+  prepare: make prepare {
+    shape: step
+    style.fill: "#CE93D8"
+    label: |md
+      01-prepare-nodes.yml
+      apt, chrony, sysctl,
+      /etc/hosts, registries.yaml
+    |
+  }
+
+  k3s_install: make k3s {
+    shape: step
+    style.fill: "#CE93D8"
+    label: |md
+      02-install-k3s.yml
+      serial:1 order:inventory:
+      1. rpi-k3s-1 --cluster-init
+      2. rpi-k3s-2 join (direct IP)
+      3. rpi-k3s-3 join
+      Then agents join via VIP
+    |
+  }
+
+  post_install: make post-install + metallb + tailscale {
+    shape: step
+    style.fill: "#CE93D8"
+    label: |md
+      03-post-install.yml
+      Helm repo bootstrap
+      MetalLB IP pool
+      Tailscale SSH + MagicDNS
+      self-heal (-1 suffix)
+    |
+  }
+
+  longhorn_backup: make longhorn + backup {
+    shape: step
+    style.fill: "#9FA8DA"
+    label: |md
+      Longhorn Helm install
+      + BackupTarget CR
+      + node storage tag
+      + longhorn-storage class
+      + RecurringJobs
+    |
+  }
+
+  restore: make restore-volumes {
+    shape: step
+    style.fill: "#9FA8DA"
+    label: |md
+      12-restore-volumes.yml
+      Wait for BV sync (≥ 5)
+      Fail-fast on missing
+      Volume CR + fromBackup
+      PV/PVC + strip annotation
+      (5-10 min per volume)
+    |
+  }
+
+  apps: make monitoring + gitea + argocd {
+    shape: step
+    style.fill: "#90CAF9"
+    label: |md
+      04-deploy-monitoring.yml
+      05-deploy-gitea.yml
+      07-deploy-argocd.yml
+      + Image Updater + eve-tracker apps
+      Take-ownership of restored PVCs
+    |
+  }
+
+  post_manual: Manual post-steps {
+    shape: step
+    style.fill: "#80CBC4"
+    label: |md
+      **Manual**
+      - kubectl apply open-webui
+      - 10-deploy-pihole-monitor.yml (Loki)
+      - 09-deploy-ollama.yml (GPU)
+      - Approve TS subnet routers
+    |
+  }
+
+  validate: Post-rebuild validation {
+    shape: step
+    style.fill: "#80CBC4"
+    label: |md
+      kubectl get nodes (6)
+      kubectl get pvc -A (7 bound)
+      Smoke: gitea, grafana, argocd
+      Test: k3s etcd-snapshot ls
+      Kill test: stop 1 server
+    |
+  }
+
+  operator: Operator {
+    shape: person
+    style.fill: "#FFE0B2"
+  }
+
+  operator -> preflight
+  preflight -> nuke: **go** {style.bold: true; style.stroke: "#D32F2F"}
+  nuke -> prepare: make all chain starts
+  prepare -> k3s_install
+  k3s_install -> post_install
+  post_install -> longhorn_backup
+  longhorn_backup -> restore: (critical — PVC data at stake)
+  restore -> apps
+  apps -> post_manual
+  post_manual -> validate
+}
+
+# =============================================================================
+# Flow 7 — etcd failover (single-node loss + double-node loss recovery)
+# =============================================================================
+
+failover_flow: "7 · etcd failover (HA quorum degradation + recovery)" {
+  style: {
+    fill: "#EFEBE9"
+    stroke: "#4E342E"
+    stroke-width: 2
+    border-radius: 12
+  }
+
+  # Steady state
+  steady: Steady state\n(3/3 members) {
+    style.fill: "#C5E1A5"
+    label: |md
+      **Healthy**
+      quorum = 2/3
+      tolerates 1 loss
+      kube-vip: 1 leader,
+      2 standby
+    |
+  }
+
+  # Single loss branch
+  single_loss: Single-node loss\n(reboot / crash / drain) {
+    shape: step
+    style.fill: "#FFE082"
+    label: |md
+      e.g. rpi-k3s-2 reboots
+    |
+  }
+
+  detect: Quorum recomputes\n(2/3 still ≥ majority) {
+    shape: step
+    style.fill: "#FFCC80"
+  }
+
+  vip_flip: kube-vip leader election\n(if leader was lost) {
+    shape: step
+    style.fill: "#FFCC80"
+    label: |md
+      Lease TTL 5s
+      VIP fails over to
+      surviving server
+      (~3s gap)
+    |
+  }
+
+  continue: Cluster continues {
+    style.fill: "#C5E1A5"
+    label: |md
+      **Degraded but live**
+      - API serving from 2 nodes
+      - Deployments schedulable
+      - Workloads untouched
+      - etcd writes accepted
+    |
+  }
+
+  recovery: Node recovers {
+    shape: step
+    style.fill: "#AED581"
+    label: |md
+      kubelet back
+      etcd member rejoins
+      catches up via raft log
+      ~30s to healthy
+    |
+  }
+
+  healed: Back to 3/3 {
+    style.fill: "#C5E1A5"
+  }
+
+  # Double loss branch
+  double_loss: Double-node loss\n(two servers gone) {
+    shape: step
+    style.fill: "#FFAB91"
+  }
+
+  quorum_lost: Quorum LOST\n(1 ≤ 2 majority) {
+    shape: step
+    style.fill: "#E57373"
+    label: |md
+      **Read-only cluster**
+      - etcd stops accepting writes
+      - API returns errors
+      - kubelet keeps pods running
+      - no new deploys
+    |
+  }
+
+  triage: Triage {
+    shape: step
+    style.fill: "#FFAB91"
+    label: |md
+      Can both servers return?
+      - YES → wait for rejoin
+      - NO → restore flow
+    |
+  }
+
+  restore_snap: etcd snapshot restore {
+    shape: step
+    style.fill: "#EF9A9A"
+    label: |md
+      **Last resort**
+      1. Stop k3s on all servers
+      2. k3s server --cluster-reset \\
+         --cluster-reset-restore-path=<snap>
+      3. Restart other servers
+      4. Lost delta since snap
+    |
+  }
+
+  r2_snaps: R2 etcd snapshots {
+    shape: cloud
+    style.fill: "#90CAF9"
+    label: |md
+      k8sbkp/k3s-etcd-snapshots/
+      6h cadence · retain 12
+    |
+  }
+
+  steady -> single_loss: happens
+  single_loss -> detect
+  detect -> vip_flip
+  vip_flip -> continue
+  continue -> recovery: when node\nreturns
+  recovery -> healed
+
+  steady -> double_loss: simultaneous\n(rare) {style.stroke: "#D32F2F"}
+  double_loss -> quorum_lost
+  quorum_lost -> triage
+  triage -> restore_snap: NO rejoin path {style.bold: true}
+  restore_snap -> r2_snaps: pulls latest
+  restore_snap -> healed: ~10 min {style.stroke: "#4CAF50"}
+}
