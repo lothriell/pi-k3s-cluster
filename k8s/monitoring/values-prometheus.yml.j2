@@ -313,7 +313,7 @@ serverFiles:
               summary: "Pod {{ '{{' }} $labels.namespace {{ '}}' }}/{{ '{{' }} $labels.pod {{ '}}' }} crash-looping"
               description: "More than 3 restarts in the last 15 minutes."
           - alert: PodExcessiveRestarts
-            expr: increase(kube_pod_container_status_restarts_total[24h]) > 5
+            expr: increase(kube_pod_container_status_restarts_total[24h]) * on(namespace, pod) group_left() kube_pod_info > 5
             for: 10m
             labels:
               severity: critical

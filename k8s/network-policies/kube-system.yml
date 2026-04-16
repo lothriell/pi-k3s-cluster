@@ -1,0 +1,96 @@
+# NetworkPolicy: kube-system namespace
+#
+# kube-system contains critical cluster infrastructure:
+# - CoreDNS: DNS resolution for all pods (53/TCP+UDP, metrics 9153)
+# - Traefik: ingress controller (80/443 via LB, container ports 8000/8443,
+#   dashboard/metrics 8080/9100)
+# - metrics-server: node/pod metrics for kubectl top (port 10250)
+# - kube-vip: HA control plane VIP (hostNetwork — not affected by policy)
+# - local-path-provisioner: creates hostPath PVs (no listening ports)
+#
+# Strategy: ingress-only with per-component rules. We do NOT restrict egress
+# because CoreDNS must reach upstream DNS, Traefik must reach backends in
+# all namespaces, and metrics-server scrapes kubelets on every node.
+#
+# CAUTION: kube-vip and completed Helm install jobs use hostNetwork, so
+# NetworkPolicy does not affect them. Only CoreDNS, Traefik, metrics-server,
+# and local-path-provisioner are governed by this policy.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-system-allowed-ingress
+  namespace: kube-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Intra-namespace: all kube-system pods can talk to each other
+    # (Traefik → CoreDNS, metrics-server → CoreDNS, etc.)
+    - from:
+        - podSelector: {}
+
+    # --- CoreDNS ---
+    # Every pod in the cluster needs DNS resolution on port 53.
+    # Allow from all namespaces (podSelector: {} + namespaceSelector: {}
+    # matches all pods in all namespaces).
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 53
+        - protocol: UDP
+          port: 53
+
+    # Node-local DNS traffic and kubelet health checks come from the host
+    # network (outside any namespace). Allow any source on port 53.
+    - ports:
+        - protocol: TCP
+          port: 53
+        - protocol: UDP
+          port: 53
+
+    # --- Traefik ---
+    # Traefik container ports: 8000 (web/HTTP), 8443 (websecure/HTTPS),
+    # 8080 (dashboard/API), 9100 (metrics).
+    # External traffic arrives via MetalLB (NodePort → container port).
+    # NodePort traffic comes from node IPs (hostNetwork), so we need
+    # open-source rules for the web ports.
+    - ports:
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 8443
+
+    # Traefik dashboard/API port 8080 — used internally
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+
+    # Prometheus (monitoring) → Traefik metrics on port 9100
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9100
+
+    # Prometheus (monitoring) → CoreDNS metrics on port 9153
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9153
+
+    # --- metrics-server ---
+    # kube-apiserver (hostNetwork) calls metrics-server on port 10250
+    # for kubectl top / HPA. Allow any source on this port.
+    - ports:
+        - protocol: TCP
+          port: 10250

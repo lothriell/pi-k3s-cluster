@@ -1,0 +1,26 @@
+# NetworkPolicy: cloudflare namespace
+#
+# The cloudflare namespace runs cloudflared tunnel replicas that maintain
+# outbound connections to Cloudflare's edge network. Traffic patterns:
+# - cloudflared initiates outbound tunnels to Cloudflare edge (HTTPS/QUIC)
+# - cloudflared proxies inbound requests to in-cluster services (Traefik, etc.)
+# - No services are exposed — cloudflared is not a server, it's a client
+#
+# Strategy: ingress-only. We do NOT restrict egress because cloudflared must
+# reach Cloudflare's anycast edge IPs (unpredictable) and forward traffic to
+# arbitrary in-cluster services. Ingress is minimal — cloudflared doesn't
+# listen for inbound connections.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cloudflare-allowed-ingress
+  namespace: cloudflare
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Intra-namespace: cloudflared replicas can talk to each other
+    - from:
+        - podSelector: {}

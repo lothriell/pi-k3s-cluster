@@ -1,0 +1,49 @@
+# NetworkPolicy: metallb-system namespace
+#
+# MetalLB provides LoadBalancer services via L2/ARP mode:
+# - controller (Deployment): manages IP allocation, webhook server on 9443,
+#   metrics on 7472. Receives admission webhook calls from the API server.
+# - speaker (DaemonSet, hostNetwork): sends ARP/GARP announcements on the
+#   node network, memberlist protocol on 7946 TCP+UDP for leader election,
+#   metrics on 7472, FRR metrics on 7473.
+#
+# Strategy: ingress-only. Speakers use hostNetwork so they are not subject
+# to NetworkPolicy (traffic bypasses pod networking). Only the controller
+# pod uses regular pod networking and needs ingress rules.
+# We do NOT restrict egress because the controller needs to reach the
+# kube-apiserver and speakers.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: metallb-system-allowed-ingress
+  namespace: metallb-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Intra-namespace: controller ↔ speaker communication
+    - from:
+        - podSelector: {}
+
+    # kube-apiserver → controller webhook on port 9443
+    # The apiserver runs on hostNetwork (outside any namespace selector),
+    # so we allow any source on this port.
+    - ports:
+        - protocol: TCP
+          port: 9443
+
+    # Prometheus (monitoring) → controller metrics on port 7472
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 7472
+
+    # Speaker memberlist protocol (7946 TCP+UDP) and metrics (7472, 7473)
+    # are on hostNetwork, so NetworkPolicy does not apply to them.
+    # Included here only for documentation — these rules are effectively
+    # no-ops for hostNetwork pods but don't cause harm.
