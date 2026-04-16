@@ -16,7 +16,9 @@
     {
       "customType": "regex",
       "description": "K3s version pinned in Ansible inventory (format: v1.34.6+k3s1)",
-      "fileMatch": ["^ansible/inventory/hosts\\.yml$"],
+      "managerFilePatterns": [
+        "/^ansible/inventory/hosts\\.yml$/"
+      ],
       "matchStrings": [
         "k3s_version:\\s*\"(?<currentValue>[^\"]+)\""
       ],
@@ -27,7 +29,9 @@
     {
       "customType": "regex",
       "description": "kube-vip image version in k3s-server role defaults",
-      "fileMatch": ["^ansible/roles/k3s-server/defaults/main\\.yml$"],
+      "managerFilePatterns": [
+        "/^ansible/roles/k3s-server/defaults/main\\.yml$/"
+      ],
       "matchStrings": [
         "kube_vip_version:\\s*\"(?<currentValue>[^\"]+)\""
       ],
@@ -37,7 +41,9 @@
     {
       "customType": "regex",
       "description": "alertmanager-ntfy bridge image in rendered template",
-      "fileMatch": ["^k8s/monitoring/alertmanager-ntfy\\.yml\\.j2$"],
+      "managerFilePatterns": [
+        "/^k8s/monitoring/alertmanager-ntfy\\.yml\\.j2$/"
+      ],
       "matchStrings": [
         "image:\\s+ghcr\\.io/alexbakker/alertmanager-ntfy:(?<currentValue>[^\\s]+)"
       ],
@@ -47,7 +53,9 @@
     {
       "customType": "regex",
       "description": "Wazuh agent version in deploy playbook",
-      "fileMatch": ["^ansible/playbooks/13-deploy-wazuh-agent\\.yml$"],
+      "managerFilePatterns": [
+        "/^ansible/playbooks/13-deploy-wazuh-agent\\.yml$/"
+      ],
       "matchStrings": [
         "wazuh_version:\\s*\"(?<currentValue>[^\"]+)\""
       ],
@@ -105,8 +113,10 @@
     {
       "description": "Container images: group under one PR, avoid notification spam",
       "matchDatasources": ["docker"],
-      "excludePackageNames": ["ghcr.io/kube-vip/kube-vip"],
-      "groupName": "container-images"
+      "groupName": "container-images",
+      "matchPackageNames": [
+        "!ghcr.io/kube-vip/kube-vip"
+      ]
     }
   ],
 
