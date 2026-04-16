@@ -1,10 +1,11 @@
 # =============================================================================
-# Local domain ingress rules for *.example.local
+# Local domain ingress rules for *.{{ local_domain }}
 # =============================================================================
-# Routes local domain names to cluster services via Traefik.
-# Requires DNS resolution of *.example.local -> METALLB_VIP (Traefik LB IP).
+# Rendered by 03-post-install.yml from Jinja2 template using vars in
+# ansible/inventory/group_vars/all/main.yml (gitignored).
 #
-# Apply with: kubectl apply -f local-ingress.yml
+# Routes local domain names to cluster services via Traefik.
+# Requires DNS resolution of *.{{ local_domain }} -> Traefik LB IP (MetalLB).
 # =============================================================================
 
 ---
@@ -17,7 +18,7 @@ metadata:
     traefik.ingress.kubernetes.io/router.entrypoints: web
 spec:
   rules:
-    - host: grafana.example.local
+    - host: grafana.{{ local_domain }}
       http:
         paths:
           - path: /
@@ -38,7 +39,7 @@ metadata:
     traefik.ingress.kubernetes.io/router.entrypoints: web
 spec:
   rules:
-    - host: gitea.example.local
+    - host: gitea.{{ local_domain }}
       http:
         paths:
           - path: /
@@ -59,7 +60,7 @@ metadata:
     traefik.ingress.kubernetes.io/router.entrypoints: web
 spec:
   rules:
-    - host: argocd.example.local
+    - host: argocd.{{ local_domain }}
       http:
         paths:
           - path: /
@@ -80,7 +81,7 @@ metadata:
     traefik.ingress.kubernetes.io/router.entrypoints: web
 spec:
   rules:
-    - host: prometheus.example.local
+    - host: prometheus.{{ local_domain }}
       http:
         paths:
           - path: /
@@ -106,8 +107,7 @@ metadata:
   namespace: default
 subsets:
   - addresses:
-      # TODO CHANGEME -- GPU server LAN IP (see all.yml: gpu_node_ip_1)
-      - ip: CHANGEME
+      - ip: {{ gpu_node_ip_1 }}
     ports:
       - port: 11434
 
@@ -132,7 +132,7 @@ metadata:
     traefik.ingress.kubernetes.io/router.entrypoints: web
 spec:
   rules:
-    - host: ollama.example.local
+    - host: ollama.{{ local_domain }}
       http:
         paths:
           - path: /

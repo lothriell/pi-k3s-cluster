@@ -76,3 +76,28 @@
       changed_when: ns_result.rc == 0
       failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
       tags: [namespaces]
+
+    # -- Render and apply local domain ingress + CoreDNS overrides ---------------
+
+    - name: Render local-ingress template
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../k8s/ingress/local-ingress.yml.j2"
+        dest: /tmp/local-ingress.rendered.yml
+        mode: "0644"
+      tags: [ingress]
+
+    - name: Render CoreDNS custom config template
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../k8s/ingress/coredns-custom.yml.j2"
+        dest: /tmp/coredns-custom.rendered.yml
+        mode: "0644"
+      tags: [ingress]
+
+    - name: Apply local-ingress and CoreDNS overrides
+      ansible.builtin.command: >
+        kubectl apply
+        -f /tmp/local-ingress.rendered.yml
+        -f /tmp/coredns-custom.rendered.yml
+      register: ingress_apply
+      changed_when: "'configured' in ingress_apply.stdout or 'created' in ingress_apply.stdout"
+      tags: [ingress]

@@ -47,7 +47,7 @@
     {
       "customType": "regex",
       "description": "Wazuh agent version in deploy playbook",
-      "fileMatch": ["^ansible/playbooks/10-deploy-wazuh-agent\\.yml$"],
+      "fileMatch": ["^ansible/playbooks/13-deploy-wazuh-agent\\.yml$"],
       "matchStrings": [
         "wazuh_version:\\s*\"(?<currentValue>[^\"]+)\""
       ],

@@ -1,0 +1,11 @@
+# Custom CoreDNS entries for *.{{ local_domain }} resolution inside the cluster.
+# Rendered by 03-post-install.yml. Allows pods to resolve the same local domain
+# names that external clients (Mac /etc/hosts) use.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  {{ local_domain | replace('.', '-') }}.override: |
+    rewrite name gitea.{{ local_domain }} gitea-http.gitea.svc.cluster.local
