@@ -52,6 +52,7 @@
         - { name: jetstack,             url: "https://charts.jetstack.io" }
         - { name: metallb,              url: "https://metallb.github.io/metallb" }
         - { name: argo,                url: "https://argoproj.github.io/argo-helm" }
+        - { name: headlamp,            url: "https://kubernetes-sigs.github.io/headlamp/" }
       register: helm_repo_add
       changed_when: "'has been added' in helm_repo_add.stdout"
       tags: [helm, repos]
@@ -72,6 +73,7 @@
         - metallb-system
         - cloudflare
         - argocd
+        - headlamp
       register: ns_result
       changed_when: ns_result.rc == 0
       failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr

@@ -1,0 +1,72 @@
+---
+# Playbook 14: Deploy Headlamp Kubernetes web UI
+# Deploys via Helm from localhost using custom values file.
+#
+# Usage: ansible-playbook playbooks/14-deploy-headlamp.yml
+#        make headlamp
+
+- name: Deploy Headlamp web UI to the K3s cluster
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+
+  vars:
+    headlamp_values: "{{ playbook_dir }}/../../k8s/headlamp/values-headlamp.yml"
+
+  tasks:
+    - name: Ensure headlamp namespace exists
+      ansible.builtin.command: kubectl create namespace headlamp --dry-run=client -o yaml
+      register: ns_yaml
+      changed_when: false
+      tags: [headlamp]
+
+    - name: Apply headlamp namespace
+      ansible.builtin.command: kubectl apply -f -
+      args:
+        stdin: "{{ ns_yaml.stdout }}"
+      changed_when: false
+      tags: [headlamp]
+
+    - name: Add Headlamp Helm repository
+      ansible.builtin.command: helm repo add headlamp https://kubernetes-sigs.github.io/headlamp/
+      register: helm_repo
+      changed_when: "'has been added' in helm_repo.stdout"
+      failed_when: helm_repo.rc != 0 and 'already exists' not in helm_repo.stderr
+      tags: [headlamp]
+
+    - name: Update Helm repositories
+      ansible.builtin.command: helm repo update headlamp
+      changed_when: false
+      tags: [headlamp]
+
+    - name: Deploy Headlamp via Helm
+      ansible.builtin.command: >
+        helm upgrade --install headlamp
+        headlamp/headlamp
+        --namespace headlamp
+        --values {{ headlamp_values }}
+        --wait
+        --timeout 5m
+      register: headlamp_deploy
+      changed_when: "'STATUS: deployed' in headlamp_deploy.stdout"
+      tags: [headlamp]
+
+    - name: Wait for Headlamp pods to be ready
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Ready pods
+        --all --namespace headlamp
+        --timeout=120s
+      changed_when: false
+      tags: [headlamp]
+
+    - name: Show Headlamp pod status
+      ansible.builtin.command: kubectl get pods -n headlamp -o wide
+      register: headlamp_pods
+      changed_when: false
+      tags: [headlamp, verify]
+
+    - name: Display Headlamp pods
+      ansible.builtin.debug:
+        var: headlamp_pods.stdout_lines
+      tags: [headlamp, verify]

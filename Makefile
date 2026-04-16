@@ -53,7 +53,7 @@ help: ## Show all available targets with descriptions
 	@echo ""
 
 .PHONY: all
-all: prepare k3s post-install metallb tailscale longhorn backup restore-volumes monitoring gitea argocd cloudflare trivy-operator network-policies pihole-monitor ## Full cluster build (prepare -> k3s -> post-install -> metallb -> tailscale -> longhorn -> backup -> restore-volumes -> monitoring -> gitea -> argocd -> cloudflare -> trivy-operator -> network-policies -> pihole-monitor)
+all: prepare k3s post-install metallb tailscale longhorn backup restore-volumes monitoring gitea argocd cloudflare trivy-operator headlamp network-policies pihole-monitor ## Full cluster build (prepare -> ... -> headlamp -> network-policies -> pihole-monitor)
 
 # =============================================================================
 # Provisioning Stages
@@ -148,6 +148,10 @@ trivy-operator: ## Install Trivy Operator (Helm) into trivy-system ns and scrape
 		--create-namespace \
 		-f k8s/trivy/values-trivy-operator.yml \
 		--wait --timeout 5m
+
+.PHONY: headlamp
+headlamp: ## Deploy Headlamp Kubernetes web UI dashboard
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/14-deploy-headlamp.yml
 
 .PHONY: network-policies
 network-policies: ## Apply all namespace NetworkPolicies (requires target namespaces to exist)

@@ -1,0 +1,65 @@
+# =============================================================================
+# Headlamp — Kubernetes web UI
+# =============================================================================
+# Helm chart: headlamp/headlamp (https://github.com/kubernetes-sigs/headlamp)
+# Deployed by: ansible/playbooks/14-deploy-headlamp.yml
+# Accessible at: headlamp.<local_domain> via Traefik (local-ingress.yml.j2)
+# =============================================================================
+
+# -- Container configuration --------------------------------------------------
+
+config:
+  inCluster: true
+
+# -- Service (ClusterIP — Traefik handles external routing) -------------------
+
+service:
+  type: ClusterIP
+  port: 80
+
+# -- Security hardening (matches cluster-wide pattern from task #7) -----------
+
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 100
+  runAsGroup: 101
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Resources (conservative for Pi nodes with 16GB RAM) ---------------------
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# -- Writable paths (readOnlyRootFilesystem requires emptyDir for runtime writes)
+
+volumes:
+  - name: tmp
+    emptyDir: {}
+  - name: headlamp-config
+    emptyDir: {}
+
+volumeMounts:
+  - name: tmp
+    mountPath: /tmp
+  - name: headlamp-config
+    mountPath: /home/headlamp/.config
+
+# -- Ingress (disabled — handled by local-ingress.yml.j2 Traefik routes) -----
+
+ingress:
+  enabled: false

@@ -33,6 +33,7 @@ make gitea                  # Gitea git server (+ container registry)
 make argocd                 # ArgoCD GitOps (+ Image Updater)
 make cloudflare             # Cloudflare tunnel
 make cert-manager           # TLS certificates
+make headlamp               # Headlamp Kubernetes web UI
 
 # Operations
 make status                 # kubectl get nodes + pods
@@ -252,6 +253,17 @@ All IPs are configured in `ansible/inventory/hosts.yml` and `group_vars/all/main
 - All-in-one: Manager + Indexer + Dashboard
 - Agents installed on all cluster nodes + Proxmox host
 - Dashboard accessible via HTTPS on Servers VLAN
+
+## Headlamp (K8s Web UI)
+
+- Lightweight Kubernetes dashboard (official successor to the retired Kubernetes Dashboard)
+- Namespace: `headlamp`
+- Helm chart: `headlamp/headlamp`
+- Values: `k8s/headlamp/values-headlamp.yml`
+- Playbook: `ansible/playbooks/14-deploy-headlamp.yml`
+- Accessible at `headlamp.<local_domain>` through Traefik
+- No authentication by default (relies on LAN/Tailscale access restriction)
+- Uses a ServiceAccount token created by the Helm chart for cluster API access
 
 ## Service Credentials
 

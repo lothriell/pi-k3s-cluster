@@ -57,3 +57,11 @@ metadata:
   labels:
     name: argocd
     # Purpose: ArgoCD GitOps continuous deployment
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: headlamp
+  labels:
+    name: headlamp
+    # Purpose: Headlamp Kubernetes web UI dashboard
