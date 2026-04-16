@@ -75,8 +75,8 @@ cloudflare_tunnel_id: "00000000-0000-0000-0000-000000000000"
 cloudflare_ingress_rules:
   - hostname: "ntfy.{{ cloudflare_domain }}"
     service: "http://ntfy-external.default.svc.cluster.local:8080"
-  - hostname: "app.{{ cloudflare_domain }}"
-    service: "http://app-frontend.app-namespace.svc.cluster.local:80"
+  - hostname: "dev-app.{{ cloudflare_domain }}"
+    service: "http://app-frontend.app-dev-namespace.svc.cluster.local:80"
 
 # ntfy (public config — credentials in vault.yml)
 ntfy_topic: "dns-alerts"

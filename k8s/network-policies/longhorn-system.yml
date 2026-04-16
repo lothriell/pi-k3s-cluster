@@ -1,0 +1,60 @@
+# NetworkPolicy: longhorn-system namespace
+#
+# Longhorn is a complex distributed storage system with many internal flows:
+# - longhorn-manager (DaemonSet): API on 9500, admission webhook on 9502,
+#   recovery backend on 9503. Runs on every node.
+# - longhorn-ui: dashboard on container port 8000, exposed via Service
+#   longhorn-frontend:80. Traefik routes longhorn.<local_domain> to it.
+# - instance-manager pods: iSCSI data plane, talk to managers and each other.
+# - engine-image pods: DaemonSet, prepare engine binaries.
+# - CSI sidecars (attacher, provisioner, resizer, snapshotter): talk to
+#   kube-apiserver and longhorn-backend:9500.
+# - Prometheus scrapes longhorn-backend:9500 for metrics.
+#
+# Strategy: ingress-only. Longhorn components need wide egress reach
+# (inter-node iSCSI, kube-apiserver, R2 backups over HTTPS). Locking
+# egress would break storage operations.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: longhorn-system-allowed-ingress
+  namespace: longhorn-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Intra-namespace: all Longhorn pods talk to each other freely
+    # (manager ↔ instance-manager, CSI sidecars → manager, UI → backend, etc.)
+    - from:
+        - podSelector: {}
+
+    # Traefik (kube-system) → longhorn-ui container port 8000
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 8000
+
+    # Prometheus (monitoring) → longhorn-manager metrics on port 9500
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9500
+
+    # kube-apiserver webhooks → admission webhook port 9502
+    # The apiserver lives outside any namespace selector (hostNetwork),
+    # so we allow any source on this port.
+    - ports:
+        - protocol: TCP
+          port: 9502
+
+    # CSI calls from kubelet (hostNetwork) hit the CSI socket which
+    # is on the longhorn-csi-plugin pods. These use hostNetwork
+    # indirectly via the node's unix socket, not TCP — no port needed.

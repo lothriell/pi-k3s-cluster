@@ -1,0 +1,58 @@
+# NetworkPolicy: monitoring namespace
+#
+# The monitoring namespace has complex traffic patterns:
+# - Prometheus scrapes targets across ALL namespaces (node-exporter, kube-state,
+#   longhorn, trivy, etc.) — egress must remain open for scraping.
+# - Grafana receives Traefik ingress on container port 3000.
+# - Alertmanager receives alerts from Prometheus on port 9093.
+# - alertmanager-ntfy receives webhooks from Alertmanager on port 8000.
+# - Loki receives log pushes on port 3100 (NodePort 31100 from external Promtail).
+# - Internal: Grafana → Prometheus (9090), Grafana → Loki (3100),
+#   Alertmanager cluster gossip (9093), Loki memberlist (7946).
+#
+# Strategy: ingress-only policy. We do NOT restrict egress because Prometheus
+# must reach arbitrary pod IPs across all namespaces for scraping, and
+# alertmanager-ntfy must reach external HTTPS (self-hosted ntfy). Egress
+# lockdown would require maintaining an exhaustive allow-list that breaks
+# every time a pod reschedules.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: monitoring-allowed-ingress
+  namespace: monitoring
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Intra-namespace: all monitoring pods can talk to each other
+    # (Prometheus → kube-state-metrics, Grafana → Prometheus/Loki,
+    # Alertmanager → alertmanager-ntfy, Loki memberlist, etc.)
+    - from:
+        - podSelector: {}
+
+    # Traefik (kube-system) → Grafana container port 3000
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 3000
+
+    # External Promtail (athena) → Loki NodePort 31100 → container 3100
+    # NodePort traffic arrives from the node IP, which is outside any
+    # namespace selector. Allow any source on port 3100.
+    - ports:
+        - protocol: TCP
+          port: 3100
+
+    # Prometheus metrics scrape from itself (readiness probes, self-scrape)
+    - ports:
+        - protocol: TCP
+          port: 9090
+
+    # Node-exporter DaemonSet pods listen on hostNetwork port 9100.
+    # They are in this namespace but scrape traffic comes from Prometheus
+    # (also in this namespace) — covered by the intra-namespace rule above.

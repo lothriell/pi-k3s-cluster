@@ -1,0 +1,45 @@
+# NetworkPolicy: argocd namespace
+#
+# ArgoCD traffic patterns:
+# - argocd-server (UI/API): Traefik ingress on port 8080 (container port)
+# - argocd-repo-server: clones repos from Gitea (gitea ns, port 3000)
+# - argocd-application-controller: talks to kube-apiserver (default ns, 443)
+# - argocd-image-updater: polls Gitea registry + writes back to git
+# - argocd-redis: internal cache, only accessed within namespace (port 6379)
+# - All components talk to each other internally
+#
+# Strategy: ingress-only. Egress is open because ArgoCD components need to
+# reach the K8s API, Gitea (for git+registry), and external Helm repos.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: argocd-allowed-ingress
+  namespace: argocd
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Intra-namespace: all ArgoCD pods talk to each other
+    # (server ↔ repo-server ↔ controller ↔ redis ↔ image-updater)
+    - from:
+        - podSelector: {}
+
+    # Traefik (kube-system) → argocd-server container port 8080
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 8080
+
+    # Prometheus (monitoring) → scrape ArgoCD metrics
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8083
