@@ -10,8 +10,12 @@
 
 # Keep scan pressure light on a 6-node mixed-arch cluster (4 Pi + 2 x86)
 operator:
-  scanJobsConcurrentLimit: 5
+  scanJobsConcurrentLimit: 3
   scanJobsRetryDelay: 30s
+  # Use the built-in Trivy server so scan jobs query it over HTTP instead of
+  # each downloading their own DB copy. Eliminates "cache may be in use by
+  # another process: timeout" errors from concurrent scan jobs.
+  builtInTrivyServer: true
   vulnerabilityScannerEnabled: true
   configAuditScannerEnabled: true
   rbacAssessmentScannerEnabled: true
@@ -20,13 +24,17 @@ operator:
   exposedSecretScannerEnabled: true
   metricsVulnIdEnabled: false
 
-# Pin scan jobs to the x86 agents so ARM64 Pis stay responsive. The tag
-# `storage=true` is also applied to both x86 nodes (see 03-post-install)
-# and reliably survives rebuilds.
+# Pin operator + scan jobs to the x86 agents so ARM64 Pis stay responsive.
 nodeSelector:
   kubernetes.io/arch: amd64
 
 trivy:
+  # ClientServer mode: scan jobs send image refs to the built-in Trivy server
+  # which holds the vulnerability DB persistently. No per-job DB download,
+  # no cache lock contention.
+  mode: ClientServer
+  serverURL: "http://trivy-service.trivy-system.svc.cluster.local:4954"
+
   # Same arch constraint for the scanner sidecars spawned by scan jobs
   nodeSelector:
     kubernetes.io/arch: amd64
@@ -39,6 +47,33 @@ trivy:
       memory: 512Mi
   ignoreUnfixed: true
   severity: "CRITICAL,HIGH,MEDIUM"
+
+  # Gitea container registry is HTTP-only. Without this, Trivy tries HTTPS
+  # and fails with TLS handshake errors.
+  insecureRegistries:
+    gitea: "gitea-http.gitea.svc.cluster.local:3000"
+
+  # Map the external hostname used in image refs to the in-cluster service
+  # so the Trivy server can pull images without depending on CoreDNS NodeHosts
+  # or MetalLB VIP routing.
+  # TODO CHANGEME: replace with your gitea.<local_domain> from group_vars/all/main.yml
+  registry:
+    mirror:
+      "gitea.example.local": "gitea-http.gitea.svc.cluster.local:3000"
+
+  # Trivy server resources and storage
+  server:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  # 5Gi PVC for the vulnerability DB (default storageClass = Longhorn)
+  storageClassEnabled: true
+  storageSize: "5Gi"
 
 # ServiceMonitor is off — monitoring scrapes via extraScrapeConfigs with
 # kubernetes_sd_configs (works before/without kube-prometheus-stack CRDs).

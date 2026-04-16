@@ -7,6 +7,7 @@
 # Traffic allowed:
 #   - Traefik (kube-system) → gitea-http:3000 (web UI + git over HTTPS)
 #   - ArgoCD (argocd ns)    → gitea-http:3000 (git pulls + container registry)
+#   - Trivy (trivy-system)  → gitea-http:3000 (container image scanning)
 #   - Prometheus (monitoring ns) → gitea-http:3000 (future metrics scraping)
 #   - Any source → gitea-ssh:2222 (NodePort 30022 → pod:2222 for git over SSH)
 ---
@@ -31,6 +32,13 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: argocd
+      ports:
+        - protocol: TCP
+          port: 3000
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: trivy-system
       ports:
         - protocol: TCP
           port: 3000

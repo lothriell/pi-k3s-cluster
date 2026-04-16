@@ -1,6 +1,6 @@
 ---
 # kube-vip image version (pinned; bump in one place when upgrading).
-kube_vip_version: "v0.8.9"
+kube_vip_version: "v1.1.2"
 
 # Host interface that kube-vip's ARP broadcaster attaches to. Pi CM5 + Ubuntu
 # use eth0 for wired; override per-host if you ever run on a board with a

@@ -8,6 +8,13 @@
 #
 # Mode 0600, owned by root — do not put secrets in the systemd unit file.
 
+# --- etcd tuning ---
+# Default 1.5 MB is too small for large Trivy VulnerabilityReports
+# (e.g. Open WebUI image produces reports >1.5 MB). 8 MB is the
+# etcd hard maximum; 4 MB gives plenty of headroom without risk.
+etcd-arg:
+  - "max-request-bytes=4194304"
+
 {% if r2_access_key_id is defined %}
 # --- Embedded etcd offsite snapshots (Cloudflare R2 via S3 API) ---
 # K3s's built-in snapshot loop handles scheduling, retention, and upload.
