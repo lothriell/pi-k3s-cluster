@@ -144,6 +144,9 @@ K3s is installed with `--disable servicelb` because MetalLB handles load balanci
 ### Tailscale accept-routes
 Cluster nodes must NOT use `--accept-routes`. This causes them to route LAN traffic through Tailscale instead of eth0, breaking inter-node networking, MetalLB ARP, and Flannel. Only external clients should accept the subnet route.
 
+### Tailscale SSH
+All 6 K3s cluster nodes run Tailscale's built-in SSH server (`RunSSH=True`), enabled by the tailscale role via `tailscale set --ssh --accept-risk=lose-ssh`. SSH sessions are authenticated by tailnet identity (not OpenSSH `authorized_keys`), gated by the ACL policy at `login.tailscale.com/admin/acls`. Sessions route over WireGuard, so they survive LAN subnet disruption — critical for `nuke-cluster.sh` which kills the subnet route mid-run. All 3 K3s servers also advertise the cluster subnet as HA subnet routers.
+
 ### Longhorn Storage
 Longhorn is the default StorageClass (2 replicas). `local-path` is still available but not default. 32GB eMMC per node — storageMinimalAvailablePercentage set to 25% to reserve space for OS upgrades.
 
