@@ -34,5 +34,10 @@ gitea_admin_user: "mygiteaadmin"
 gitea_admin_password: "changeme-use-a-real-password"
 gitea_admin_email: "admin@example.com"
 
+# Forgejo service admin (auto-created on fresh install)
+forgejo_admin_user: "forgejo_admin"
+forgejo_admin_password: "changeme-use-a-real-password"
+forgejo_admin_email: "admin@example.com"
+
 # ArgoCD admin password
 argocd_admin_password: "changeme-use-a-real-password"

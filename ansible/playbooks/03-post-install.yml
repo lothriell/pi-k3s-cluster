@@ -74,6 +74,7 @@
         - cloudflare
         - argocd
         - headlamp
+        - forgejo
       register: ns_result
       changed_when: ns_result.rc == 0
       failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr

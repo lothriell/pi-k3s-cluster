@@ -1,0 +1,40 @@
+# NetworkPolicy: forgejo namespace
+#
+# Personal git server — simpler than Gitea's policy.
+# No ArgoCD or Trivy access needed (no CI/CD pipeline, no container registry).
+#
+# Traffic allowed:
+#   - Traefik (kube-system) → forgejo-http:3000 (web UI + git over HTTPS)
+#   - Prometheus (monitoring ns) → forgejo-http:3000 (future metrics scraping)
+#   - Any source → forgejo-ssh:2222 (NodePort 30023 for git over SSH)
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: forgejo-allowed-ingress
+  namespace: forgejo
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 3000
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 3000
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 2222

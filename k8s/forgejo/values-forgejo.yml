@@ -1,0 +1,183 @@
+# =============================================================================
+# Helm Values: forgejo (OCI chart)
+# =============================================================================
+# Personal self-hosted Git service running alongside Gitea. Forgejo handles
+# private repos (dotfiles, kubernetes) for Mac/Windows sync via Tailscale.
+# Gitea stays untouched — it owns the eve-tracker CI/CD pipeline.
+#
+# Chart: oci://code.forgejo.org/forgejo-helm/forgejo
+# Install with:
+#   helm upgrade --install forgejo \
+#     oci://code.forgejo.org/forgejo-helm/forgejo \
+#     -n forgejo -f values-forgejo.yml
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Image -- official rootless Forgejo image (multi-arch, supports ARM64).
+# ---------------------------------------------------------------------------
+image:
+  registry: code.forgejo.org
+  repository: forgejo/forgejo
+  rootless: true
+
+# ---------------------------------------------------------------------------
+# Deployment strategy -- MUST be Recreate (not RollingUpdate).
+# Same RWO PVC deadlock concern as Gitea — see CLAUDE.md.
+# ---------------------------------------------------------------------------
+strategy:
+  type: Recreate
+  rollingUpdate: null
+
+# ---------------------------------------------------------------------------
+# Security -- rootless image runs as UID 1000 (git user).
+# readOnlyRootFilesystem is false because Forgejo writes to /tmp and
+# various paths under /data that aren't on the PVC mount.
+# ---------------------------------------------------------------------------
+podSecurityContext:
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+# ---------------------------------------------------------------------------
+# Resources -- lighter than Gitea (no container registry traffic).
+# ---------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# Node selector -- schedule on ARM64 nodes (Pi CM5).
+# ---------------------------------------------------------------------------
+nodeSelector:
+  kubernetes.io/arch: arm64
+
+# ---------------------------------------------------------------------------
+# Persistence -- Git repos and Forgejo data on Longhorn RWO PVC.
+# ---------------------------------------------------------------------------
+persistence:
+  enabled: true
+  size: 10Gi
+  storageClass: longhorn
+  accessModes:
+    - ReadWriteOnce
+
+# ---------------------------------------------------------------------------
+# Database -- SQLite, no external dependencies.
+# ---------------------------------------------------------------------------
+postgresql:
+  enabled: false
+
+postgresql-ha:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# Cache / session / queue -- in-process, no Redis needed.
+# ---------------------------------------------------------------------------
+redis-cluster:
+  enabled: false
+
+redis:
+  enabled: false
+
+valkey:
+  enabled: false
+
+valkey-cluster:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# Forgejo application configuration (app.ini)
+# NOTE: The chart uses `gitea:` as the config key (inherited from the
+# Gitea Helm chart it was forked from). This is NOT a mistake.
+# ---------------------------------------------------------------------------
+gitea:
+  config:
+    database:
+      DB_TYPE: sqlite3
+      PATH: /data/forgejo/forgejo.db
+
+    cache:
+      ADAPTER: memory
+      INTERVAL: 60
+      HOST: ""
+
+    session:
+      PROVIDER: file
+      PROVIDER_CONFIG: /data/forgejo/sessions
+
+    queue:
+      TYPE: channel
+
+    server:
+      # TODO CHANGEME -- replace with your forge.<local_domain>
+      DOMAIN: forge.example.local
+      ROOT_URL: http://forge.example.local
+      SSH_DOMAIN: forge.example.local
+      SSH_PORT: 30023
+      SSH_LISTEN_PORT: 2222
+      LFS_START_SERVER: true
+
+    repository:
+      DEFAULT_PRIVATE: private
+
+    service:
+      DISABLE_REGISTRATION: true
+      REQUIRE_SIGNIN_VIEW: true
+
+    cron:
+      ENABLED: true
+      RUN_AT_START: false
+    "cron.repo_health_check":
+      SCHEDULE: "@every 72h"
+    "cron.resync_all_sshkeys":
+      SCHEDULE: "@every 72h"
+
+    indexer:
+      REPO_INDEXER_ENABLED: false
+
+    packages:
+      ENABLED: false
+
+    log:
+      LEVEL: Warn
+
+  # Admin account created from a K8s Secret (see admin-secret.yml.example).
+  # Credentials injected via vault vars in the deploy playbook.
+  admin:
+    existingSecret: forgejo-admin-secret
+
+# ---------------------------------------------------------------------------
+# Ingress -- DISABLED in Helm. Deployed separately via ingress.local.yml
+# for more control and to keep real hostnames out of tracked files.
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# Service -- ClusterIP for HTTP, NodePort for SSH.
+# SSH uses 30023 (Gitea uses 30022).
+# ---------------------------------------------------------------------------
+service:
+  http:
+    type: ClusterIP
+    port: 3000
+  ssh:
+    type: NodePort
+    port: 2222
+    nodePort: 30023

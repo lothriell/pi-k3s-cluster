@@ -45,3 +45,4 @@ docs/18-architecture.md
 
 # Local Ingress overrides (so private hostnames don't leak to public repo)
 k8s/*/ingress.local.yml
+*.sync-conflict-*

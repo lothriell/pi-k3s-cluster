@@ -1,0 +1,108 @@
+---
+# Playbook 10: Deploy Wazuh agent
+# Installs Wazuh agent on target nodes and registers with the Wazuh manager.
+# Supports both Debian/Ubuntu (apt) and Arch-based (pacman/yay) systems.
+#
+# Usage:
+#   ansible-playbook ansible/playbooks/10-deploy-wazuh-agent.yml -e "target_hosts=sff_nodes"
+#   ansible-playbook ansible/playbooks/10-deploy-wazuh-agent.yml --limit athena
+
+- name: Deploy Wazuh agent
+  hosts: "{{ target_hosts | default('sff_nodes') }}"
+  become: true
+  gather_facts: true
+
+  vars:
+    wazuh_manager_ip: "{{ wazuh_manager_ip }}"
+    wazuh_version: "4.14.4"
+
+  tasks:
+    - name: Check if Wazuh agent is already installed
+      ansible.builtin.stat:
+        path: /var/ossec/bin/wazuh-control
+      register: wazuh_installed
+      tags: [wazuh]
+
+    # -- Debian/Ubuntu (apt) ---------------------------------------------------
+
+    - name: Add Wazuh GPG key (apt)
+      ansible.builtin.shell: |
+        curl -s https://packages.wazuh.com/key/GPG-KEY-WAZUH \
+          | gpg --dearmor -o /usr/share/keyrings/wazuh-archive-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/wazuh-archive-keyring.gpg
+      when:
+        - not wazuh_installed.stat.exists
+        - ansible_os_family == "Debian"
+      tags: [wazuh, packages]
+
+    - name: Add Wazuh apt repository
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/wazuh.list
+        content: |
+          deb [signed-by=/usr/share/keyrings/wazuh-archive-keyring.gpg] https://packages.wazuh.com/4.x/apt/ stable main
+        owner: root
+        group: root
+        mode: "0644"
+      when:
+        - not wazuh_installed.stat.exists
+        - ansible_os_family == "Debian"
+      tags: [wazuh, packages]
+
+    - name: Install Wazuh agent (apt)
+      ansible.builtin.apt:
+        name: "wazuh-agent={{ wazuh_version }}-1"
+        state: present
+        update_cache: true
+      environment:
+        WAZUH_MANAGER: "{{ wazuh_manager_ip }}"
+      when:
+        - not wazuh_installed.stat.exists
+        - ansible_os_family == "Debian"
+      tags: [wazuh, packages]
+
+    # -- Arch-based (yay from AUR) ---------------------------------------------
+
+    - name: Install Wazuh agent from AUR (Arch)
+      ansible.builtin.command: >
+        sudo -u {{ ansible_env.SUDO_USER | default(personal_user) }}
+        yay -S --noconfirm --needed wazuh-agent
+      when:
+        - not wazuh_installed.stat.exists
+        - ansible_os_family == "Archlinux"
+      tags: [wazuh, packages]
+
+    # -- Common config ---------------------------------------------------------
+
+    - name: Ensure Wazuh manager address is configured
+      ansible.builtin.lineinfile:
+        path: /var/ossec/etc/ossec.conf
+        regexp: '<address>.*</address>'
+        line: "      <address>{{ wazuh_manager_ip }}</address>"
+      notify: restart wazuh-agent
+      tags: [wazuh]
+
+    - name: Enable and start Wazuh agent
+      ansible.builtin.systemd:
+        name: wazuh-agent
+        enabled: true
+        state: started
+        daemon_reload: true
+      tags: [wazuh, services]
+
+    - name: Verify Wazuh agent status
+      ansible.builtin.command: /var/ossec/bin/wazuh-control status
+      register: wazuh_status
+      changed_when: false
+      tags: [wazuh, verify]
+
+    - name: Display Wazuh agent status
+      ansible.builtin.debug:
+        var: wazuh_status.stdout_lines
+      tags: [wazuh, verify]
+
+  handlers:
+    - name: restart wazuh-agent
+      ansible.builtin.systemd:
+        name: wazuh-agent
+        state: restarted

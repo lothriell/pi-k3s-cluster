@@ -32,7 +32,7 @@ spec:
     - from:
         - podSelector: {}
 
-    # Traefik (kube-system) → Grafana container port 3000
+    # Traefik (kube-system) → Grafana (3000), Prometheus (9090), Alertmanager (9093)
     - from:
         - namespaceSelector:
             matchLabels:
@@ -40,6 +40,10 @@ spec:
       ports:
         - protocol: TCP
           port: 3000
+        - protocol: TCP
+          port: 9090
+        - protocol: TCP
+          port: 9093
 
     # External Promtail (athena) → Loki NodePort 31100 → container 3100
     # NodePort traffic arrives from the node IP, which is outside any

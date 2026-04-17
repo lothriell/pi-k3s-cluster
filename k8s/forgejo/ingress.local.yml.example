@@ -1,0 +1,25 @@
+# Forgejo LAN Ingress -- copy to ingress.local.yml and set your hostname.
+# ingress.local.yml is gitignored (contains real domain).
+#
+# Requires: forge.<local_domain> resolving to Traefik LB IP in /etc/hosts
+# or local DNS.
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: forgejo-local
+  namespace: forgejo
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  rules:
+    - host: forge.example.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: forgejo-http
+                port:
+                  number: 3000

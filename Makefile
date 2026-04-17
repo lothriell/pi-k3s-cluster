@@ -127,6 +127,10 @@ monitoring: ## Deploy monitoring stack (Prometheus, Grafana, etc.)
 gitea: ## Deploy Gitea git server
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/05-deploy-gitea.yml
 
+.PHONY: forgejo
+forgejo: ## Deploy Forgejo git server (personal repos, Windows sync)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/06-deploy-forgejo.yml
+
 .PHONY: argocd
 argocd: ## Deploy ArgoCD for GitOps continuous deployment
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/07-deploy-argocd.yml

@@ -65,3 +65,11 @@ metadata:
   labels:
     name: headlamp
     # Purpose: Headlamp Kubernetes web UI dashboard
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: forgejo
+  labels:
+    name: forgejo
+    # Purpose: Forgejo self-hosted Git service (personal repos, Windows sync)

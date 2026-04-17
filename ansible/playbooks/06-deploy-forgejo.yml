@@ -1,0 +1,93 @@
+---
+# Playbook 06: Deploy Forgejo self-hosted Git service
+# Deploys alongside Gitea as a personal git server for private repos.
+# Uses OCI Helm chart — no `helm repo add` needed.
+#
+# Usage: ansible-playbook playbooks/06-deploy-forgejo.yml
+#        make forgejo
+
+- name: Deploy Forgejo to the K3s cluster
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+
+  vars:
+    forgejo_values: "{{ playbook_dir }}/../../k8s/forgejo/values-forgejo.yml"
+    forgejo_netpol: "{{ playbook_dir }}/../../k8s/network-policies/forgejo.yml"
+
+  tasks:
+    - name: Ensure forgejo namespace exists
+      ansible.builtin.command: kubectl create namespace forgejo --dry-run=client -o yaml
+      register: ns_yaml
+      changed_when: false
+      tags: [forgejo]
+
+    - name: Apply forgejo namespace
+      ansible.builtin.command: kubectl apply -f -
+      args:
+        stdin: "{{ ns_yaml.stdout }}"
+      changed_when: false
+      tags: [forgejo]
+
+    # -- Admin secret (from vault vars) ----------------------------------------
+    - name: Create Forgejo admin secret
+      ansible.builtin.shell: |
+        kubectl -n forgejo create secret generic forgejo-admin-secret \
+          --from-literal=username={{ forgejo_admin_user }} \
+          --from-literal=password={{ forgejo_admin_password }} \
+          --from-literal=email={{ forgejo_admin_email }} \
+          --dry-run=client -o yaml | kubectl apply -f -
+      changed_when: false
+      tags: [forgejo]
+
+    # -- Helm deploy (OCI chart, no repo add needed) ---------------------------
+    - name: Deploy Forgejo via Helm (OCI chart)
+      ansible.builtin.command: >
+        helm upgrade --install forgejo
+        oci://code.forgejo.org/forgejo-helm/forgejo
+        --namespace forgejo
+        --values {{ forgejo_values }}
+        --wait
+        --timeout 10m
+      register: forgejo_deploy
+      changed_when: "'STATUS: deployed' in forgejo_deploy.stdout"
+      tags: [forgejo]
+
+    # -- NetworkPolicy ---------------------------------------------------------
+    - name: Apply Forgejo NetworkPolicy
+      ansible.builtin.command: kubectl apply -f {{ forgejo_netpol }}
+      register: forgejo_netpol_result
+      changed_when: "'configured' in forgejo_netpol_result.stdout or 'created' in forgejo_netpol_result.stdout"
+      tags: [forgejo, network-policies]
+
+    # -- Wait + verify ---------------------------------------------------------
+    - name: Wait for Forgejo pods to be ready
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Ready pods
+        --all --namespace forgejo
+        --timeout=300s
+      changed_when: false
+      tags: [forgejo]
+
+    - name: Show Forgejo pod status
+      ansible.builtin.command: kubectl get pods -n forgejo -o wide
+      register: forgejo_pods
+      changed_when: false
+      tags: [forgejo, verify]
+
+    - name: Display Forgejo pods
+      ansible.builtin.debug:
+        var: forgejo_pods.stdout_lines
+      tags: [forgejo, verify]
+
+    - name: Show Forgejo services
+      ansible.builtin.command: kubectl get svc -n forgejo
+      register: forgejo_svcs
+      changed_when: false
+      tags: [forgejo, verify]
+
+    - name: Display Forgejo services
+      ansible.builtin.debug:
+        var: forgejo_svcs.stdout_lines
+      tags: [forgejo, verify]
