@@ -1,0 +1,73 @@
+---
+# =============================================================================
+# Vaultwarden — self-hosted Bitwarden-compatible vault
+# =============================================================================
+# Deploys vaultwarden via Helm into the `vaultwarden` namespace.
+# Creates the admin token Secret from Ansible Vault (vaultwarden_admin_token).
+#
+# Usage: make vaultwarden
+# Access: http://vault.<local_domain>  (LAN via Traefik; no Cloudflare tunnel)
+# =============================================================================
+
+- name: Deploy Vaultwarden
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  become: false
+
+  tasks:
+    - name: Ensure vaultwarden namespace exists
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: vaultwarden
+
+    - name: Create admin-token Secret (hashed with Argon2 via --hash command)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: vaultwarden-admin
+            namespace: vaultwarden
+          type: Opaque
+          stringData:
+            token: "{{ vaultwarden_admin_token }}"
+
+    - name: Add guerzon Helm repo
+      ansible.builtin.command: helm repo add guerzon https://guerzon.github.io/vaultwarden
+      register: helm_repo_add
+      changed_when: "'has been added' in helm_repo_add.stdout"
+      failed_when:
+        - helm_repo_add.rc != 0
+        - "'already exists' not in helm_repo_add.stderr"
+
+    - name: Update Helm repos
+      ansible.builtin.command: helm repo update guerzon
+      changed_when: false
+
+    - name: Deploy vaultwarden
+      ansible.builtin.command: >
+        helm upgrade --install vaultwarden guerzon/vaultwarden
+        --namespace vaultwarden
+        -f {{ playbook_dir }}/../../k8s/vaultwarden/values-vaultwarden.yml
+        --wait --timeout 5m
+      register: helm_deploy
+      changed_when: "'has been upgraded' in helm_deploy.stdout or 'has been installed' in helm_deploy.stdout"
+
+    - name: Report access URL
+      ansible.builtin.debug:
+        msg: |
+          Vaultwarden deployed. Access at:  http://vault.{{ local_domain }}
+          Admin panel:                      http://vault.{{ local_domain }}/admin
+          Admin token:                      from vault.yml (vaultwarden_admin_token)
+
+          First run:
+            1. Open the admin panel, log in with the admin token.
+            2. Under Users → Invite, invite yourself.
+            3. Register through the invite link (signups are globally disabled,
+               so this is the only path for a new account).

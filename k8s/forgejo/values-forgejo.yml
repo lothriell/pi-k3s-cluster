@@ -73,7 +73,8 @@ nodeSelector:
 persistence:
   enabled: true
   size: 10Gi
-  storageClass: longhorn
+  # x86-pinned: Pi eMMC is too small for a 10Gi git repo store.
+  storageClass: longhorn-storage
   accessModes:
     - ReadWriteOnce
 

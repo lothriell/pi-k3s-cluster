@@ -67,20 +67,19 @@ def reload_config(signum=None, frame=None):
 
 def send_alert(domain, client_ip, label):
     """Send notification via ntfy."""
-    msg = f"User {client_ip} accessed {label}"
-    body = f"Domain: {domain}\nClient: {client_ip}\nLabel: {label}"
+    body = f"{client_ip} accessed duckie.com domain"
     try:
         req = urllib.request.Request(
             NTFY_URL,
             data=body.encode(),
             headers={
-                "Title": msg,
+                "Title": label,
                 "Priority": "high",
                 "Tags": "warning",
             },
         )
         urllib.request.urlopen(req, timeout=5)
-        log(f"ALERT: {msg} ({domain})")
+        log(f"ALERT: {label} from {client_ip} ({domain})")
     except Exception as e:
         log(f"ERROR sending alert: {e}")
 

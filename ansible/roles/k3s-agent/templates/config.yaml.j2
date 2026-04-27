@@ -1,0 +1,13 @@
+---
+# /etc/rancher/k3s/config.yaml — persistent K3s agent config.
+#
+# K3s's install script does NOT overwrite this file, so runtime tuning
+# survives reinstalls.
+
+# --- kubelet tuning ---
+# Pi agents have 32 GB eMMC, x86 agents 130 GB. Either way, the default
+# image-gc thresholds (85%/80%) trigger too late; ArgoCD Image Updater
+# churn fills containerd before then. Prune at 75% down to 60%.
+kubelet-arg:
+  - "image-gc-high-threshold=75"
+  - "image-gc-low-threshold=60"

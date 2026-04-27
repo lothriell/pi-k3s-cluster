@@ -8,12 +8,12 @@
 #   make shell
 # =============================================================================
 
-- name: Setup shell environment on all nodes
-  hosts: k3s_cluster
+- name: Setup shell environment
+  hosts: "{{ target_hosts | default('k3s_cluster') }}"
   become: true
   vars:
-    target_user: "{{ personal_user }}"
-    target_home: "/home/{{ personal_user }}"
+    # Override via --extra-vars '{"shell_users":["myuser","root"]}' to bootstrap multiple users
+    shell_users: ["{{ personal_user }}"]
 
   tasks:
     # -- Install packages ------------------------------------------------------
@@ -42,44 +42,7 @@
         creates: /usr/bin/eza
       tags: [packages]
 
-    # -- Set zsh as default shell ----------------------------------------------
-
-    - name: Set zsh as default shell for {{ target_user }}
-      ansible.builtin.user:
-        name: "{{ target_user }}"
-        shell: /usr/bin/zsh
-      tags: [shell]
-
-    # -- Install Oh My Zsh ----------------------------------------------------
-
-    - name: Check if Oh My Zsh is already installed
-      ansible.builtin.stat:
-        path: "{{ target_home }}/.oh-my-zsh"
-      register: omz_dir
-      tags: [omz]
-
-    - name: Install Oh My Zsh
-      ansible.builtin.shell: |
-        su - {{ target_user }} -c 'sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended'
-      when: not omz_dir.stat.exists
-      tags: [omz]
-
-    - name: Install zsh-autosuggestions plugin
-      ansible.builtin.git:
-        repo: https://github.com/zsh-users/zsh-autosuggestions.git
-        dest: "{{ target_home }}/.oh-my-zsh/custom/plugins/zsh-autosuggestions"
-        depth: 1
-      tags: [omz]
-
-    - name: Fix oh-my-zsh ownership
-      ansible.builtin.file:
-        path: "{{ target_home }}/.oh-my-zsh"
-        owner: "{{ target_user }}"
-        group: "{{ target_user }}"
-        recurse: true
-      tags: [omz]
-
-    # -- Install Oh My Posh ---------------------------------------------------
+    # -- Install Oh My Posh (host-level, once) --------------------------------
 
     - name: Check if oh-my-posh is already installed
       ansible.builtin.stat:
@@ -93,31 +56,80 @@
       when: not omp_bin.stat.exists
       tags: [omp]
 
-    - name: Create oh-my-posh themes directory
+    # -- Per-user configuration (loop over shell_users) ------------------------
+
+    - name: Set zsh as default shell
+      ansible.builtin.user:
+        name: "{{ item }}"
+        shell: /usr/bin/zsh
+      loop: "{{ shell_users }}"
+      tags: [shell]
+
+    - name: Build user-to-home mapping (/root for root, /home/<user> otherwise)
+      ansible.builtin.set_fact:
+        user_homes: "{{ user_homes | default({}) | combine({item: ('/root' if item == 'root' else '/home/' + item)}) }}"
+      loop: "{{ shell_users }}"
+      tags: [omz, omp, zshrc, shell]
+
+    - name: Check if Oh My Zsh is already installed per user
+      ansible.builtin.stat:
+        path: "{{ user_homes[item] }}/.oh-my-zsh"
+      register: omz_dir
+      loop: "{{ shell_users }}"
+      tags: [omz]
+
+    - name: Install Oh My Zsh per user
+      ansible.builtin.shell: |
+        su - {{ item.item }} -c 'sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended'
+      loop: "{{ omz_dir.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: not item.stat.exists
+      tags: [omz]
+
+    - name: Install zsh-autosuggestions plugin per user
+      ansible.builtin.git:
+        repo: https://github.com/zsh-users/zsh-autosuggestions.git
+        dest: "{{ user_homes[item] }}/.oh-my-zsh/custom/plugins/zsh-autosuggestions"
+        depth: 1
+      loop: "{{ shell_users }}"
+      tags: [omz]
+
+    - name: Fix oh-my-zsh ownership per user
       ansible.builtin.file:
-        path: "{{ target_home }}/.config/oh-my-posh/themes"
+        path: "{{ user_homes[item] }}/.oh-my-zsh"
+        owner: "{{ item }}"
+        group: "{{ item }}"
+        recurse: true
+      loop: "{{ shell_users }}"
+      tags: [omz]
+
+    - name: Create oh-my-posh themes directory per user
+      ansible.builtin.file:
+        path: "{{ user_homes[item] }}/.config/oh-my-posh/themes"
         state: directory
-        owner: "{{ target_user }}"
-        group: "{{ target_user }}"
+        owner: "{{ item }}"
+        group: "{{ item }}"
         mode: "0755"
+      loop: "{{ shell_users }}"
       tags: [omp]
 
-    - name: Copy custom atomic theme
+    - name: Copy custom atomic theme per user
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../dotfiles/oh-my-posh/atomic.omp.json"
-        dest: "{{ target_home }}/.config/oh-my-posh/themes/atomic.omp.json"
-        owner: "{{ target_user }}"
-        group: "{{ target_user }}"
+        dest: "{{ user_homes[item] }}/.config/oh-my-posh/themes/atomic.omp.json"
+        owner: "{{ item }}"
+        group: "{{ item }}"
         mode: "0644"
+      loop: "{{ shell_users }}"
       tags: [omp]
 
-    # -- Deploy .zshrc ---------------------------------------------------------
-
-    - name: Deploy .zshrc
+    - name: Deploy .zshrc per user
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../dotfiles/zshrc"
-        dest: "{{ target_home }}/.zshrc"
-        owner: "{{ target_user }}"
-        group: "{{ target_user }}"
+        dest: "{{ user_homes[item] }}/.zshrc"
+        owner: "{{ item }}"
+        group: "{{ item }}"
         mode: "0644"
+      loop: "{{ shell_users }}"
       tags: [zshrc]

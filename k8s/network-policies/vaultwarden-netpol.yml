@@ -1,0 +1,28 @@
+# NetworkPolicy: vaultwarden
+# Ingress: only Traefik (kube-system) on port 80 (pod port).
+# Egress: DNS (kube-system CoreDNS) + cluster-local for future SMTP/external.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vaultwarden-allowed-ingress
+  namespace: vaultwarden
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 8080
+          protocol: TCP
+    # Allow monitoring scrapes if we add a ServiceMonitor later
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8080
+          protocol: TCP

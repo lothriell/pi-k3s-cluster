@@ -157,6 +157,10 @@ trivy-operator: ## Install Trivy Operator (Helm) into trivy-system ns and scrape
 headlamp: ## Deploy Headlamp Kubernetes web UI dashboard
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/14-deploy-headlamp.yml
 
+.PHONY: vaultwarden
+vaultwarden: ## Deploy Vaultwarden (self-hosted Bitwarden) LAN-only at vault.<local_domain>
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/20-deploy-vaultwarden.yml
+
 .PHONY: network-policies
 network-policies: ## Apply all namespace NetworkPolicies (requires target namespaces to exist)
 	$(KUBECTL) apply -f k8s/network-policies/

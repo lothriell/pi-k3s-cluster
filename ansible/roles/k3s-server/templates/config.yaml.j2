@@ -15,6 +15,14 @@
 etcd-arg:
   - "max-request-bytes=4194304"
 
+# --- kubelet tuning ---
+# Pi nodes have 32 GB eMMC. Default image-gc thresholds (85%/80%) trigger
+# too late; ArgoCD Image Updater churn fills /var/lib/rancher/k3s/agent/
+# containerd well before that. Prune aggressively at 75%, down to 60%.
+kubelet-arg:
+  - "image-gc-high-threshold=75"
+  - "image-gc-low-threshold=60"
+
 {% if r2_access_key_id is defined %}
 # --- Embedded etcd offsite snapshots (Cloudflare R2 via S3 API) ---
 # K3s's built-in snapshot loop handles scheduling, retention, and upload.

@@ -41,3 +41,7 @@ forgejo_admin_email: "admin@example.com"
 
 # ArgoCD admin password
 argocd_admin_password: "changeme-use-a-real-password"
+
+# Vaultwarden admin panel token (LAN-only self-hosted Bitwarden)
+# Generate: openssl rand -base64 48 | tr -d '\n=' | head -c 48
+vaultwarden_admin_token: "changeme-a-long-random-string"

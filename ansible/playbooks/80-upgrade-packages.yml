@@ -1,0 +1,179 @@
+---
+# =============================================================================
+# Package upgrade across all managed nodes, with auto-reboot where required.
+# =============================================================================
+# Idempotent: re-runnable. Already-up-to-date hosts become no-ops.
+#
+# Phases:
+#   1. Non-cluster hosts (parallel): gpu_servers, sff_nodes, security_stack
+#      — mixed Ubuntu (apt) and CachyOS (pacman) handled by OS family
+#   2. K3s agents (serial=1): preserves workload availability, kubectl wait
+#   3. K3s servers (serial=1): preserves etcd quorum, kubectl wait
+#   4. Arch/CachyOS desktops (parallel): pacman -Syu + reboot
+#   5. macmini: brew update+upgrade (no reboot)
+#
+# K3s binary is installed via script, not apt — apt won't touch it.
+# =============================================================================
+
+- name: Phase 1 — non-cluster hosts (parallel, OS-aware)
+  hosts: gpu_servers:sff_nodes:security_stack
+  become: true
+  gather_facts: true
+  tasks:
+    - name: apt update + upgrade (Debian family)
+      ansible.builtin.apt:
+        update_cache: yes
+        upgrade: "yes"
+        autoremove: yes
+        autoclean: yes
+      when: ansible_os_family == 'Debian'
+
+    - name: pacman -Syu (Arch family)
+      community.general.pacman:
+        update_cache: yes
+        upgrade: yes
+      when: ansible_os_family == 'Archlinux'
+
+    - name: Check reboot-required (Debian)
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required_deb
+      when: ansible_os_family == 'Debian'
+
+    - name: Reboot Debian if flagged
+      ansible.builtin.reboot:
+        msg: "Reboot triggered by apt upgrade"
+        pre_reboot_delay: 5
+        post_reboot_delay: 30
+        reboot_timeout: 600
+      when:
+        - ansible_os_family == 'Debian'
+        - reboot_required_deb.stat.exists
+
+    - name: Reboot Arch family unconditionally (kernel/module drift risk)
+      ansible.builtin.reboot:
+        msg: "Reboot triggered by pacman -Syu"
+        pre_reboot_delay: 5
+        post_reboot_delay: 30
+        reboot_timeout: 600
+      when: ansible_os_family == 'Archlinux'
+
+- name: Phase 2 — K3s agents (serial, Ubuntu)
+  hosts: k3s_agents:k3s_x86_agents
+  become: true
+  serial: 1
+  tasks:
+    - name: apt update + upgrade
+      ansible.builtin.apt:
+        update_cache: yes
+        upgrade: "yes"
+        autoremove: yes
+        autoclean: yes
+
+    - name: Check reboot-required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Reboot if flagged
+      ansible.builtin.reboot:
+        msg: "Reboot triggered by apt upgrade"
+        pre_reboot_delay: 5
+        post_reboot_delay: 45
+        reboot_timeout: 600
+      when: reboot_required.stat.exists
+
+    - name: Wait for node Ready in Kubernetes
+      delegate_to: localhost
+      become: false
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - wait
+          - node
+          - "{{ inventory_hostname }}"
+          - --for=condition=Ready
+          - --timeout=300s
+      when: reboot_required.stat.exists
+      changed_when: false
+
+- name: Phase 3 — K3s servers (serial, etcd quorum safe)
+  hosts: k3s_server
+  become: true
+  serial: 1
+  tasks:
+    - name: apt update + upgrade
+      ansible.builtin.apt:
+        update_cache: yes
+        upgrade: "yes"
+        autoremove: yes
+        autoclean: yes
+
+    - name: Check reboot-required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Reboot if flagged
+      ansible.builtin.reboot:
+        msg: "Reboot triggered by apt upgrade (etcd voter)"
+        pre_reboot_delay: 10
+        post_reboot_delay: 60
+        reboot_timeout: 600
+      when: reboot_required.stat.exists
+
+    - name: Wait for node Ready in Kubernetes
+      delegate_to: localhost
+      become: false
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - wait
+          - node
+          - "{{ inventory_hostname }}"
+          - --for=condition=Ready
+          - --timeout=300s
+      when: reboot_required.stat.exists
+      changed_when: false
+
+- name: Phase 4 — Arch/CachyOS desktops (parallel)
+  hosts: desktops
+  become: true
+  tasks:
+    - name: pacman -Syu
+      community.general.pacman:
+        update_cache: yes
+        upgrade: yes
+
+    - name: Reboot
+      ansible.builtin.reboot:
+        msg: "Reboot triggered by pacman -Syu"
+        pre_reboot_delay: 5
+        post_reboot_delay: 30
+        reboot_timeout: 600
+
+- name: Phase 5 — macmini (brew, no reboot)
+  # /opt/homebrew is owned by the personal user, not the ansible service
+  # account. Connect as that user and skip become (brew refuses to run as
+  # root anyway).
+  hosts: macos_nodes
+  remote_user: "{{ personal_user }}"
+  become: false
+  gather_facts: false
+  tasks:
+    - name: brew update
+      community.general.homebrew:
+        update_homebrew: yes
+
+    - name: brew upgrade (all formulae)
+      community.general.homebrew:
+        upgrade_all: yes
+
+- name: Phase 6 — Assert registry DNS resolves on all K3s nodes
+  hosts: k3s_cluster
+  gather_facts: false
+  tasks:
+    - name: Resolve Gitea registry hostname (catches cloud-init /etc/hosts wipes)
+      ansible.builtin.command: >
+        getent hosts {{ gitea_registry_host | default('gitea.' + (local_domain | default('homielab.local'))) }}
+      changed_when: false

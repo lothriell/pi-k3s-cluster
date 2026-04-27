@@ -1,0 +1,104 @@
+# =============================================================================
+# Vaultwarden (self-hosted Bitwarden-compatible vault) — Helm values
+# =============================================================================
+# Chart: guerzon/vaultwarden  (community-maintained, widely used)
+# Installed via `make vaultwarden` into the vaultwarden namespace.
+#
+# Access model:
+#   - LAN only (Traefik) at vault.<local_domain>
+#   - No Cloudflare tunnel (kept private)
+#   - Bitwarden mobile/desktop clients work fine over Tailscale
+# =============================================================================
+
+# Admin panel gated by token (set via env, sourced from Ansible Vault).
+# Signups are disabled — create your account via the admin panel, then
+# invite yourself / trusted users from there.
+image:
+  tag: "1.34.3-alpine"
+
+# Let the Vaultwarden alpine image default UID own /data via fsGroup.
+# The alpine image uses uid/gid 1000 by default but the chart does not set
+# runAsUser/runAsGroup on the container. fsGroup alone is enough because the
+# container runs as its default image user (root in Vaultwarden alpine).
+podSecurityContext:
+  runAsNonRoot: false
+  fsGroup: 0
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  readOnlyRootFilesystem: false
+
+# Core config. Vaultwarden web vault requires HTTPS (SubtleCrypto).
+# Self-signed cert on Traefik — see k8s/ingress/local-ingress.yml.j2
+domain: "https://vault.<local_domain>"
+signupsAllowed: false
+invitationsAllowed: true
+showPasswordHint: false
+sendsAllowed: true
+emergencyAccessAllowed: true
+webVaultEnabled: true
+websocketEnabled: true
+
+# Admin token is injected from a Secret created by the playbook.
+adminToken:
+  existingSecret: vaultwarden-admin
+  existingSecretKey: token
+
+# Database: SQLite (chart default). DATABASE_URL left unset → Vaultwarden
+# uses /data/db.sqlite3 inside the data volume.
+#
+# Storage keys are nested under `storage:` per the guerzon chart schema.
+# longhorn-storage class pins replicas to x86 nodes (storage tag) so the
+# Pi's 32 GB eMMC isn't filled by user-data PVCs (project_status memory).
+storage:
+  data:
+    name: vaultwarden-data
+    size: 4Gi
+    class: longhorn-storage
+    path: /data
+    accessMode: ReadWriteOnce
+    keepPvc: true
+  attachments:
+    name: vaultwarden-attachments
+    size: 8Gi
+    class: longhorn-storage
+    path: /files
+    accessMode: ReadWriteOnce
+    keepPvc: true
+
+# Ingress is handled separately by the local-ingress template (Traefik),
+# so leave the chart's ingress off.
+ingress:
+  enabled: false
+
+# Service type ClusterIP — external access is via Traefik, LAN only.
+service:
+  type: ClusterIP
+
+# Small footprint — Vaultwarden is a Rust single binary
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Pin to x86 (more headroom, Pis are stretched thin)
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+# Logging
+logging:
+  logLevel: warn
+  extendedLogging: true
+
+# Environment hardening: require HTTPS only for admin in future; for now LAN
+# traffic is http over Traefik inside the tailnet.
+envVars:
+  - name: ROCKET_PORT
+    value: "80"
+  - name: ROCKET_WORKERS
+    value: "4"

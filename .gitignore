@@ -45,4 +45,9 @@ docs/18-architecture.md
 
 # Local Ingress overrides (so private hostnames don't leak to public repo)
 k8s/*/ingress.local.yml
+
+# Helm values that embed the real local_domain
+k8s/trivy/values-trivy-operator.yml
+k8s/vaultwarden/values-vaultwarden.yml
+
 *.sync-conflict-*

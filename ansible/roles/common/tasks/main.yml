@@ -150,14 +150,37 @@
     owner: root
     group: root
     mode: "0644"
-  tags: [system]
+  tags: [system, registry]
+
+# NoCloud user-data can set manage_etc_hosts: true and override the drop-in
+# above (user-data has higher priority). On Pi images, user-data lives on the
+# boot partition and is mutable. Flip it to false so reboots stop regenerating
+# /etc/hosts from the template.
+- name: Disable manage_etc_hosts in cloud-init user-data (Pi boot partition)
+  ansible.builtin.lineinfile:
+    path: /boot/firmware/user-data
+    regexp: '^manage_etc_hosts:'
+    line: "manage_etc_hosts: false"
+  when: ansible_architecture == "aarch64"
+  failed_when: false  # x86 images may not have this file
+  tags: [system, registry]
+
+# Belt-and-suspenders: if cloud-init still regenerates /etc/hosts (e.g. x86
+# nodes where user-data comes from read-only ISO), make sure the template it
+# renders from contains the Gitea line so the entry survives regeneration.
+- name: Ensure Gitea line is baked into the cloud-init hosts template
+  ansible.builtin.lineinfile:
+    path: /etc/cloud/templates/hosts.debian.tmpl
+    line: "{{ metallb_ip_range.split('-')[0] }} {{ gitea_registry_host | default('gitea.' + (local_domain | default('homielab.local'))) }}"
+    state: present
+  tags: [system, registry]
 
 - name: Add Gitea registry to /etc/hosts (MetalLB Traefik IP)
   ansible.builtin.lineinfile:
     path: /etc/hosts
     line: "{{ metallb_ip_range.split('-')[0] }} {{ gitea_registry_host | default('gitea.' + (local_domain | default('homielab.local'))) }}"
     state: present
-  tags: [system]
+  tags: [system, registry]
 
 - name: Create K3s config directory for agents
   ansible.builtin.file:
@@ -186,3 +209,36 @@
     line: "makestep 1 -1"
   notify: restart chrony
   tags: [ntp]
+
+# --- Weekly containerd image prune -------------------------------------------
+# kubelet's image-gc-high-threshold (75%) is the primary defense. This timer
+# is belt-and-suspenders: catches unreferenced images that slip past kubelet
+# (e.g., old digests pinned by paused workloads).
+- name: Install prune-containerd-images.service unit
+  ansible.builtin.template:
+    src: prune-containerd-images.service.j2
+    dest: /etc/systemd/system/prune-containerd-images.service
+    owner: root
+    group: root
+    mode: "0644"
+  when: "'k3s_cluster' in group_names"
+  tags: [system, prune]
+
+- name: Install prune-containerd-images.timer unit
+  ansible.builtin.template:
+    src: prune-containerd-images.timer.j2
+    dest: /etc/systemd/system/prune-containerd-images.timer
+    owner: root
+    group: root
+    mode: "0644"
+  when: "'k3s_cluster' in group_names"
+  tags: [system, prune]
+
+- name: Enable + start prune-containerd-images.timer
+  ansible.builtin.systemd:
+    name: prune-containerd-images.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: "'k3s_cluster' in group_names"
+  tags: [system, prune]

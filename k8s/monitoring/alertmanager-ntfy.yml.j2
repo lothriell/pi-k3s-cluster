@@ -56,9 +56,6 @@ stringData:
             {{ index .Annotations "summary" }}
 
             {{ index .Annotations "description" }}
-          headers:
-            X-Click: |
-              {{ .GeneratorURL }}
       async: false
 {% endraw %}
 ---

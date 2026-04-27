@@ -184,3 +184,32 @@ spec:
                 name: ollama-external
                 port:
                   number: 11434
+
+---
+# Vaultwarden requires HTTPS (browser SubtleCrypto API unavailable otherwise).
+# TLS secret is a self-signed cert for vault.<local_domain> — first visit will
+# prompt the user to accept the cert; subsequent visits are cached.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vaultwarden-local
+  namespace: vaultwarden
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  tls:
+    - hosts:
+        - vault.{{ local_domain }}
+      secretName: vaultwarden-tls
+  rules:
+    - host: vault.{{ local_domain }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: vaultwarden
+                port:
+                  number: 80

@@ -56,10 +56,9 @@ trivy:
   # Map the external hostname used in image refs to the in-cluster service
   # so the Trivy server can pull images without depending on CoreDNS NodeHosts
   # or MetalLB VIP routing.
-  # TODO CHANGEME: replace with your gitea.<local_domain> from group_vars/all/main.yml
   registry:
     mirror:
-      "gitea.example.local": "gitea-http.gitea.svc.cluster.local:3000"
+      "gitea.<local_domain>": "gitea-http.gitea.svc.cluster.local:3000"
 
   # Trivy server resources and storage
   server:
@@ -71,8 +70,11 @@ trivy:
         cpu: 500m
         memory: 512Mi
 
-  # 5Gi PVC for the vulnerability DB (default storageClass = Longhorn)
+  # 5Gi PVC for the vulnerability DB
+  # longhorn-storage class pins replicas to x86 nodes (Pi eMMC is small;
+  # the trivy DB is rebuilt frequently, no Pi-local advantage).
   storageClassEnabled: true
+  storageClassName: "longhorn-storage"
   storageSize: "5Gi"
 
 # ServiceMonitor is off — monitoring scrapes via extraScrapeConfigs with
@@ -84,7 +86,7 @@ serviceMonitor:
 resources:
   requests:
     cpu: 50m
-    memory: 64Mi
+    memory: 128Mi
   limits:
     cpu: 500m
-    memory: 256Mi
+    memory: 1Gi

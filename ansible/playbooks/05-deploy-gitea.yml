@@ -25,7 +25,7 @@
     # path would then pass `--set gitea.admin.*`, the init container would
     # run `gitea admin user create {{ gitea_admin_user }}`, and SQLite would
     # reject with:
-    #   Command error: CreateUser: user already exists [name: sann]
+    #   Command error: CreateUser: user already exists [name: <personal_user>]
     # and the pod crashloops forever.
     #
     # New logic: treat the presence of the `gitea-shared-storage` PVC as the

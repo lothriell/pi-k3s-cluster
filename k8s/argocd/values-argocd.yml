@@ -88,10 +88,10 @@ controller:
   resources:
     requests:
       cpu: 100m
-      memory: 256Mi
+      memory: 384Mi
     limits:
       cpu: 500m
-      memory: 512Mi
+      memory: 1Gi
 
 # ---------------------------------------------------------------------------
 # Repo Server -- clones Git repositories and generates Kubernetes manifests.
