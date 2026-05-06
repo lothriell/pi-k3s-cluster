@@ -1,0 +1,229 @@
+---
+# Playbook: Setup shell environment on macOS hosts
+# =============================================================================
+# Parallels 00-setup-shell.yml (Linux) but targets macOS, where:
+#   - Tooling is installed via Homebrew, not apt
+#   - zsh is already the system default; no `chsh` needed
+#   - Oh My Posh is a single binary (`brew install jandedobbeleer/oh-my-posh/oh-my-posh`)
+#   - Files land under /Users/<user> instead of /home/<user>
+#
+# Lays down the same environment used on the workstation:
+#   - dotfiles/zshrc → ~/.zshrc
+#   - dotfiles/oh-my-posh/atomic.omp.json → ~/.config/oh-my-posh/themes/
+#   - dotfiles/ghostty/config → ~/.config/ghostty/config
+#
+# Backs up any existing user files to ~/.zshrc.pre-bootstrap-<timestamp>.
+#
+# Usage:
+#   make shell-macos
+#   # or with a specific user / multiple users:
+#   ansible-playbook ansible/playbooks/00-setup-shell-macos.yml \
+#     --extra-vars '{"shell_users":["<personal-user>"]}'
+# =============================================================================
+
+- name: Setup shell environment on macOS nodes
+  hosts: "{{ target_hosts | default('macos_nodes') }}"
+  gather_facts: true
+  become: false
+  vars:
+    shell_users: ["{{ personal_user }}"]
+    dotfiles_dir: "{{ playbook_dir }}/../../dotfiles"
+    backup_suffix: "pre-bootstrap-{{ ansible_facts['date_time']['iso8601_basic_short'] | default(ansible_facts['date_time']['epoch']) }}"
+
+  tasks:
+    - name: Assert target is macOS
+      ansible.builtin.assert:
+        that: ansible_facts.os_family == "Darwin"
+        fail_msg: "This playbook is macOS-only. For Linux use 00-setup-shell.yml."
+      tags: [always]
+
+    # -- Homebrew (host-level, once) -------------------------------------------
+
+    - name: Detect Homebrew
+      ansible.builtin.stat:
+        path: /opt/homebrew/bin/brew
+      register: brew_arm
+      tags: [brew]
+
+    - name: Detect Homebrew (Intel path)
+      ansible.builtin.stat:
+        path: /usr/local/bin/brew
+      register: brew_x86
+      when: not brew_arm.stat.exists
+      tags: [brew]
+
+    - name: Set brew_path fact
+      ansible.builtin.set_fact:
+        brew_path: "{{ '/opt/homebrew/bin/brew' if brew_arm.stat.exists else ('/usr/local/bin/brew' if (brew_x86.stat.exists | default(false)) else '') }}"
+      tags: [brew]
+
+    - name: Install Homebrew (non-interactive)
+      ansible.builtin.shell: |
+        NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      when: brew_path == ""
+      tags: [brew]
+
+    - name: Re-detect Homebrew after install
+      ansible.builtin.stat:
+        path: /opt/homebrew/bin/brew
+      register: brew_arm2
+      when: brew_path == ""
+      tags: [brew]
+
+    - name: Update brew_path after install
+      ansible.builtin.set_fact:
+        brew_path: "{{ '/opt/homebrew/bin/brew' if (brew_arm2.stat.exists | default(false)) else '/usr/local/bin/brew' }}"
+      when: brew_path == ""
+      tags: [brew]
+
+    # -- CLI tooling -----------------------------------------------------------
+
+    - name: Install eza + oh-my-posh via brew
+      ansible.builtin.command: "{{ brew_path }} install {{ item }}"
+      loop:
+        - eza
+        - jandedobbeleer/oh-my-posh/oh-my-posh
+      register: brew_install
+      changed_when: "'already installed' not in brew_install.stderr and 'already installed' not in brew_install.stdout"
+      failed_when:
+        - brew_install.rc != 0
+        - "'already installed' not in brew_install.stderr"
+      tags: [tools]
+
+    # -- Per-user configuration -----------------------------------------------
+
+    - name: Resolve target user homes
+      ansible.builtin.set_fact:
+        user_homes: >-
+          {{
+            user_homes | default({}) | combine({
+              item: '/Users/' + item
+            })
+          }}
+      loop: "{{ shell_users }}"
+      tags: [shell]
+
+    - name: Ensure target user home exists
+      ansible.builtin.stat:
+        path: "{{ user_homes[item] }}"
+      register: home_check
+      loop: "{{ shell_users }}"
+      failed_when: not home_check.stat.exists
+      tags: [shell]
+
+    - name: Install Oh My Zsh per user
+      ansible.builtin.shell: |
+        export RUNZSH=no CHSH=no
+        sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+      args:
+        creates: "{{ user_homes[item] }}/.oh-my-zsh"
+      become: true
+      become_user: "{{ item }}"
+      loop: "{{ shell_users }}"
+      tags: [omz]
+
+    - name: Install zsh-autosuggestions per user
+      ansible.builtin.git:
+        repo: https://github.com/zsh-users/zsh-autosuggestions
+        dest: "{{ user_homes[item] }}/.oh-my-zsh/custom/plugins/zsh-autosuggestions"
+        depth: 1
+      become: true
+      become_user: "{{ item }}"
+      loop: "{{ shell_users }}"
+      tags: [omz]
+
+    - name: Backup existing ~/.zshrc if it differs from repo dotfiles
+      ansible.builtin.shell: |
+        target="{{ user_homes[item] }}/.zshrc"
+        repo="{{ dotfiles_dir }}/zshrc"
+        if [ -f "$target" ] && ! cmp -s "$target" "$repo"; then
+          cp -p "$target" "$target.{{ backup_suffix }}"
+          echo "backed-up"
+        fi
+      register: zshrc_backup
+      changed_when: zshrc_backup.stdout == "backed-up"
+      become: true
+      become_user: "{{ item }}"
+      loop: "{{ shell_users }}"
+      tags: [zshrc]
+
+    - name: Drop ~/.zshrc from dotfiles
+      ansible.builtin.copy:
+        src: "{{ dotfiles_dir }}/zshrc"
+        dest: "{{ user_homes[item] }}/.zshrc"
+        mode: "0644"
+      become: true
+      become_user: "{{ item }}"
+      loop: "{{ shell_users }}"
+      tags: [zshrc]
+
+    # ~/.zprofile loads BEFORE ~/.zshrc and is the right place for PATH/env
+    # setup. brew on Apple Silicon installs to /opt/homebrew which isn't on
+    # the default PATH; without this, eza / oh-my-posh aren't found by
+    # interactive shells.
+    - name: Render ~/.zprofile with Homebrew shellenv
+      ansible.builtin.copy:
+        dest: "{{ user_homes[item] }}/.zprofile"
+        mode: "0644"
+        content: |
+          # Managed by ansible/playbooks/00-setup-shell-macos.yml
+          # Adds Homebrew (eza, oh-my-posh, etc.) to PATH for interactive shells.
+          if [ -x /opt/homebrew/bin/brew ]; then
+            eval "$(/opt/homebrew/bin/brew shellenv)"
+          elif [ -x /usr/local/bin/brew ]; then
+            eval "$(/usr/local/bin/brew shellenv)"
+          fi
+      become: true
+      become_user: "{{ item }}"
+      loop: "{{ shell_users }}"
+      tags: [zshrc]
+
+    - name: Ensure ~/.config/oh-my-posh/themes exists
+      ansible.builtin.file:
+        path: "{{ user_homes[item] }}/.config/oh-my-posh/themes"
+        state: directory
+        mode: "0755"
+      become: true
+      become_user: "{{ item }}"
+      loop: "{{ shell_users }}"
+      tags: [omp]
+
+    - name: Drop oh-my-posh atomic theme
+      ansible.builtin.copy:
+        src: "{{ dotfiles_dir }}/oh-my-posh/atomic.omp.json"
+        dest: "{{ user_homes[item] }}/.config/oh-my-posh/themes/atomic.omp.json"
+        mode: "0644"
+      become: true
+      become_user: "{{ item }}"
+      loop: "{{ shell_users }}"
+      tags: [omp]
+
+    - name: Ensure ~/.config/ghostty exists
+      ansible.builtin.file:
+        path: "{{ user_homes[item] }}/.config/ghostty"
+        state: directory
+        mode: "0755"
+      become: true
+      become_user: "{{ item }}"
+      loop: "{{ shell_users }}"
+      tags: [ghostty]
+
+    - name: Drop Ghostty config
+      ansible.builtin.copy:
+        src: "{{ dotfiles_dir }}/ghostty/config"
+        dest: "{{ user_homes[item] }}/.config/ghostty/config"
+        mode: "0644"
+      become: true
+      become_user: "{{ item }}"
+      loop: "{{ shell_users }}"
+      tags: [ghostty]
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          {{ inventory_hostname }} → shell environment for {{ shell_users | join(', ') }} synced.
+          Brew prefix: {{ brew_path | dirname | dirname }}
+          Tools: eza, oh-my-posh
+          Files: ~/.zshrc, ~/.config/oh-my-posh/themes/atomic.omp.json,
+                 ~/.config/ghostty/config
+          Open a new terminal (or `exec zsh`) to pick up the prompt.

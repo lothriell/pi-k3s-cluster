@@ -1,7 +1,7 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-namespace: eve-tracker-dev
+namespace: eve-tracker-test
 
 resources:
   - ../../base
@@ -10,6 +10,6 @@ resources:
 
 images:
   - name: gitea.example.local/CHANGEME/eve-tracking-jobs-backend
-    newTag: dev
+    newTag: test
   - name: gitea.example.local/CHANGEME/eve-tracking-jobs-frontend
-    newTag: dev
+    newTag: test

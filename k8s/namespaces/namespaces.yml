@@ -73,3 +73,11 @@ metadata:
   labels:
     name: forgejo
     # Purpose: Forgejo self-hosted Git service (personal repos, Windows sync)
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: authentik
+  labels:
+    name: authentik
+    # Purpose: Authentik LAN-only OIDC provider (Grafana + ArgoCD SSO, task #44)

@@ -45,3 +45,16 @@ argocd_admin_password: "changeme-use-a-real-password"
 # Vaultwarden admin panel token (LAN-only self-hosted Bitwarden)
 # Generate: openssl rand -base64 48 | tr -d '\n=' | head -c 48
 vaultwarden_admin_token: "changeme-a-long-random-string"
+
+# Authentik (LAN-only OIDC provider — task #44 wave 1)
+# secret_key:        50 alphanumeric chars; generate with `LC_ALL=C tr -dc A-Za-z0-9 </dev/urandom | head -c 50`
+# postgres_password: 32 alphanumeric chars (no special chars to avoid postgres URL encoding traps)
+# bootstrap_*:       initial akadmin credentials, used only on first start; rotate via UI after install
+# oidc_client_secret_*: per-client shared secret; copy the matching value into Authentik's Provider config
+authentik_secret_key: "changeme-50-alphanumeric-chars-for-cookie-signing"
+authentik_postgres_password: "changeme-32-alphanumeric-chars"
+authentik_postgres_admin_password: "changeme-32-alphanumeric-chars"   # bitnami postgres superuser (separate from app user)
+authentik_bootstrap_password: "changeme-strong-password-rotate-after-install"
+authentik_bootstrap_token: "changeme-60-hex-chars"
+authentik_oidc_client_secret_grafana: "changeme-40-alphanumeric-chars"
+authentik_oidc_client_secret_argocd: "changeme-40-alphanumeric-chars"

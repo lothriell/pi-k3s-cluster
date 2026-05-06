@@ -1,13 +1,13 @@
-# NetworkPolicy: eve-tracker-dev namespace
+# NetworkPolicy: eve-tracker-test namespace
 #
-# Mirror of eve-tracker prod. Dev frontend is reachable from cloudflared + Traefik;
-# dev backend is only reachable from dev frontend within the same namespace.
+# Mirror of eve-tracker prod. Test frontend is reachable from cloudflared + Traefik;
+# test backend is only reachable from test frontend within the same namespace.
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: eve-tracker-dev-allowed-ingress
-  namespace: eve-tracker-dev
+  name: eve-tracker-test-allowed-ingress
+  namespace: eve-tracker-test
 spec:
   podSelector: {}
   policyTypes:

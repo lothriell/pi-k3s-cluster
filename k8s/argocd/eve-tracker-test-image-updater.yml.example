@@ -1,0 +1,27 @@
+---
+# ArgoCD Image Updater v1.1+ CRD for eve-tracker TEST overlay.
+#
+# Copy to `eve-tracker-test-image-updater.yml` (gitignored) with real
+# host/user values and apply. Same pattern as the prod image updater but
+# targets the `:test` tag and the eve-tracker-test ArgoCD application.
+apiVersion: argocd-image-updater.argoproj.io/v1alpha1
+kind: ImageUpdater
+metadata:
+  name: eve-tracker-test
+  namespace: argocd
+spec:
+  commonUpdateSettings:
+    updateStrategy: digest
+  writeBackConfig:
+    method: git
+    gitConfig:
+      branch: main
+      writeBackTarget: kustomization:.
+  applicationRefs:
+    - namePattern: eve-tracker-test
+      images:
+        # TODO CHANGEME: replace host + owner with your values
+        - alias: backend
+          imageName: gitea.example.local/CHANGEME/eve-tracking-jobs-backend:test
+        - alias: frontend
+          imageName: gitea.example.local/CHANGEME/eve-tracking-jobs-frontend:test

@@ -1,0 +1,43 @@
+---
+# ArgoCD Application for eve-tracker TEST overlay.
+#
+# This is the K8s pre-prod environment for eve-tracker. The companion fast
+# loop ("dev") is Docker Compose on the minisforum, not K8s.
+#
+# Naming convention (post-2026-04-27 rename):
+#   dev   = Docker Compose on minisforum (<docker-host-tailscale-ip>:9000)
+#   test  = K8s eve-tracker-test       at https://test-eve.<public-domain>
+#   prod  = K8s eve-tracker            at https://eve.<public-domain>
+#
+# See eve-tracker-app.yml header for the CRD-based Image Updater pattern,
+# `gitea-registry` pull-secret prerequisite, and `kustomize: {}` source-type
+# detection requirement — all identical to prod.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: eve-tracker-test
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: http://gitea-http.gitea.svc.cluster.local:3000/CHANGEME/eve-tracker-k8s.git
+    targetRevision: main
+    path: overlays/test
+    kustomize: {}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: eve-tracker-test
+  ignoreDifferences:
+    - group: ""
+      kind: PersistentVolumeClaim
+      jsonPointers:
+        - /spec/volumeName
+        - /metadata/labels/longhorn-restore
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - RespectIgnoreDifferences=true
+      - ServerSideApply=true

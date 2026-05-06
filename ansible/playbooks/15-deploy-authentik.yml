@@ -1,0 +1,143 @@
+---
+# =============================================================================
+# Authentik — LAN-only OIDC provider (task #44 wave 1)
+# =============================================================================
+# Deploys Authentik via Helm into the `authentik` namespace.
+# Creates two Secrets from Ansible Vault BEFORE the chart installs:
+#   authentik-secrets         envFrom for server + worker (env-var-named keys)
+#   authentik-postgres-auth   bitnami postgres `auth.existingSecret` (file-mounted)
+#
+# Wave 1 ships SSO for Grafana + ArgoCD only. Wave 2 (Gitea/Forgejo/Headlamp)
+# and wave 3 (forward-auth for Prometheus/Alertmanager/Longhorn UI) come later.
+#
+# Usage: make authentik
+# Access: http://authentik.<local_domain>  (LAN via Traefik; no Cloudflare tunnel)
+# =============================================================================
+
+- name: Deploy Authentik
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  become: false
+
+  vars:
+    authentik_chart_version: "2026.2.2"
+    authentik_values: "{{ playbook_dir }}/../../k8s/authentik/values-authentik.yml"
+
+  tasks:
+    - name: Ensure authentik namespace exists
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: authentik
+      tags: [authentik]
+
+    # --- Secrets ----------------------------------------------------------
+    # Both Secrets are recreated on every run (idempotent: state=present updates
+    # in place if vault values change). Apply ordering matters — chart pods
+    # mount these at startup, so they MUST exist before `helm upgrade --wait`.
+
+    - name: Create authentik-secrets (envFrom for server + worker)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: authentik-secrets
+            namespace: authentik
+          type: Opaque
+          stringData:
+            AUTHENTIK_SECRET_KEY: "{{ authentik_secret_key }}"
+            AUTHENTIK_POSTGRESQL__PASSWORD: "{{ authentik_postgres_password }}"
+            # Bootstrap vars are honoured ONLY on first start (no existing
+            # akadmin user). Rotate via the Authentik UI after install — the
+            # value here becomes inert once the user exists.
+            AUTHENTIK_BOOTSTRAP_PASSWORD: "{{ authentik_bootstrap_password }}"
+            AUTHENTIK_BOOTSTRAP_TOKEN: "{{ authentik_bootstrap_token }}"
+      tags: [authentik]
+
+    - name: Create authentik-postgres-auth (bitnami existingSecret contract)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: authentik-postgres-auth
+            namespace: authentik
+          type: Opaque
+          stringData:
+            password: "{{ authentik_postgres_password }}"
+            postgres-password: "{{ authentik_postgres_admin_password }}"
+      tags: [authentik]
+
+    # --- Helm install -----------------------------------------------------
+
+    - name: Add Authentik Helm repo
+      ansible.builtin.command: helm repo add authentik https://charts.goauthentik.io
+      register: helm_repo_add
+      changed_when: "'has been added' in helm_repo_add.stdout"
+      failed_when:
+        - helm_repo_add.rc != 0
+        - "'already exists' not in helm_repo_add.stderr"
+      tags: [authentik]
+
+    - name: Update Helm repos
+      ansible.builtin.command: helm repo update authentik
+      changed_when: false
+      tags: [authentik]
+
+    - name: Deploy Authentik
+      ansible.builtin.command: >
+        helm upgrade --install authentik authentik/authentik
+        --version {{ authentik_chart_version }}
+        --namespace authentik
+        -f {{ authentik_values }}
+        --wait --timeout 10m
+      register: helm_deploy
+      changed_when: "'has been upgraded' in helm_deploy.stdout or 'has been installed' in helm_deploy.stdout"
+      tags: [authentik]
+
+    - name: Wait for Authentik server pod to be Ready
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Ready pods
+        -l app.kubernetes.io/name=authentik,app.kubernetes.io/component=server
+        -n authentik --timeout=180s
+      changed_when: false
+      tags: [authentik, verify]
+
+    - name: Show Authentik pod status
+      ansible.builtin.command: kubectl get pods -n authentik -o wide
+      register: authentik_pods
+      changed_when: false
+      tags: [authentik, verify]
+
+    - name: Display Authentik pods
+      ansible.builtin.debug:
+        var: authentik_pods.stdout_lines
+      tags: [authentik, verify]
+
+    - name: Report access URL + bootstrap notes
+      ansible.builtin.debug:
+        msg: |
+          Authentik deployed. Access at:    http://authentik.{{ local_domain }}
+          First-time login (akadmin):       password from vault.yml (authentik_bootstrap_password)
+          API token (one-shot bootstrap):   from vault.yml (authentik_bootstrap_token)
+
+          Wave 1 next steps (manual, via Authentik UI):
+            1. Sign in as akadmin → Directory → Users → akadmin → set a real password.
+            2. Applications → Providers → Create OAuth2/OpenID Provider for Grafana.
+               Client Type: confidential. Client ID: grafana
+               Client Secret: from vault.yml (authentik_oidc_client_secret_grafana)
+               Redirect URI: http://grafana.{{ local_domain }}/login/generic_oauth
+            3. Applications → Applications → Create app "Grafana", bind to that Provider.
+            4. Repeat for ArgoCD:
+               Client ID: argocd
+               Client Secret: from vault.yml (authentik_oidc_client_secret_argocd)
+               Redirect URI: http://argocd.{{ local_domain }}/auth/callback
+            5. Re-deploy Grafana (careful: RWO PVC; do NOT run `make monitoring`)
+               and ArgoCD with the OIDC config blocks added to their values files.

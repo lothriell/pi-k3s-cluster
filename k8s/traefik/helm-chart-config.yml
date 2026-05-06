@@ -1,0 +1,33 @@
+# =============================================================================
+# Traefik HelmChartConfig — cluster-wide HTTP→HTTPS redirect
+# =============================================================================
+# K3s ships Traefik as a managed HelmChart in kube-system. To customize values
+# without forking the install, drop a HelmChartConfig with the same name in
+# the same namespace; the K3s HelmController merges it on top of the chart's
+# defaults and reapplies the chart.
+#
+# This config:
+#   - Permanently redirects every request on the `web` (HTTP) entrypoint to
+#     the `websecure` (HTTPS) entrypoint, cluster-wide.
+#   - Leaves websecure as-is (TLS terminates at Traefik using per-Ingress
+#     secrets minted by cert-manager).
+#
+# Companion to the internal CA chain in k8s/cert-manager/cluster-issuer.yml.
+# Applied by the post-install playbook (03-post-install.yml) as part of the
+# local-ingress / Traefik setup.
+# =============================================================================
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    # Cluster-wide HTTP→HTTPS redirect.
+    # Note: `ports.web.redirectTo` is documented but doesn't render in K3s's
+    # bundled Traefik chart fork (v39.0.501+up39.0.5) — verified empirically
+    # 2026-05-04. Falling back to direct CLI args, which always work.
+    additionalArguments:
+      - "--entrypoints.web.http.redirections.entrypoint.to=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"

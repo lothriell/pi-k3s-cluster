@@ -87,6 +87,12 @@ make bootstrap-macos           # runs 00-bootstrap-macos-user.yml --ask-become-p
 ```
 UID 600, primary group staff (20), shell `/bin/zsh`, home `/Users/ansible`, added to `com.apple.access_ssh` for sshd access, passwordless sudo via `/etc/sudoers.d/ansible`. Idempotent — re-runs detect existing state and skip.
 
+**macOS shell bootstrap** (sync the workstation shell to any Mac in `macos_nodes`):
+```bash
+make shell-macos               # runs 00-setup-shell-macos.yml
+```
+Installs Homebrew if missing, then `eza` + `oh-my-posh` via brew. Per-user (`personal_user` by default): installs Oh My Zsh, zsh-autosuggestions, drops `dotfiles/zshrc` → `~/.zshrc`, `dotfiles/oh-my-posh/atomic.omp.json` → `~/.config/oh-my-posh/themes/`, and `dotfiles/ghostty/config` → `~/.config/ghostty/config`. Renders `~/.zprofile` with `brew shellenv` so `/opt/homebrew/bin` is on the interactive PATH. Pre-existing `~/.zshrc` is backed up to `~/.zshrc.pre-bootstrap-<timestamp>`.
+
 **Manual-node bootstrap** (standalone Ubuntu VMs not in `k3s_cluster` — Wazuh in `security_stack`, future SFF pattern, etc.): reuses the Linux `00-bootstrap-user.yml` with a `target_hosts` override:
 ```bash
 make bootstrap-manual-node HOSTS=security_stack
@@ -124,8 +130,10 @@ Developer → podman build on Mac (ARM64) → push to Gitea container registry
 ### Gitea ROOT_URL Must Be Internal Service URL
 Gitea's container registry returns a `Www-Authenticate` header based on `ROOT_URL`. If set to an external hostname, pods can't resolve the token endpoint. Must be set to `http://gitea-http.gitea.svc.cluster.local:3000`.
 
-### Gitea Registry HTTP + K3s containerd
-K3s containerd defaults to HTTPS. Nodes need `/etc/rancher/k3s/registries.yaml` to use HTTP for the Gitea registry. Nodes also need the registry hostname in `/etc/hosts` (kubelet runs outside cluster DNS). Both are configured by the Ansible common role.
+### Gitea Registry HTTPS + homielab CA in containerd
+K3s containerd pulls from `gitea.<local_domain>` over **HTTPS**, validating against the homielab internal CA cert distributed at `/etc/rancher/k3s/homielab-ca.crt` on each node. Nodes also need the registry hostname in `/etc/hosts` (kubelet runs outside cluster DNS). Both files are written by the Ansible common role at provision time, sourcing the CA from `vault.yml::homielab_ca_cert`.
+
+Pre-2026-05-04 architecture: the same registry was reached over plain HTTP via Traefik's `web` entrypoint to bypass containerd's TLS requirement. The cert-manager rollout (task #45) added a cluster-wide HTTP→HTTPS redirect, breaking that path — every `http://gitea.<local-domain>/v2/...` 301'd to HTTPS where containerd then failed verify because it didn't trust the local CA. Fixed by distributing the CA + flipping registries.yaml to `https://` + `ca_file:` (commit covers `incident.md`). On a fresh cluster with no CA in vault yet, the role falls back to the legacy HTTP-only mode; once `make ca-backup` populates vault, re-running prepare upgrades the config.
 
 ### Cloud-init /etc/hosts Overwrite
 Cloud-init regenerates `/etc/hosts` on every reboot. The common role disables this via `/etc/cloud/cloud.cfg.d/99-disable-manage-hosts.cfg`.
@@ -151,6 +159,9 @@ All 6 K3s cluster nodes run Tailscale's built-in SSH server (`RunSSH=True`), ena
 ### Longhorn Storage
 Longhorn is the default StorageClass (2 replicas). `local-path` is still available but not default. 32GB eMMC per node — storageMinimalAvailablePercentage set to 25% to reserve space for OS upgrades.
 
+### Longhorn Backup Labeling Needs PVCs To Exist
+The `critical-backup` RecurringJob processes only volumes labeled `recurring-job-group.longhorn.io/critical=enabled`. Labels are applied by `11-configure-backups.yml` Play 2 looking up each PVC in `critical_pvcs:`. **If a PVC doesn't exist when the playbook runs, it gets silently skipped** (the lookup returns empty, the label task is skipped via `when:`). On `make all` the chain runs `backup` BEFORE services come up, so the second-pass `make backup-relabel` at the end of `all` is what actually applies labels to PVCs that materialised during service deploy. **After any one-off stateful service deploy** (`make vaultwarden`, `make forgejo`, etc.), run `make backup-relabel` so the new PVC enrols into nightly R2 backups. The playbook surfaces a `MISSING critical PVC` debug line for any unlabeled entry — watch for these in playbook output.
+
 ### Prometheus Longhorn Scraping
 Longhorn metrics must use `kubernetes_sd_configs` with endpoint role (not `static_configs` with service VIP). A service VIP load-balances to one random pod per scrape, losing metrics from other nodes.
 
@@ -159,6 +170,9 @@ The K3s install script overwrites `/etc/systemd/system/k3s-agent.service.env` on
 
 ### Gitea Admin Creation Fails on Helm Upgrade
 The Gitea Helm chart's `gitea.admin.*` values trigger `gitea admin user create` in an init container. If the user already exists in the SQLite DB (from a previous install), it crashes. Fix: only pass `--set gitea.admin.*` on fresh installs, not upgrades. The playbook (05-deploy-gitea.yml) checks `helm status` first.
+
+### Internal CA via cert-manager
+All `*.<local-domain>` Ingresses use HTTPS (websecure entrypoint) with leaf certs minted by cert-manager from a self-signed in-cluster root CA (`homielab-internal` ClusterIssuer — name configurable). The chain lives in `k8s/cert-manager/cluster-issuer.yml`: `selfsigned-bootstrap` → `homielab-ca` Certificate (10-year ECDSA root) → `homielab-internal` CA ClusterIssuer. Cluster-wide HTTP→HTTPS redirect via `k8s/traefik/helm-chart-config.yml` (K3s HelmChartConfig in kube-system). Each Ingress in `k8s/ingress/local-ingress.yml.j2` carries `cert-manager.io/cluster-issuer: homielab-internal` + `tls:` block; ingress-shim mints per-host secrets (`<name>-local-tls`) automatically. **Clients must trust the root once** — `make trust-ca-export` writes `/tmp/homielab-ca.crt`; per-device steps in `docs/internal-ca-trust.md` (Mac, Windows, iPad/iOS, Firefox). Cluster nuke regenerates a new CA → re-trust everywhere.
 
 ### Cloudflare Tunnel DNS
 The `cloudflared` CLI cert (`~/.cloudflared/cert.pem`) is locked to one Cloudflare zone. Always create tunnel DNS records manually in the Cloudflare dashboard — never use `cloudflared tunnel route dns` for domains on a different zone.
@@ -280,6 +294,7 @@ Template: `group_vars/all/vault.yml.example` has placeholder values for `gitea_a
 
 - **`docs/ops-commands.md`** — day-to-day commands cheatsheet (Ansible Vault, backups, alerts, ntfy, cluster health). First stop when you need to do a thing and forgot how.
 - **`docs/improvement-plan.md`** — living checklist of cluster hardening work (status for each task, pointers to files to touch).
+- **`incident.md`** (repo root) + **`docs/incidents/`** — open-incident scratchpad at the root, resolved post-mortems archived under `docs/incidents/YYYY-MM-DD-<slug>.md`. Convention + template in `docs/incidents/README.md`. Cluster-side work: write to `incident.md`. Parallel projects (e.g. eve-tracking-jobs) use `incident_<project>.md` so two sessions don't collide on one file. On resolve, `git mv` to the dated archive and reset the root file to its stub.
 
 ## File Conventions
 

@@ -53,7 +53,7 @@ help: ## Show all available targets with descriptions
 	@echo ""
 
 .PHONY: all
-all: prepare k3s post-install metallb tailscale longhorn backup restore-volumes monitoring gitea argocd cloudflare trivy-operator headlamp network-policies pihole-monitor ## Full cluster build (prepare -> ... -> headlamp -> network-policies -> pihole-monitor)
+all: prepare k3s cert-manager post-install metallb tailscale longhorn backup restore-volumes monitoring gitea argocd cloudflare trivy-operator headlamp network-policies pihole-monitor backup-relabel ## Full cluster build (prepare -> ... -> pihole-monitor -> backup-relabel)
 
 # =============================================================================
 # Provisioning Stages
@@ -76,8 +76,12 @@ bootstrap-manual-node: ## Create 'ansible' service account on a standalone Ubunt
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/00-bootstrap-user.yml --ask-become-pass -e "target_hosts=$(HOSTS)"
 
 .PHONY: shell
-shell: ## Setup zsh + oh-my-posh + eza on all nodes (for personal user)
+shell: ## Setup zsh + oh-my-posh + eza on all Linux nodes (for personal user)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/00-setup-shell.yml
+
+.PHONY: shell-macos
+shell-macos: ## Setup zsh + oh-my-posh + eza + ghostty config on macOS nodes
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/00-setup-shell-macos.yml
 
 .PHONY: prepare
 prepare: ## Prepare nodes (packages, config, networking)
@@ -109,15 +113,24 @@ metallb: ## Deploy MetalLB load balancer via Helm
 	$(KUBECTL) apply -f /tmp/metallb-config.yml
 
 .PHONY: cert-manager
-cert-manager: ## Deploy cert-manager and cluster issuer
-	$(HELM) repo add jetstack https://charts.jetstack.io 2>/dev/null || true
-	$(HELM) repo update
-	$(HELM) upgrade --install cert-manager jetstack/cert-manager \
-		-n cert-manager \
-		--create-namespace \
-		--set crds.enabled=true \
-		--wait
-	$(KUBECTL) apply -f k8s/cert-manager/cluster-issuer.yml
+cert-manager: ## Deploy cert-manager + internal-CA ClusterIssuer chain (seeds CA from vault.yml if available)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/17-deploy-cert-manager.yml
+
+.PHONY: trust-ca-export
+trust-ca-export: ## Export the homielab root CA cert to /tmp/homielab-ca.crt for client trust
+	@$(KUBECTL) -n cert-manager get secret homielab-ca-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/homielab-ca.crt
+	@echo "Root CA exported to /tmp/homielab-ca.crt"
+	@echo "Trust steps for Mac / Windows / iPad: see docs/internal-ca-trust.md"
+	@$(KUBECTL) -n cert-manager get secret homielab-ca-tls -o jsonpath='{.data.ca\.crt}' | base64 -d \
+	  | openssl x509 -noout -subject -issuer -dates 2>/dev/null || true
+
+.PHONY: trust-ca-push
+trust-ca-push: ## Push the homielab root CA to all macOS nodes (System Keychain) via Ansible
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/16-trust-homielab-ca.yml
+
+.PHONY: ca-backup
+ca-backup: ## Capture the live homielab CA cert+key into vault.yml so a rebuild can restore the same root
+	@scripts/ca-backup.sh
 
 .PHONY: monitoring
 monitoring: ## Deploy monitoring stack (Prometheus, Grafana, etc.)
@@ -161,6 +174,10 @@ headlamp: ## Deploy Headlamp Kubernetes web UI dashboard
 vaultwarden: ## Deploy Vaultwarden (self-hosted Bitwarden) LAN-only at vault.<local_domain>
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/20-deploy-vaultwarden.yml
 
+.PHONY: authentik
+authentik: ## Deploy Authentik (LAN-only OIDC for Grafana + ArgoCD) at authentik.<local_domain>
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/15-deploy-authentik.yml
+
 .PHONY: network-policies
 network-policies: ## Apply all namespace NetworkPolicies (requires target namespaces to exist)
 	$(KUBECTL) apply -f k8s/network-policies/
@@ -172,6 +189,10 @@ wazuh-agent: ## Install Wazuh agent on target hosts (HOSTS=sff_nodes by default)
 .PHONY: backup
 backup: ## Configure etcd + Longhorn backups (local snapshots + R2 offsite)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/11-configure-backups.yml
+
+.PHONY: backup-relabel
+backup-relabel: ## Re-apply backup labels after services come up (called at end of `make all`; also run after any one-off `make vaultwarden`/`make forgejo`/etc.)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/11-configure-backups.yml --tags longhorn
 
 .PHONY: restore-volumes
 restore-volumes: ## Restore stateful PVCs from R2 backups (runs after longhorn+backup on rebuild)

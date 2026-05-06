@@ -2,6 +2,8 @@
 
 Lightweight Kubernetes (K3s) cluster running on 4x Raspberry Pi CM5 modules, fully automated with Ansible.
 
+![Pi K3s cluster hardware](docs/assets/cluster.jpg)
+
 ## Hardware
 
 | Node | Hostname | Role | Specs |

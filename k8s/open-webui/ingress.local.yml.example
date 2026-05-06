@@ -1,31 +1,12 @@
 ---
-# Gitignored local Ingress for Open WebUI.
-# Copy this file to ingress.local.yml, replace the host with your actual
-# domain, then apply:
+# DEPRECATED — kept only as a fallback example.
 #
-#     cp k8s/open-webui/ingress.local.yml.example k8s/open-webui/ingress.local.yml
-#     kubectl apply -f k8s/open-webui/ingress.local.yml
+# As of task #45 (cert-manager + internal CA), chat.<local_domain> is defined
+# in k8s/ingress/local-ingress.yml.j2 (Ingress name `open-webui-local`) and
+# rendered by 03-post-install.yml.
 #
-# This file exists alongside open-webui.yml so that re-applying the committed
-# manifest (`kubectl apply -f k8s/open-webui/open-webui.yml`) does NOT touch
-# the Ingress and therefore cannot revert your hostname.
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: open-webui
-  namespace: open-webui
-  annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: web
-spec:
-  rules:
-    # TODO CHANGEME -- replace with your actual domain
-    - host: chat.example.local
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: open-webui
-                port:
-                  number: 8080
+# If you previously applied the standalone manifest below, the old Ingress
+# was named `open-webui`. After rolling out the new templated ingress, delete
+# the orphan:
+#   kubectl -n open-webui delete ingress open-webui 2>/dev/null
+#   rm k8s/open-webui/ingress.local.yml

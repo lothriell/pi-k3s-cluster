@@ -35,6 +35,25 @@ spec:
       ports:
         - protocol: TCP
           port: 3000
+    # Trivy scan jobs hit a kube-router race against namespaceSelector
+    # ipsets — new scan pod's IP isn't in the per-namespace ipset for ~3s
+    # after pod creation, but trivy connects in <1s and gets `connection
+    # refused`. Result: every eve-tracker scan loses the race, no
+    # VulnerabilityReports written. See feedback_kube_router_race memory.
+    #
+    # Workaround until DR-3 (move eve-tracker images to ghcr.io) lands:
+    # allow the entire cluster pod CIDR to hit gitea:3000. ipBlock rules
+    # are programmed into iptables CIDR matches at netpol install time —
+    # no per-pod ipset propagation, no race. The CIDR is bounded to the
+    # pod network (10.42.0.0/16, K3s default), and gitea registry already
+    # requires auth (HTTP 401 anonymous), so the operational risk is small.
+    # Remove this rule once eve-tracker images move to a public registry.
+    - from:
+        - ipBlock:
+            cidr: 10.42.0.0/16
+      ports:
+        - protocol: TCP
+          port: 3000
     - from:
         - namespaceSelector:
             matchLabels:

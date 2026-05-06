@@ -173,14 +173,46 @@ ingress:
   enabled: false
 
 # ---------------------------------------------------------------------------
+# OIDC client secret -- mounted as env var GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET
+# from the grafana-oidc Secret (created by the Authentik wave-1 follow-up
+# step in 15-deploy-authentik.yml notes; manual `kubectl apply` for now).
+# Keeping the secret out of values keeps `helm get values` history clean.
+# ---------------------------------------------------------------------------
+envFromSecrets:
+  - name: grafana-oidc
+
+# ---------------------------------------------------------------------------
 # Grafana configuration overrides (grafana.ini)
 # ---------------------------------------------------------------------------
 grafana.ini:
   server:
-    # Serve from root on the LoadBalancer IP
-    root_url: "%(protocol)s://%(domain)s/"
+    # Pinned to the local-domain hostname so OIDC redirect_uris match what
+    # Authentik expects. Bypassing the LoadBalancer IP also prevents Grafana
+    # from generating callback URLs against the wrong host.
+    root_url: "http://grafana.<local-domain>/"
     serve_from_sub_path: false
   # Disable analytics/telemetry to save bandwidth on a Pi
   analytics:
     check_for_updates: false
     reporting_enabled: false
+  # ---- Authentik SSO (task #44 wave 1) -------------------------------------
+  # Generic OAuth2/OIDC against Authentik. Native admin (admin/admin) stays
+  # as break-glass per the wave-1 plan.
+  auth.generic_oauth:
+    enabled: true
+    name: Authentik
+    icon: signin
+    allow_sign_up: true
+    client_id: grafana
+    # client_secret comes from envFromSecrets above (GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET)
+    scopes: "openid profile email"
+    auth_url: "http://authentik.<local-domain>/application/o/authorize/"
+    token_url: "http://authentik.<local-domain>/application/o/token/"
+    api_url: "http://authentik.<local-domain>/application/o/userinfo/"
+    # JMESPath against the userinfo claim. Promotes Authentik group
+    # `Grafana Admins` to GrafanaAdmin, `Grafana Editors` to Editor,
+    # everyone else lands as Viewer. Create those groups in Authentik
+    # and assign your user to one of them to promote.
+    role_attribute_path: "contains(groups[*], 'Grafana Admins') && 'GrafanaAdmin' || contains(groups[*], 'Grafana Editors') && 'Editor' || 'Viewer'"
+    allow_assign_grafana_admin: true
+    use_pkce: true

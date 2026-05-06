@@ -10,10 +10,13 @@
 #
 # Critical volumes (labelled with recurring-job-group.longhorn.io/critical):
 #   - eve-tracker/eve-tracker-data
-#   - eve-tracker-dev/eve-tracker-data
+#   - eve-tracker-test/eve-tracker-data
 #   - gitea/gitea-shared-storage
+#   - forgejo/gitea-shared-storage          (chart is a Gitea fork; PVC name retained)
 #   - monitoring/grafana
 #   - open-webui/open-webui-data
+#   - vaultwarden/vaultwarden-data-vaultwarden-0
+#   - vaultwarden/vaultwarden-attachments-vaultwarden-0
 #
 # Usage: ansible-playbook ansible/playbooks/11-configure-backups.yml
 
@@ -160,10 +163,14 @@
   vars:
     critical_pvcs:
       - { namespace: eve-tracker, name: eve-tracker-data }
-      - { namespace: eve-tracker-dev, name: eve-tracker-data }
+      - { namespace: eve-tracker-test, name: eve-tracker-data }
       - { namespace: gitea, name: gitea-shared-storage }
+      - { namespace: forgejo, name: gitea-shared-storage }
       - { namespace: monitoring, name: grafana }
       - { namespace: open-webui, name: open-webui-data }
+      - { namespace: vaultwarden, name: vaultwarden-data-vaultwarden-0 }
+      - { namespace: vaultwarden, name: vaultwarden-attachments-vaultwarden-0 }
+      - { namespace: authentik,   name: data-authentik-postgresql-0 }
 
   tasks:
     - name: Create longhorn-system R2 credential secret
@@ -266,10 +273,16 @@
       changed_when: false
       tags: [backups, longhorn]
 
-    - name: Look up Longhorn volume names for critical PVCs
-      ansible.builtin.command: >
-        kubectl -n {{ item.namespace }} get pvc {{ item.name }}
-        -o jsonpath={.spec.volumeName}
+    # Resolve PVC -> PV -> Longhorn volume CR name via PV.spec.csi.volumeHandle.
+    # For Longhorn CSI, volumeHandle is always the Longhorn volume CR's metadata.name.
+    # Restored volumes have PV name `restored-pv-XXX` but Longhorn volume name
+    # `restored-XXX` (different!), so PVC.spec.volumeName cannot be used directly.
+    - name: Look up Longhorn volume names for critical PVCs (via PV csi.volumeHandle)
+      ansible.builtin.shell: |
+        set -e
+        pv=$(kubectl -n {{ item.namespace }} get pvc {{ item.name }} -o jsonpath='{.spec.volumeName}' 2>/dev/null || true)
+        if [ -z "$pv" ]; then exit 0; fi
+        kubectl get pv "$pv" -o jsonpath='{.spec.csi.volumeHandle}'
       register: critical_volume_lookup
       loop: "{{ critical_pvcs }}"
       changed_when: false
@@ -287,14 +300,30 @@
       changed_when: false
       tags: [backups, longhorn]
 
+    # Surface PVCs from `critical_pvcs:` that weren't found. On a fresh `make all`
+    # run this is normal during the first `backup` invocation (services not yet
+    # deployed); the second invocation at the end of `make all` should label them.
+    # If a PVC stays unlabeled across both runs, it's a typo/missing-namespace
+    # bug and silently dropping it would let backups go stale undetected
+    # (this exact silent gap caused 12 days of zero new R2 backups post-rebuild,
+    # see DR-1 / Task #47).
+    - name: Surface critical PVCs that could not be labeled (silent-skip detector)
+      ansible.builtin.debug:
+        msg: "MISSING critical PVC: {{ item.item.namespace }}/{{ item.item.name }} — namespace or PVC does not exist yet, skipped labeling"
+      loop: "{{ critical_volume_lookup.results }}"
+      when: item.stdout == "" or (item.rc | default(0)) != 0
+      loop_control:
+        label: "{{ item.item.namespace }}/{{ item.item.name }}"
+      tags: [backups, longhorn]
+
     - name: Summary
       ansible.builtin.debug:
         msg: |
           Backups configured:
             - K3s SQLite state: every 6h, retain 3 days, uploaded to r2:{{ r2_backup_bucket }}/k3s-state/
               (systemd timer k3s-sqlite-backup.timer on the control plane node)
-            - Longhorn recurring snapshots: daily @ 02:00 UTC, retain 7 (local, in-cluster)
-            - Longhorn recurring backups: daily @ 03:00 UTC, retain 30 (to R2, offsite)
+            - Longhorn recurring snapshots: daily @ 02:00 Europe/Bratislava (kube-controller TZ; see feedback_k3s_cronjob_timezone memory), retain 7 (local, in-cluster)
+            - Longhorn recurring backups: daily @ 03:00 Europe/Bratislava, retain 30 (to R2, offsite)
             - Critical volumes: {{ critical_pvcs | map(attribute='namespace') | zip(critical_pvcs | map(attribute='name')) | map('join','/') | list }}
             - Excluded from Longhorn backups: prometheus, loki, alertmanager (high churn, derived data)
       tags: [backups]

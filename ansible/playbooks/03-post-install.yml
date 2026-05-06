@@ -104,3 +104,12 @@
       register: ingress_apply
       changed_when: "'configured' in ingress_apply.stdout or 'created' in ingress_apply.stdout"
       tags: [ingress]
+
+    # Cluster-wide HTTP→HTTPS redirect for Traefik. K3s HelmController merges
+    # this HelmChartConfig on top of the bundled Traefik chart values.
+    - name: Apply Traefik HelmChartConfig (HTTP→HTTPS redirect)
+      ansible.builtin.command: >
+        kubectl apply -f {{ playbook_dir }}/../../k8s/traefik/helm-chart-config.yml
+      register: traefik_apply
+      changed_when: "'configured' in traefik_apply.stdout or 'created' in traefik_apply.stdout"
+      tags: [ingress, traefik]

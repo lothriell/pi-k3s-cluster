@@ -14,3 +14,10 @@
   ansible.builtin.systemd:
     name: chrony
     state: restarted
+
+# Servers run k3s.service; agents run k3s-agent.service. Group membership in
+# k3s_server / k3s_agents / k3s_x86_agents tells us which.
+- name: restart k3s
+  ansible.builtin.systemd:
+    name: "{{ 'k3s' if 'k3s_server' in group_names else 'k3s-agent' }}"
+    state: restarted

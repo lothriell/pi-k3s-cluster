@@ -108,6 +108,13 @@ repoServer:
       cpu: 500m
       memory: 512Mi
 
+  # Default 1s timeout is too tight for Go workloads on Pi nodes —
+  # probes flap with "context deadline exceeded" under brief CPU contention.
+  livenessProbe:
+    timeoutSeconds: 5
+  readinessProbe:
+    timeoutSeconds: 5
+
 # ---------------------------------------------------------------------------
 # Redis -- ArgoCD uses Redis for caching. The bundled Redis is fine for a
 # small cluster. Keep it lightweight.
@@ -161,3 +168,30 @@ configs:
     # This tells ArgoCD not to redirect HTTP to HTTPS, since TLS is handled
     # by Traefik / Cloudflare Tunnel in front of it.
     server.insecure: true
+
+  # ---- Cluster URL (root) -------------------------------------------------
+  # Required for OIDC redirect_uri construction. Must match the hostname the
+  # Authentik Provider's redirect_uri is registered under.
+  cm:
+    url: "http://argocd.<local-domain>"
+
+    # ---- Authentik OIDC (task #44 wave 1) ----------------------------------
+    # Native admin (vault: argocd_admin_password) stays as break-glass per
+    # the wave-1 plan. The clientSecret references the argocd-oidc Secret
+    # via ArgoCD's `$<secret>:<key>` indirection so the value never lands
+    # in `helm get values` history.
+    oidc.config: |
+      name: Authentik
+      issuer: http://authentik.<local-domain>/application/o/argocd/
+      clientID: argocd
+      clientSecret: $argocd-oidc:client_secret
+      requestedScopes: ["openid", "profile", "email", "groups"]
+      requestedIDTokenClaims: {"groups": {"essential": true}}
+
+  # ---- RBAC mapping for Authentik groups → ArgoCD roles ------------------
+  # Anyone in the `ArgoCD Admins` Authentik group becomes role:admin.
+  # Default policy stays role:readonly (chart default). Tweak as needed
+  # once user/group structure in Authentik settles.
+  rbac:
+    policy.csv: |
+      g, ArgoCD Admins, role:admin

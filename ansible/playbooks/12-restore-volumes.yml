@@ -293,6 +293,11 @@
     # 4. Create static PVs pointing at the restored Longhorn volumes
     # ------------------------------------------------------------------
 
+    # The `longhorn-restore` label on the PV is intentional: the PV name
+    # already starts with `restored-pv-` (provenance via name), but the
+    # label gives a uniform `kubectl get pv -l longhorn-restore` lookup
+    # for ops scripts. PVs are cluster-scoped and not ArgoCD-managed, so
+    # this is safe.
     - name: Create static PVs for restored volumes
       ansible.builtin.shell: |
         kubectl apply -f - <<EOF
@@ -341,6 +346,12 @@
       changed_when: false
       tags: [restore]
 
+    # NO `longhorn-restore` label on the PVC — see commit history (eve-tracker
+    # OutOfSync, 2026-05-03). Even with `ignoreDifferences` configured for
+    # this exact label key, ArgoCD's diff machinery flags the label's
+    # presence/absence asymmetry and the app stays OutOfSync forever. The
+    # PV-side label is enough for provenance lookups; the bound PV's name
+    # (`restored-pv-XXX`) is also visible from the PVC.
     - name: Create PVCs bound to restored PVs (when backup exists)
       ansible.builtin.shell: |
         kubectl apply -f - <<EOF
@@ -349,8 +360,6 @@
         metadata:
           name: {{ item.pvc }}
           namespace: {{ item.namespace }}
-          labels:
-            longhorn-restore: "{{ item.namespace }}-{{ item.pvc }}"
         spec:
           accessModes:
             - {{ item.access_mode }}

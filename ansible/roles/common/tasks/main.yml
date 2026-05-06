@@ -189,17 +189,49 @@
     mode: "0755"
   tags: [registry]
 
-- name: Configure K3s to use HTTP for Gitea container registry
+- name: Resolve effective Gitea registry host
+  ansible.builtin.set_fact:
+    _gitea_registry_host: "{{ gitea_registry_host | default('gitea.' + (local_domain | default('homielab.local'))) }}"
+  tags: [registry]
+
+# Distribute the homielab internal CA so containerd can verify TLS when pulling
+# from gitea.<local_domain>. Required because the cluster-wide HTTP→HTTPS
+# redirect added by the cert-manager rollout (k8s/traefik/helm-chart-config.yml)
+# means the previous plain-HTTP pull path now hits TLS. The CA cert lives in
+# vault.yml as `homielab_ca_cert`, captured by `make ca-backup` after the
+# initial cert-manager install. On a brand-new cluster the var is undefined,
+# in which case we fall back to plain HTTP and skip writing the CA file.
+- name: Drop homielab internal CA for containerd
+  ansible.builtin.copy:
+    dest: /etc/rancher/k3s/homielab-ca.crt
+    content: "{{ homielab_ca_cert }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: homielab_ca_cert is defined and homielab_ca_cert | length > 0
+  notify: restart k3s
+  tags: [registry]
+
+- name: Configure K3s containerd registry mirror for Gitea
   ansible.builtin.copy:
     dest: /etc/rancher/k3s/registries.yaml
     content: |
       mirrors:
-        {{ gitea_registry_host | default('gitea.' + (local_domain | default('homielab.local'))) }}:
+        {{ _gitea_registry_host }}:
           endpoint:
-            - "http://{{ gitea_registry_host | default('gitea.' + (local_domain | default('homielab.local'))) }}"
+      {% if homielab_ca_cert is defined and homielab_ca_cert | length > 0 %}
+            - "https://{{ _gitea_registry_host }}"
+      configs:
+        "{{ _gitea_registry_host }}":
+          tls:
+            ca_file: /etc/rancher/k3s/homielab-ca.crt
+      {% else %}
+            - "http://{{ _gitea_registry_host }}"
+      {% endif %}
     owner: root
     group: root
     mode: "0644"
+  notify: restart k3s
   tags: [registry]
 
 - name: Allow larger initial clock step for Pis without hardware RTC

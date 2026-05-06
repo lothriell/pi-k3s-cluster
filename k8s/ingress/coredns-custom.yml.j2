@@ -9,3 +9,4 @@ metadata:
 data:
   {{ local_domain | replace('.', '-') }}.override: |
     rewrite name gitea.{{ local_domain }} gitea-http.gitea.svc.cluster.local
+    rewrite name authentik.{{ local_domain }} authentik-server.authentik.svc.cluster.local

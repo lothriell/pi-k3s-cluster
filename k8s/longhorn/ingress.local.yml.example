@@ -1,32 +1,14 @@
 ---
-# Gitignored LAN Ingress for Longhorn UI.
-# Copy this file to ingress.local.yml, replace the host with your actual
-# local domain, then apply:
+# DEPRECATED — kept only as a fallback example.
 #
-#     cp k8s/longhorn/ingress.local.yml.example k8s/longhorn/ingress.local.yml
-#     # edit the host in the new file
-#     kubectl apply -f k8s/longhorn/ingress.local.yml
+# As of task #45 (cert-manager + internal CA), longhorn.<local_domain> is
+# defined in k8s/ingress/local-ingress.yml.j2 and rendered by
+# 03-post-install.yml. Re-running `make all` (or `make post-install`)
+# applies the templated version with TLS via the homielab-internal issuer.
 #
-# Longhorn UI does not have built-in authentication — keep it LAN-only
-# (do NOT expose via Cloudflare Tunnel or public DNS).
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: longhorn-local
-  namespace: longhorn-system
-  annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: web
-spec:
-  ingressClassName: traefik
-  rules:
-    # TODO CHANGEME
-    - host: longhorn.example.local
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: longhorn-frontend
-                port:
-                  number: 80
+# Do NOT apply this file alongside the templated one — they share the
+# Ingress name `longhorn-local`, so whichever is applied last wins.
+# If you have an old gitignored ingress.local.yml in this directory,
+# delete it after rolling out the new templated ingress:
+#   kubectl -n longhorn-system delete ingress longhorn-ingress 2>/dev/null  # legacy name, if present
+#   rm k8s/longhorn/ingress.local.yml

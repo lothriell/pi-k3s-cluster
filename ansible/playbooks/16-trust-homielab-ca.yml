@@ -1,0 +1,263 @@
+---
+# Playbook 16: Distribute the homielab internal CA to managed clients.
+# =============================================================================
+# Pulls the root CA cert from the cert-manager namespace, ships it to each
+# host, and (where possible) installs it as a trusted root.
+#
+# Coverage:
+#   - macos_nodes:  delivers the .crt AND a .mobileconfig profile to /tmp.
+#                   Trust install MUST be finished by the user via GUI:
+#                     1. SSH or VNC into the host
+#                     2. open /tmp/homielab-internal-ca.mobileconfig
+#                     3. System Settings → Profiles → Install → admin auth
+#                   This is unavoidable: macOS Sonoma+ blocks headless writes
+#                   to com.apple.trust-settings.admin (`security
+#                   authorizationdb write … allow` returns -60005), even via
+#                   sudo. MDM is the only fully-automated alternative.
+#   - <future>      Linux desktops via update-ca-certificates and
+#                   Windows via ansible.windows.win_certificate_store —
+#                   both can be fully headless. See docs/internal-ca-trust.md.
+#
+# Idempotent: re-running ships the same files; trust install is a no-op
+# if the user has already approved the profile.
+#
+# Usage:
+#   ansible-playbook ansible/playbooks/16-trust-homielab-ca.yml
+#
+# Prereqs:
+#   - cert-manager + homielab-internal ClusterIssuer deployed (`make cert-manager`)
+#   - kubectl on the controller pointed at the cluster
+#   - `ansible` service account bootstrapped on each target host
+# =============================================================================
+
+- name: Extract homielab root CA from the cluster + build mobileconfig profile
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    cert_path: /tmp/homielab-ca.crt
+    profile_path: /tmp/homielab-internal-ca.mobileconfig
+    profile_uuid_payload: 6F1B2A14-5E0C-4F19-8A74-CA7E1B11E001
+    profile_uuid_top: 6F1B2A14-5E0C-4F19-8A74-CA7E1B11E002
+  tasks:
+    - name: Read homielab-ca-tls secret
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - -n
+          - cert-manager
+          - get
+          - secret
+          - homielab-ca-tls
+          - -o
+          - 'jsonpath={.data.ca\.crt}'
+      register: ca_b64
+      changed_when: false
+
+    - name: Write CA cert to controller-side cache (PEM)
+      ansible.builtin.copy:
+        content: "{{ ca_b64.stdout | b64decode }}"
+        dest: "{{ cert_path }}"
+        mode: "0644"
+
+    # The mobileconfig profile lets a user install + trust the CA on macOS
+    # and iOS in one GUI step, without touching Keychain Access. PayloadType
+    # com.apple.security.root marks it as a root cert; PayloadContent is the
+    # full PEM (Apple's profile parser accepts both PEM and DER).
+    - name: Build mobileconfig profile
+      ansible.builtin.copy:
+        dest: "{{ profile_path }}"
+        mode: "0644"
+        content: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>PayloadContent</key>
+            <array>
+              <dict>
+                <key>PayloadType</key>
+                <string>com.apple.security.root</string>
+                <key>PayloadVersion</key>
+                <integer>1</integer>
+                <key>PayloadIdentifier</key>
+                <string>omg.homielab.ca</string>
+                <key>PayloadUUID</key>
+                <string>{{ profile_uuid_payload }}</string>
+                <key>PayloadDisplayName</key>
+                <string>homielab internal CA</string>
+                <key>PayloadDescription</key>
+                <string>Root CA for *.{{ local_domain }} services</string>
+                <key>PayloadContent</key>
+                <data>
+          {{ ca_b64.stdout }}
+                </data>
+              </dict>
+            </array>
+            <key>PayloadType</key>
+            <string>Configuration</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadIdentifier</key>
+            <string>omg.homielab.ca-profile</string>
+            <key>PayloadUUID</key>
+            <string>{{ profile_uuid_top }}</string>
+            <key>PayloadDisplayName</key>
+            <string>homielab internal CA</string>
+            <key>PayloadDescription</key>
+            <string>Adds the homielab internal CA as a trusted root for *.{{ local_domain }} services.</string>
+            <key>PayloadOrganization</key>
+            <string>homielab</string>
+          </dict>
+          </plist>
+
+    - name: Display CA identity (to confirm before push)
+      ansible.builtin.command: >-
+        openssl x509 -noout -subject -issuer -fingerprint -sha256 -in {{ cert_path }}
+      register: ca_info
+      changed_when: false
+
+    - name: Show CA identity
+      ansible.builtin.debug:
+        var: ca_info.stdout_lines
+
+- name: Distribute CA + mobileconfig to macOS hosts
+  hosts: macos_nodes
+  gather_facts: false
+  become: false
+  vars:
+    cert_path: /tmp/homielab-ca.crt
+    profile_path: /tmp/homielab-internal-ca.mobileconfig
+  tasks:
+    - name: Copy CA cert (PEM)
+      ansible.builtin.copy:
+        src: "{{ cert_path }}"
+        dest: "{{ cert_path }}"
+        mode: "0644"
+
+    - name: Copy mobileconfig profile
+      ansible.builtin.copy:
+        src: "{{ profile_path }}"
+        dest: "{{ profile_path }}"
+        mode: "0644"
+
+    # Check trust at admin OR user (login keychain) scope. Keychain
+    # Access "Always Trust" writes per-user trust; a device-scope
+    # mobileconfig writes admin trust. Either is enough for that user.
+    # TCC blocks cross-user trust DB reads via `sudo -u`, so we check the
+    # admin DB directly and the user DB via `su - <user>`.
+    - name: Check if CA is trusted (admin or user scope)
+      ansible.builtin.shell: |
+        if security dump-trust-settings -d 2>/dev/null | grep -q homielab-internal-ca; then
+          echo "admin"; exit 0
+        fi
+        if su - {{ personal_user }} -c 'security dump-trust-settings 2>/dev/null' \
+             | grep -q homielab-internal-ca; then
+          echo "user"; exit 0
+        fi
+        echo "missing"; exit 1
+      become: true
+      register: trust_check
+      failed_when: false
+      changed_when: false
+
+    - name: Print next-steps when trust isn't set
+      ansible.builtin.debug:
+        msg: |
+          {{ inventory_hostname }}: CA is on disk but trust is not yet set.
+          macOS Sonoma+ blocks headless trust install. Finish on the host:
+
+            Option A — mobileconfig (system-wide):
+              On the macmini desktop, in Terminal:
+                sudo profiles install -path /tmp/homielab-internal-ca.mobileconfig
+              (Sonoma may have removed `profiles install` — if so, use B.)
+
+            Option B — Keychain Access (per-user, GUI):
+              On the desktop session as {{ personal_user }}:
+                1. Open Keychain Access → select the **login** keychain
+                2. Search "homielab" → double-click the cert
+                3. Expand ▶ Trust → "When using this certificate" →
+                   Always Trust → close window → password prompt
+              The cert is already in the login keychain (delivered via
+              mobileconfig); only the trust flag needs flipping.
+
+          Then re-run `make trust-ca-push` to verify.
+      when: trust_check.stdout == "missing"
+
+    - name: Confirm trust state (where set)
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: homielab CA is trusted ✓ ({{ trust_check.stdout }} scope)"
+      when: trust_check.stdout in ['admin', 'user']
+
+# =============================================================================
+# Windows hosts via WSL+SSH interop.
+#
+# We SSH into WSL Linux (already configured), then call powershell.exe through
+# WSL interop to install the CA into Cert:\CurrentUser\Root. CurrentUser scope
+# avoids UAC entirely — fine for single-user PCs (Chrome / Edge / native curl
+# for that user trust the cert; Firefox uses NSS regardless).
+#
+# For a future system-wide install (Cert:\LocalMachine\Root) you'd need
+# elevation, which UAC blocks headlessly — see docs/internal-ca-trust.md.
+# =============================================================================
+
+- name: Distribute CA + install into CurrentUser\Root on Windows hosts (via WSL)
+  hosts: windows_wsl_nodes
+  gather_facts: false
+  become: false
+  vars:
+    cert_path: /tmp/homielab-ca.crt
+    pwsh: /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
+  tasks:
+    - name: Discover Windows username via WSL interop
+      ansible.builtin.shell: |
+        /mnt/c/Windows/System32/cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r\n'
+      register: winuser
+      changed_when: false
+      failed_when: winuser.stdout | length == 0
+
+    - name: Show resolved Windows user
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} → Windows user: {{ winuser.stdout }}"
+
+    - name: Copy CA cert into Windows-side filesystem
+      ansible.builtin.copy:
+        src: "{{ cert_path }}"
+        dest: "/mnt/c/Users/{{ winuser.stdout }}/homielab-ca.crt"
+        mode: "0644"
+
+    - name: Check current CurrentUser\Root trust state
+      ansible.builtin.command:
+        argv:
+          - "{{ pwsh }}"
+          - -NoProfile
+          - -Command
+          - "if (Get-ChildItem Cert:\\CurrentUser\\Root | Where-Object Subject -match 'homielab-internal-ca') { 'present' } else { 'absent' }"
+      register: trust_check_win
+      changed_when: false
+
+    - name: Import CA into Cert:\CurrentUser\Root
+      ansible.builtin.command:
+        argv:
+          - "{{ pwsh }}"
+          - -NoProfile
+          - -Command
+          - "Import-Certificate -FilePath C:\\Users\\{{ winuser.stdout }}\\homielab-ca.crt -CertStoreLocation Cert:\\CurrentUser\\Root | Out-Null; 'imported'"
+      when: "'absent' in trust_check_win.stdout"
+      register: import_result
+
+    - name: Verify CA trust via TLS handshake from Windows
+      ansible.builtin.command:
+        argv:
+          - "{{ pwsh }}"
+          - -NoProfile
+          - -Command
+          - "try { $r = Invoke-WebRequest -Uri 'https://argocd.{{ local_domain }}/' -UseBasicParsing -TimeoutSec 5; Write-Output ('HTTP ' + [string]$r.StatusCode + ' (cert validated)') } catch { if ($_.Exception.Message -match 'certificate|chain') { throw $_ } else { Write-Output 'unreachable (CA trust still set)' } }"
+      register: verify_win
+      changed_when: false
+      failed_when: false
+
+    - name: Report verify status
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} → {{ (verify_win.stdout | default('') | trim) or (verify_win.stderr | default('') | trim) or '(no output)' }}"

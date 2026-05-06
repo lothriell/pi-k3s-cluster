@@ -1,0 +1,152 @@
+# =============================================================================
+# Authentik — LAN-only OIDC provider (task #44 wave 1)
+# =============================================================================
+# Helm chart: authentik/authentik 2026.2.2 (https://goauthentik.io)
+# Deployed by: ansible/playbooks/15-deploy-authentik.yml
+# Accessible at: authentik.<local_domain> via Traefik (local-ingress.yml.j2)
+#
+# Secrets policy:
+#   - All secrets live in vault.yml and are projected into two K8s Secrets by
+#     the playbook BEFORE this chart installs:
+#       authentik-secrets         → envFrom for server + worker
+#         keys: AUTHENTIK_SECRET_KEY, AUTHENTIK_POSTGRESQL__PASSWORD,
+#               AUTHENTIK_BOOTSTRAP_PASSWORD, AUTHENTIK_BOOTSTRAP_TOKEN
+#       authentik-postgres-auth   → bundled bitnami/postgresql `auth.existingSecret`
+#         keys: password           (app user `authentik`)
+#               postgres-password  (postgres superuser, used by bitnami init)
+#         Both keys are required — leaving postgres-password out makes the
+#         postgres pod fail at /opt/bitnami/postgresql/secrets/postgres-password.
+#   - Nothing sensitive ends up in `helm get values` history this way.
+#
+# Notes vs older Authentik docs:
+#   - Authentik 2025.6+ removed the Redis dependency (moved to Postgres-backed
+#     task queue). Chart 2026.2.x has no `redis:` block. One less moving part.
+#   - Postgres bundled via the chart's bitnami/postgresql 16.7.27 sub-chart.
+# =============================================================================
+
+global:
+  # Pinned via the playbook's helm install --version, but mirrored here for
+  # the Authentik server image so server + worker share the tag.
+  image:
+    repository: ghcr.io/goauthentik/server
+    tag: "2026.2.2"
+    pullPolicy: IfNotPresent
+
+# -- Authentik configuration --------------------------------------------------
+
+authentik:
+  log_level: info
+  # Empty here on purpose — actual value comes from envFrom (authentik-secrets).
+  # The chart's templated Secret would clash with envFrom otherwise.
+  secret_key: ""
+  postgresql:
+    host: "authentik-postgresql"
+    name: "authentik"
+    user: "authentik"
+    # Empty here on purpose — same reason as secret_key above.
+    password: ""
+    port: 5432
+  error_reporting:
+    enabled: false
+
+# -- Authentik server (Django/web UI + OIDC endpoints) ------------------------
+
+server:
+  replicas: 1
+
+  envFrom:
+    - secretRef:
+        name: authentik-secrets
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 700Mi
+    limits:
+      # 900Mi was OOM-killed during initial deploy — migration + outpost
+      # reconcile spikes well above steady-state ~600Mi. 1.5Gi gives
+      # comfortable headroom while staying small on the 16Gi nodes.
+      memory: 1500Mi
+
+  service:
+    type: ClusterIP
+    # ports.http defaults to 80 → containerPort 9000 (HTTP) per chart
+
+  # Ingress disabled — handled by k8s/ingress/local-ingress.yml.j2 (Traefik)
+  ingress:
+    enabled: false
+
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: false  # Cluster uses additionalScrapeConfigs in Prometheus, not ServiceMonitors
+
+  # Pin to x86 nodes — Pi nodes are 32GB eMMC, Authentik + Postgres data
+  # belongs on roomier disks per memory `feedback_longhorn_storage_class_default`.
+  nodeSelector:
+    kubernetes.io/arch: amd64
+
+# -- Authentik worker (background tasks: outpost reconciliation, blueprints) --
+
+worker:
+  replicas: 1
+
+  envFrom:
+    - secretRef:
+        name: authentik-secrets
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 700Mi
+    limits:
+      # 900Mi was OOM-killed during initial deploy — migration + outpost
+      # reconcile spikes well above steady-state ~600Mi. 1.5Gi gives
+      # comfortable headroom while staying small on the 16Gi nodes.
+      memory: 1500Mi
+
+  nodeSelector:
+    kubernetes.io/arch: amd64
+
+# -- Bundled Postgres (bitnami/postgresql sub-chart) --------------------------
+
+postgresql:
+  enabled: true
+
+  auth:
+    username: authentik
+    database: authentik
+    existingSecret: authentik-postgres-auth
+    # Defaults: secretKeys.userPasswordKey = "password" (matches our Secret)
+
+  primary:
+    persistence:
+      enabled: true
+      storageClass: longhorn-storage  # x86-pinned per longhorn storage memory
+      accessModes:
+        - ReadWriteOnce
+      size: 8Gi
+
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+      limits:
+        memory: 512Mi
+
+    # Schedule on x86 to match the Longhorn storage-class affinity
+    nodeSelector:
+      kubernetes.io/arch: amd64
+
+# -- Outposts (none for wave 1) -----------------------------------------------
+# Wave 3 will add a forward-auth proxy outpost for Prometheus/Alertmanager/
+# Longhorn UI. Leaving disabled here keeps the chart footprint small.
+
+# -- Blueprints (deferred) ----------------------------------------------------
+# Wave 1 provisions OIDC clients manually via the UI.
+# Future GitOps pass: declare Providers + Applications via Blueprint CRDs.
+
+# -- GeoIP (disabled — needs MaxMind license, no value for LAN-only auth) -----
+
+geoip:
+  enabled: false

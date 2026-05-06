@@ -61,6 +61,7 @@ tailscale_arch_t_01: 100.x.x.x
 tailscale_cachy_t_01: 100.x.x.x
 tailscale_macmini: 100.x.x.x
 tailscale_wazuh_server: 100.x.x.x
+tailscale_thor: 100.x.x.x   # Windows 11 host with WSL+SSH; CA pushed via WSL interop
 
 # Cloudflare tunnel domain
 cloudflare_domain: example.com

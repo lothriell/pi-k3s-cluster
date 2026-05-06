@@ -1,0 +1,76 @@
+# NetworkPolicy: authentik (LAN-only OIDC provider, task #44 wave 1)
+# Ports below are POD ports (containerPort), not Service ports —
+# kube-router enforces against the destination pod IP, see memory
+# `feedback_networkpolicy_ports.md`.
+#
+# Authentik server containers:
+#   9000  HTTP   (Traefik / OIDC clients)
+#   9300  metrics (Prometheus scrape)
+# Postgres containers:
+#   5432  TCP    (server + worker → DB)
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: authentik-server-allowed-ingress
+  namespace: authentik
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: authentik
+      app.kubernetes.io/component: server
+  policyTypes: [Ingress]
+  ingress:
+    # Traefik in kube-system → Authentik UI + OIDC endpoints (browser flows)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 9000
+          protocol: TCP
+    # Server-to-server OIDC traffic from each wave's client namespaces.
+    # Grafana / ArgoCD pods call /application/o/token/ + /userinfo/ directly
+    # via the in-cluster CoreDNS rewrite, NOT through Traefik. So they need
+    # an explicit allow on port 9000 (the HTTP container port). When new
+    # OIDC clients land (Gitea, Forgejo, Headlamp in wave 2) add their
+    # namespaces here.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring   # Grafana
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: argocd       # ArgoCD
+      ports:
+        - port: 9000
+          protocol: TCP
+    # Prometheus → /metrics on the dedicated metrics port
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 9300
+          protocol: TCP
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: authentik-postgres-allowed-ingress
+  namespace: authentik
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+  policyTypes: [Ingress]
+  ingress:
+    # Server + worker pods (same namespace) → Postgres
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: authentik
+      ports:
+        - port: 5432
+          protocol: TCP

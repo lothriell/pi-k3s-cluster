@@ -4,7 +4,23 @@
 # Rendered by 03-post-install.yml from Jinja2 template using vars in
 # ansible/inventory/group_vars/all/main.yml (gitignored).
 #
-# Routes local domain names to cluster services via Traefik.
+# Routes local domain names to cluster services via Traefik on the
+# `websecure` (HTTPS) entrypoint. TLS certs are minted automatically by
+# cert-manager from the in-cluster `homielab-internal` CA — see
+# k8s/cert-manager/cluster-issuer.yml for the chain. Each Ingress carries:
+#   annotations:
+#     cert-manager.io/cluster-issuer: homielab-internal
+#     traefik.ingress.kubernetes.io/router.entrypoints: websecure
+#     traefik.ingress.kubernetes.io/router.tls: "true"
+#   spec.tls:
+#     - hosts: [<host>]
+#       secretName: <host-slug>-tls
+#
+# HTTP→HTTPS redirect is cluster-wide via k8s/traefik/helm-chart-config.yml,
+# so no per-Ingress redirect middleware is required.
+#
+# Trust the homielab CA on each client once. See docs/internal-ca-trust.md.
+#
 # Requires DNS resolution of *.{{ local_domain }} -> Traefik LB IP (MetalLB).
 # =============================================================================
 
@@ -15,8 +31,15 @@ metadata:
   name: grafana-local
   namespace: monitoring
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: web
+    cert-manager.io/cluster-issuer: homielab-internal
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
 spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - grafana.{{ local_domain }}
+      secretName: grafana-local-tls
   rules:
     - host: grafana.{{ local_domain }}
       http:
@@ -33,11 +56,74 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
+  name: prometheus-local
+  namespace: monitoring
+  annotations:
+    cert-manager.io/cluster-issuer: homielab-internal
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - prometheus.{{ local_domain }}
+      secretName: prometheus-local-tls
+  rules:
+    - host: prometheus.{{ local_domain }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: prometheus-server
+                port:
+                  number: 80
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: alertmanager-local
+  namespace: monitoring
+  annotations:
+    cert-manager.io/cluster-issuer: homielab-internal
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - alertmanager.{{ local_domain }}
+      secretName: alertmanager-local-tls
+  rules:
+    - host: alertmanager.{{ local_domain }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: prometheus-alertmanager
+                port:
+                  number: 9093
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
   name: gitea-local
   namespace: gitea
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: web
+    cert-manager.io/cluster-issuer: homielab-internal
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
 spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - gitea.{{ local_domain }}
+      secretName: gitea-local-tls
   rules:
     - host: gitea.{{ local_domain }}
       http:
@@ -57,8 +143,15 @@ metadata:
   name: forgejo-local
   namespace: forgejo
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: web
+    cert-manager.io/cluster-issuer: homielab-internal
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
 spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - forge.{{ local_domain }}
+      secretName: forgejo-local-tls
   rules:
     - host: forge.{{ local_domain }}
       http:
@@ -78,8 +171,15 @@ metadata:
   name: argocd-local
   namespace: argocd
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: web
+    cert-manager.io/cluster-issuer: homielab-internal
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
 spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - argocd.{{ local_domain }}
+      secretName: argocd-local-tls
   rules:
     - host: argocd.{{ local_domain }}
       http:
@@ -96,32 +196,18 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: prometheus-local
-  namespace: monitoring
-  annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: web
-spec:
-  rules:
-    - host: prometheus.{{ local_domain }}
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: prometheus-server
-                port:
-                  number: 80
-
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
   name: headlamp-local
   namespace: headlamp
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: web
+    cert-manager.io/cluster-issuer: homielab-internal
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
 spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - headlamp.{{ local_domain }}
+      secretName: headlamp-local-tls
   rules:
     - host: headlamp.{{ local_domain }}
       http:
@@ -133,6 +219,62 @@ spec:
                 name: headlamp
                 port:
                   number: 80
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: longhorn-local
+  namespace: longhorn-system
+  annotations:
+    cert-manager.io/cluster-issuer: homielab-internal
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - longhorn.{{ local_domain }}
+      secretName: longhorn-local-tls
+  rules:
+    - host: longhorn.{{ local_domain }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: longhorn-frontend
+                port:
+                  number: 80
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: open-webui-local
+  namespace: open-webui
+  annotations:
+    cert-manager.io/cluster-issuer: homielab-internal
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - chat.{{ local_domain }}
+      secretName: open-webui-local-tls
+  rules:
+    - host: chat.{{ local_domain }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: open-webui
+                port:
+                  number: 8080
 
 # =============================================================================
 # Ollama -- external GPU server proxied through Traefik
@@ -171,8 +313,15 @@ metadata:
   name: ollama-local
   namespace: default
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: web
+    cert-manager.io/cluster-issuer: homielab-internal
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
 spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - ollama.{{ local_domain }}
+      secretName: ollama-local-tls
   rules:
     - host: ollama.{{ local_domain }}
       http:
@@ -186,18 +335,20 @@ spec:
                   number: 11434
 
 ---
-# Vaultwarden requires HTTPS (browser SubtleCrypto API unavailable otherwise).
-# TLS secret is a self-signed cert for vault.<local_domain> — first visit will
-# prompt the user to accept the cert; subsequent visits are cached.
+# Vaultwarden — TLS via internal CA. Replaces the previously hand-rolled
+# self-signed cert (memory project_vaultwarden) once cert-manager mints
+# vaultwarden-tls into the vaultwarden namespace.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: vaultwarden-local
   namespace: vaultwarden
   annotations:
+    cert-manager.io/cluster-issuer: homielab-internal
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
     traefik.ingress.kubernetes.io/router.tls: "true"
 spec:
+  ingressClassName: traefik
   tls:
     - hosts:
         - vault.{{ local_domain }}
@@ -211,5 +362,34 @@ spec:
             backend:
               service:
                 name: vaultwarden
+                port:
+                  number: 80
+
+---
+# Authentik LAN-only OIDC provider.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: authentik-local
+  namespace: authentik
+  annotations:
+    cert-manager.io/cluster-issuer: homielab-internal
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - authentik.{{ local_domain }}
+      secretName: authentik-local-tls
+  rules:
+    - host: authentik.{{ local_domain }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: authentik-server
                 port:
                   number: 80
