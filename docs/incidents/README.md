@@ -24,6 +24,7 @@ Each file follows the template at the bottom of this document. To open a new one
 | Date | Severity | Status | Title |
 |------|----------|--------|-------|
 | 2026-05-04 | High | Resolved | [Gitea TLS pulls fail post cert-manager rollout](2026-05-04-gitea-tls-pulls.md) |
+| 2026-05-06 | Low  | Resolved | [eve-tracker-backend probe flap from 302s cache refresh](2026-05-06-eve-backend-probe-flap.md) |
 
 ## Template
 
