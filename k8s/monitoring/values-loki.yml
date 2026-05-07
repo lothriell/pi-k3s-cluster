@@ -27,6 +27,13 @@ loki:
     # active in the ingester's chunk cache for ~30m). Bump both to 50k.
     max_streams_per_user: 50000
     max_global_streams_per_user: 50000
+    # Default (500) trips with "maximum number of series reached" on
+    # range queries when Pi-hole streams accidentally pick up a high-
+    # cardinality label (e.g. target=<IP>). Even after fixing Promtail's
+    # labels stage, existing streams stay queryable until retention ages
+    # them out — Grafana datasource pings crash-loop in the meantime.
+    # Bump generously to absorb label-stage misconfigurations.
+    max_query_series: 100000
   compactor:
     retention_enabled: true
     delete_request_store: filesystem
@@ -48,8 +55,11 @@ singleBinary:
       cpu: 100m
       memory: 256Mi
     limits:
-      cpu: 500m
-      memory: 512Mi
+      cpu: 1000m
+      # 512Mi OOMKilled when Grafana auto-refresh ran heavy
+      # count_over_time queries against high-cardinality streams.
+      # Steady-state is ~110Mi; spikes during query bursts need headroom.
+      memory: 1Gi
   persistence:
     size: 10Gi
     # Default `longhorn` StorageClass (no nodeSelector) = 2 replicas

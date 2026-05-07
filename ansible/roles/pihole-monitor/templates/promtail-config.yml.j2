@@ -22,10 +22,19 @@ scrape_configs:
         labels:
           job: pihole
           host: athena
-          __path__: /var/log/pihole/pihole.log
+          # Glob picks up today's pihole.log + yesterday's rotated pihole.log.1
+          # so a Promtail restart after midnight doesn't lose the previous day's
+          # tail (rotation runs at 22:00 UTC nightly).
+          __path__: /var/log/pihole/pihole.log{,.1}
     pipeline_stages:
+      # `\w+\s+\d+\s+[\d:]+` (NOT `\w+ \d+ [\d:]+`): dnsmasq space-pads
+      # single-digit days ("May  6" — TWO spaces between month and day).
+      # The single-space regex silently fails for days 1-9 of any month,
+      # which falls back to `action_on_failure: fudge` → all entries get
+      # the last-good timestamp + 1ns each. Caught 2026-05-06 after 6
+      # days of "May 1-6" entries arriving in Loki stamped April 30.
       - regex:
-          expression: '(?P<timestamp>\w+ \d+ [\d:]+) dnsmasq\[\d+\]: (?P<action>query|forwarded|reply|cached|blocked)\[?(?P<qtype>\w+)?\]?\s+(?P<domain>\S+)\s+(?:from|to|is)\s+(?P<target>\S+)'
+          expression: '(?P<timestamp>\w+\s+\d+\s+[\d:]+) dnsmasq\[\d+\]: (?P<action>query|forwarded|reply|cached|blocked)\[?(?P<qtype>\w+)?\]?\s+(?P<domain>\S+)\s+(?:from|to|is)\s+(?P<target>\S+)'
 
       # CRITICAL: feed the parsed timestamp back into Loki's entry time.
       # Without this stage, Loki timestamps every line with ingestion
@@ -51,7 +60,13 @@ scrape_configs:
       # max_streams_per_user limit on Loki. They stay available in the raw
       # log line and can be filtered via LogQL line expressions:
       #   {job="pihole"} |= "redd.it"
+      #   {job="pihole"} |= "from <client-ip>"
+      # 2026-05-06: `target` was leaking into labels here despite the warning
+      # above. Once the regex started matching properly, every reply IP
+      # became a Loki stream → query 400 "max series (500) reached" → Loki
+      # OOMKilled at 512Mi. Don't add it back. If you really need IP-based
+      # filtering, use a line filter (above) — slower per-query, but no
+      # cardinality risk.
       - labels:
           action:
           qtype:
-          target:
