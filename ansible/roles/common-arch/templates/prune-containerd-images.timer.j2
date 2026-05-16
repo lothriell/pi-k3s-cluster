@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly prune of unused containerd images (belt-and-suspenders for kubelet image-gc)
+
+[Timer]
+# Sunday 04:07 local (low-traffic window; minute chosen to avoid on-the-hour
+# thundering-herd with other cron jobs). RandomizedDelaySec spreads nodes out.
+OnCalendar=Sun *-*-* 04:07:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

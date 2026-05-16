@@ -1,0 +1,50 @@
+# =============================================================================
+# Helm Values: prometheus-community/prometheus-smartctl-exporter
+# =============================================================================
+# DaemonSet that runs smartctl on each node and exposes SMART metrics
+# (wear leveling, reallocated sectors, temperature, error counts) to
+# Prometheus. Only useful where there's a real SMART-capable disk —
+# i.e. the 3 x86 nodes that hold Longhorn replicas. Pi eMMC reports
+# minimal-to-no SMART data and the upstream image lacks ARM64 builds.
+#
+# Install with:
+#   helm upgrade --install smartctl-exporter prometheus-community/prometheus-smartctl-exporter \
+#     -n monitoring -f values-smartctl-exporter.yml
+# =============================================================================
+
+# Pin to the 3 amd64 nodes (k3s-x86-1, k3s-x86-2, minisforum-c) — same
+# pool as the Longhorn `storage` tag.
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+# smartctl needs raw block-device access (/dev/sd*) which requires
+# privileged + hostPID for nvme-cli enumeration.
+securityContext:
+  privileged: true
+  runAsUser: 0
+
+# Service + ServiceMonitor: the chart's default ServiceMonitor relies on
+# prometheus-operator CRDs which aren't installed here — disable it and
+# add a static scrape config to values-prometheus.yml.j2 instead.
+serviceMonitor:
+  enabled: false
+
+# Default release name = `smartctl-exporter`; the chart exposes a
+# headless service `smartctl-exporter` that resolves to all DS pods.
+service:
+  type: ClusterIP
+  port: 9633
+  # Annotations let the existing kubernetes-service-endpoints scrape
+  # pick this up automatically — avoids touching values-prometheus
+  # for a small additional target.
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9633"
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi

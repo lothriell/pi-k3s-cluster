@@ -180,6 +180,15 @@ server:
     - name: tmp
       emptyDir: {}
 
+  # Syncthing API keys per host. The `syncthing-tokens` Secret is created by
+  # 04-deploy-monitoring.yml from vault.yml::syncthing_apikey_*. Each scrape
+  # job below references its corresponding file via `bearer_token_file:`.
+  extraSecretMounts:
+    - name: syncthing-tokens
+      mountPath: /etc/syncthing-tokens
+      secretName: syncthing-tokens
+      readOnly: true
+
 # ---------------------------------------------------------------------------
 # Extra scrape configs -- add targets not auto-discovered by Prometheus.
 # ---------------------------------------------------------------------------
@@ -227,6 +236,56 @@ extraScrapeConfigs: |
       - source_labels: [__meta_kubernetes_endpoint_port_name]
         regex: metrics
         action: keep
+
+  # Syncthing instances on the user's Mac/WSL machines, scraped over Tailscale
+  # IPs (cluster pods can route to 100.x — verified 2026-05-08). Each host has
+  # its GUI bound to its own tailnet IP and authenticates /metrics with the
+  # API key from vault, mounted as a per-host file under /etc/syncthing-tokens
+  # via extraSecretMounts above. One scrape job per target so each can carry
+  # its own bearer_token_file. Auto-start mechanisms documented in
+  # memory project_syncthing.md.
+  - job_name: syncthing-mac-air
+    scrape_interval: 60s
+    metrics_path: /metrics
+    bearer_token_file: /etc/syncthing-tokens/macair
+    static_configs:
+      - targets: ['{{ syncthing_macair_tsip }}:8384']
+        labels:
+          instance: mac-air
+  - job_name: syncthing-mac-mini
+    scrape_interval: 60s
+    metrics_path: /metrics
+    bearer_token_file: /etc/syncthing-tokens/macmini
+    static_configs:
+      - targets: ['{{ syncthing_macmini_tsip }}:8384']
+        labels:
+          instance: mac-mini
+  - job_name: syncthing-thor1
+    scrape_interval: 60s
+    metrics_path: /metrics
+    bearer_token_file: /etc/syncthing-tokens/thor1
+    static_configs:
+      - targets: ['{{ syncthing_thor1_tsip }}:8384']
+        labels:
+          instance: thor-1
+
+  # smartctl-exporter DaemonSet on the 3 storage-tagged amd64 nodes
+  # (k3s-x86-1, k3s-x86-2, minisforum-c). The chart's Service annotation
+  # path didn't propagate, so use endpoints SD on the headless service
+  # to scrape each pod directly. The instance label gets the node name
+  # instead of pod IP for stable hostnames in Grafana.
+  - job_name: smartctl-exporter
+    scrape_interval: 60s
+    kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names: [monitoring]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_name]
+        regex: prometheus-smartctl-exporter
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_node_name]
+        target_label: instance
 
 # ---------------------------------------------------------------------------
 # ConfigMap reload sidecar -- watches for config changes and triggers a

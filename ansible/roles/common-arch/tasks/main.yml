@@ -1,0 +1,275 @@
+---
+# common-arch: Archlinux equivalent of `common` for K3s nodes.
+# Mirrors the Debian role's intent — package install, kernel tuning, swap off,
+# Gitea registry trust, K3s containerd config, weekly image-prune timer.
+# Skips Debian/Pi-only bits: unattended-upgrades, cloud-init /etc/hosts override,
+# Pi chrony pool override, Pi user-data file. Arch boxes have hardware RTCs.
+
+# Arch is rolling — `pacman -Sy` followed by `pacman -S <pkg>` triggers
+# partial-upgrade dependency conflicts (e.g. nettle/dnsmasq/wget). Always
+# combine cache refresh with full system upgrade before installing.
+- name: pacman -Syu (full system upgrade)
+  community.general.pacman:
+    update_cache: true
+    upgrade: true
+  register: pacman_upgrade
+  tags: [packages]
+
+# A kernel upgrade leaves the new modules dir on disk but the old one gets
+# removed, so modprobe of anything not built into the running kernel fails
+# until the new kernel boots. Reboot if pacman changed anything.
+- name: Reboot if pacman -Syu changed anything (kernel/module drift)
+  ansible.builtin.reboot:
+    msg: "Reboot after pacman -Syu"
+    reboot_timeout: 600
+    pre_reboot_delay: 5
+    post_reboot_delay: 30
+  when: pacman_upgrade is changed
+  tags: [packages]
+
+- name: Set system timezone
+  ansible.builtin.timezone:
+    name: "{{ timezone | default('UTC') }}"
+  tags: [system, timezone]
+
+- name: Install common packages required for K3s and storage backends
+  community.general.pacman:
+    name:
+      - curl
+      - wget
+      - ca-certificates
+      - gnupg
+      - open-iscsi          # Required for Longhorn distributed storage
+      - nfs-utils           # Required for NFS-based persistent volumes (Arch's nfs-common equivalent)
+      - jq
+      - unzip
+      - chrony
+    state: present
+  tags: [packages]
+
+- name: Enable + start chrony service
+  ansible.builtin.systemd:
+    name: chronyd
+    enabled: true
+    state: started
+  tags: [services, ntp]
+
+# CachyOS ships UFW enabled with INPUT policy DROP. The cluster's other K3s
+# nodes have no host firewall — defense lives in NetworkPolicies + the upstream
+# firewall. UFW silently drops Flannel VXLAN (UDP 8472) from peer nodes,
+# leaving pods on this node unable to reach kube-dns / cluster services.
+- name: Disable UFW (host firewall conflicts with K3s/Flannel)
+  ansible.builtin.systemd:
+    name: ufw
+    enabled: false
+    state: stopped
+  failed_when: false
+  tags: [services, firewall]
+
+- name: Reset INPUT chain policy to ACCEPT (K3s+kube-proxy manage rules)
+  ansible.builtin.iptables:
+    chain: INPUT
+    policy: ACCEPT
+  tags: [firewall]
+
+# Arch doesn't auto-load iSCSI kernel modules like Ubuntu does. Without
+# iscsi_tcp loaded, iscsid -f bails out with "can not create NETLINK_ISCSI
+# socket [Protocol not supported]" and systemd hits its 5-restart limit.
+- name: Load iSCSI kernel modules (needed for iscsid)
+  ansible.builtin.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - scsi_transport_iscsi
+    - iscsi_tcp
+  tags: [services, kernel]
+
+- name: Persist iSCSI modules across reboots
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/iscsi.conf
+    content: |
+      scsi_transport_iscsi
+      iscsi_tcp
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [services, kernel]
+
+- name: Reset iscsid failed state (in case of prior start-limit-hit)
+  ansible.builtin.command: systemctl reset-failed iscsid.service
+  changed_when: false
+  failed_when: false
+  tags: [services]
+
+- name: Enable and start open-iscsi service for Longhorn support
+  ansible.builtin.systemd:
+    name: iscsid
+    enabled: true
+    state: started
+  tags: [services]
+
+# Bare-metal SFF — qemu-guest-agent intentionally not installed.
+
+# --- Swap removal -----------------------------------------------------------
+# Arch (with zram-generator) ships a /dev/zram0 swap by default. K3s/kubelet
+# refuses to run with swap enabled. Disable + mask the generator unit so it
+# stays off across reboots.
+- name: Disable swap immediately
+  ansible.builtin.command: swapoff -a
+  changed_when: false
+  tags: [swap]
+
+- name: Detect zram-generator config
+  ansible.builtin.stat:
+    path: /etc/systemd/zram-generator.conf
+  register: zram_generator_conf
+  tags: [swap]
+
+- name: Mask zram-generator unit (only if zram-generator is in use)
+  ansible.builtin.systemd:
+    name: systemd-zram-setup@zram0.service
+    state: stopped
+    masked: true
+  failed_when: false
+  tags: [swap]
+
+- name: Drop a no-zram override so generator emits no zram device
+  ansible.builtin.copy:
+    dest: /etc/systemd/zram-generator.conf
+    content: |
+      # Disabled by Ansible — Kubernetes/K3s requires no swap.
+      # Empty config means no zram devices will be generated.
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [swap]
+
+- name: Remove swap entries from /etc/fstab to persist across reboots
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '^\s*([^#].*?\sswap\s.*)$'
+    replace: '# \1'
+  tags: [swap]
+
+# --- Kernel modules + sysctl (OS-agnostic but kept here for symmetry) -------
+- name: Load required kernel modules for container networking
+  ansible.builtin.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - overlay
+    - br_netfilter
+  notify: reboot and wait
+  tags: [kernel]
+
+- name: Persist kernel modules across reboots via /etc/modules-load.d/k8s.conf
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      # Kernel modules required for Kubernetes networking
+      overlay
+      br_netfilter
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [kernel]
+
+- name: Set sysctl parameters for Kubernetes networking
+  ansible.builtin.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/k8s.conf
+    reload: false
+  loop:
+    - { key: "net.bridge.bridge-nf-call-iptables",  value: "1" }
+    - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
+    - { key: "net.ipv4.ip_forward",                 value: "1" }
+  tags: [kernel]
+
+- name: Apply sysctl parameters without reboot
+  ansible.builtin.command: sysctl --system
+  changed_when: false
+  tags: [kernel]
+
+# --- Gitea registry trust ---------------------------------------------------
+- name: Add Gitea registry to /etc/hosts (MetalLB Traefik IP)
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    line: "{{ metallb_ip_range.split('-')[0] }} {{ gitea_registry_host | default('gitea.' + (local_domain | default('homielab.local'))) }}"
+    state: present
+  tags: [system, registry]
+
+- name: Create K3s config directory for agents
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    mode: "0755"
+  tags: [registry]
+
+- name: Resolve effective Gitea registry host
+  ansible.builtin.set_fact:
+    _gitea_registry_host: "{{ gitea_registry_host | default('gitea.' + (local_domain | default('homielab.local'))) }}"
+  tags: [registry]
+
+- name: Drop homielab internal CA for containerd
+  ansible.builtin.copy:
+    dest: /etc/rancher/k3s/homielab-ca.crt
+    content: "{{ homielab_ca_cert }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: homielab_ca_cert is defined and homielab_ca_cert | length > 0
+  notify: restart k3s
+  tags: [registry]
+
+- name: Configure K3s containerd registry mirror for Gitea
+  ansible.builtin.copy:
+    dest: /etc/rancher/k3s/registries.yaml
+    content: |
+      mirrors:
+        {{ _gitea_registry_host }}:
+          endpoint:
+      {% if homielab_ca_cert is defined and homielab_ca_cert | length > 0 %}
+            - "https://{{ _gitea_registry_host }}"
+      configs:
+        "{{ _gitea_registry_host }}":
+          tls:
+            ca_file: /etc/rancher/k3s/homielab-ca.crt
+      {% else %}
+            - "http://{{ _gitea_registry_host }}"
+      {% endif %}
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart k3s
+  tags: [registry]
+
+# --- Weekly containerd image prune (matches Debian common role) -------------
+- name: Install prune-containerd-images.service unit
+  ansible.builtin.template:
+    src: prune-containerd-images.service.j2
+    dest: /etc/systemd/system/prune-containerd-images.service
+    owner: root
+    group: root
+    mode: "0644"
+  when: "'k3s_cluster' in group_names"
+  tags: [system, prune]
+
+- name: Install prune-containerd-images.timer unit
+  ansible.builtin.template:
+    src: prune-containerd-images.timer.j2
+    dest: /etc/systemd/system/prune-containerd-images.timer
+    owner: root
+    group: root
+    mode: "0644"
+  when: "'k3s_cluster' in group_names"
+  tags: [system, prune]
+
+- name: Enable + start prune-containerd-images.timer
+  ansible.builtin.systemd:
+    name: prune-containerd-images.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: "'k3s_cluster' in group_names"
+  tags: [system, prune]

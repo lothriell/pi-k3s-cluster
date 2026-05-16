@@ -89,3 +89,10 @@ r2_account_id: "your-cloudflare-account-id"
 r2_backup_bucket: "k8sbkp"
 r2_endpoint_host: "{{ r2_account_id }}.r2.cloudflarestorage.com"
 r2_endpoint_url: "https://{{ r2_endpoint_host }}"
+
+# Syncthing tailnet IPs (each instance binds its GUI to its own tailnet
+# address so the cluster Prometheus can scrape /metrics over Tailscale).
+# See memory project_syncthing.md for the auto-start strategy per host.
+syncthing_macair_tsip: 100.x.x.x
+syncthing_macmini_tsip: 100.x.x.x
+syncthing_thor1_tsip: 100.x.x.x

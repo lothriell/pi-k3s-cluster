@@ -34,6 +34,16 @@ loki:
     # them out — Grafana datasource pings crash-loop in the meantime.
     # Bump generously to absorb label-stage misconfigurations.
     max_query_series: 100000
+  # Default ingester `max_chunk_age` (1h-2h) is the per-stream out-of-order
+  # tolerance: writes older than `chunk_head_timestamp - max_chunk_age` get
+  # rejected with "entry too far behind" 400, even when well within the
+  # `reject_old_samples_max_age` (168h) window. This bites whenever Promtail
+  # replays history — after a Loki PVC reset, after fixing a positions file,
+  # after a multi-day Promtail outage. Match the 168h reject window so the
+  # two limits agree: anything Loki accepts on age also passes the per-
+  # stream check. RAM cost is negligible at single-binary + ~6 streams.
+  ingester:
+    max_chunk_age: 168h
   compactor:
     retention_enabled: true
     delete_request_store: filesystem
@@ -50,23 +60,45 @@ loki:
 # Single-binary mode (all-in-one, minimal resources)
 singleBinary:
   replicas: 1
+  # Pin pod + PVC to x86 nodes. Pi nodes have 13-18 GB free on Longhorn
+  # (close to the 25% reservation threshold); x86 has 50+ GB free after
+  # task #37's disk expansion. Locking here keeps Loki off the eMMC and
+  # prevents replicas scattering to Pi nodes via the default `longhorn`
+  # StorageClass. PVC migration loses Pi-hole log history (~90d retention
+  # configured, ~7d on athena's rotated logs covers fresh-start gap).
+  nodeSelector:
+    kubernetes.io/arch: amd64
   resources:
     requests:
       cpu: 100m
-      memory: 256Mi
+      memory: 512Mi
     limits:
-      cpu: 1000m
-      # 512Mi OOMKilled when Grafana auto-refresh ran heavy
-      # count_over_time queries against high-cardinality streams.
-      # Steady-state is ~110Mi; spikes during query bursts need headroom.
-      memory: 1Gi
+      cpu: 1500m
+      # 1Gi was sized for Pi-hole-only (~6 streams). Cluster pod logs
+      # + node journald (added 2026-05-11) push stream count to ~400+
+      # and ingest to ~5-15 GB/day. Bumped to 2Gi to absorb burst on
+      # Promtail catch-up and Grafana count_over_time queries.
+      memory: 2Gi
   persistence:
-    size: 10Gi
-    # Default `longhorn` StorageClass (no nodeSelector) = 2 replicas
-    # across any healthy nodes. Pi nodes have ~22 GB free each after
-    # alertmanager/open-webui/eve-tracker replicas, so 10Gi fits with
-    # ~12 GB headroom per node. x86 is too tight (~3 GB free after the
-    # 15Gi Prometheus replicas) — don't send Loki there.
+    size: 20Gi
+    # `longhorn-storage` SC pins replicas to the 3 storage-tagged nodes
+    # (k3s-x86-1, k3s-x86-2, minisforum-c — see task #46/#53). Bumped
+    # 10 -> 20 Gi 2026-05-11 for cluster pod logs + journald.
+    #
+    # 30 Gi (+10 Gi expansion) is blocked by Longhorn's per-disk
+    # `OverProvisioningPercentage: 100%` setting. Both x86 disks sit at
+    # 82-110 GiB scheduled out of a ~119 GiB ProvisionedLimit, so a
+    # +10 GiB step pushes one of them over the line — whichever ends
+    # up hosting the Loki replica. Migrated one replica to minisforum-c
+    # on 2026-05-11 (geographic diversity bonus) but the second replica
+    # has to sit on one of the x86 disks where the math doesn't fit.
+    #
+    # To unblock further growth: (a) bump
+    # storage-over-provisioning-percentage globally (e.g. 100 -> 150) —
+    # safe since actual disk usage is far below scheduled allocation,
+    # OR (b) migrate other replicas (Vaultwarden, Forgejo, Trivy, etc.)
+    # off the constrained x86 disk so Loki has room to grow.
+    storageClass: longhorn-storage
 
 # Disable distributed components (using single-binary)
 backend:

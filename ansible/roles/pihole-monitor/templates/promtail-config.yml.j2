@@ -54,19 +54,27 @@ scrape_configs:
           location: Local
 
       # Only LOW-cardinality fields become Loki labels (job, host, action,
-      # qtype). `domain` and `target` are per-event and would explode Loki
-      # stream cardinality — pi-hole sees thousands of unique domains in a
-      # day, each becoming a new stream and tripping the default 10k
-      # max_streams_per_user limit on Loki. They stay available in the raw
-      # log line and can be filtered via LogQL line expressions:
-      #   {job="pihole"} |= "redd.it"
-      #   {job="pihole"} |= "from <client-ip>"
-      # 2026-05-06: `target` was leaking into labels here despite the warning
-      # above. Once the regex started matching properly, every reply IP
-      # became a Loki stream → query 400 "max series (500) reached" → Loki
-      # OOMKilled at 512Mi. Don't add it back. If you really need IP-based
-      # filtering, use a line filter (above) — slower per-query, but no
-      # cardinality risk.
+      # qtype). `domain` and `target` are per-event high-cardinality and
+      # MUST NOT become labels — pi-hole sees thousands of unique domains
+      # in a day, each would become a new stream and trip the default
+      # max_streams_per_user limit on Loki.
+      # 2026-05-06: `target` was leaking into labels here. Once the regex
+      # started matching properly, every reply IP became a Loki stream →
+      # query 400 "max series (500) reached" → Loki OOMKilled at 512Mi.
+      # 2026-05-07: re-enabled target+domain queries via STRUCTURED
+      # METADATA (Loki 3.0+ feature, requires tsdb v13 schema and
+      # `allow_structured_metadata: true` — both already configured).
+      # Structured metadata attaches fields to each entry without creating
+      # new streams, so cardinality stays at ~6 (job × action × qtype).
+      # Query syntax in LogQL:
+      #   {job="pihole"} | target="<reply-ip>"
+      #   {job="pihole"} | domain=~".*\\.duckie\\.com"
+      #   {job="pihole",action="reply"} | target="<ip>" | domain="ads.x.com"
+      # Slower than label selection but vastly faster than `regexp` parse-
+      # at-query, and zero cardinality risk.
+      - structured_metadata:
+          target:
+          domain:
       - labels:
           action:
           qtype:

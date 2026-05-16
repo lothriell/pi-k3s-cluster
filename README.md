@@ -1,113 +1,149 @@
-# Pi K3s Cluster
+# Mixed-Architecture K3s Homelab
 
-Lightweight Kubernetes (K3s) cluster running on 4x Raspberry Pi CM5 modules, fully automated with Ansible.
+A 7-node K3s cluster spanning Raspberry Pi CM5s, x86 Proxmox VMs, and a bare-metal SFF PC — fully automated with Ansible, designed to be destroyed and rebuilt from scratch in minutes.
 
 ![Pi K3s cluster hardware](docs/assets/cluster.jpg)
 
-## Hardware
+## Topology
 
-| Node | Hostname | Role | Specs |
-|------|----------|------|-------|
-| CM5 #1 | `rpi-k3s-1` | K3s Server (control plane) | 16GB RAM, 32GB eMMC |
-| CM5 #2 | `rpi-k3s-2` | K3s Agent (worker) | 16GB RAM, 32GB eMMC |
-| CM5 #3 | `rpi-k3s-3` | K3s Agent (worker) | 16GB RAM, 32GB eMMC |
-| CM5 #4 | `rpi-k3s-4` | K3s Agent (worker) | 16GB RAM, 32GB eMMC |
+| Node | Role | Hardware | OS |
+|------|------|----------|----|
+| `rpi-k3s-1` | Server (control plane, etcd) | Raspberry Pi CM5, 16 GB RAM | Ubuntu 24.04 LTS |
+| `rpi-k3s-2` | Server (control plane, etcd) | Raspberry Pi CM5, 16 GB RAM | Ubuntu 24.04 LTS |
+| `rpi-k3s-3` | Server (control plane, etcd) | Raspberry Pi CM5, 16 GB RAM | Ubuntu 24.04 LTS |
+| `rpi-k3s-4` | Agent | Raspberry Pi CM5, 16 GB RAM | Ubuntu 24.04 LTS |
+| `k3s-x86-1` | Agent | Proxmox VM, 4 vCPU, 16 GB | Ubuntu 24.04 LTS |
+| `k3s-x86-2` | Agent | Proxmox VM, 4 vCPU, 16 GB | Ubuntu 24.04 LTS |
+| `minisforum-c` | Agent | Minisforum SFF, 62 GB RAM | CachyOS (Arch family) |
 
-- **OS:** Ubuntu 24.04 LTS (64-bit ARM)
-- **Network:** Static IPs assigned via UniFi Gateway
-- **Future:** M.2 NVMe 1-2TB drives via Blade HAT
+- **HA control plane:** 3 servers running embedded etcd, fronted by a `kube-vip` ARP VIP
+- **Two-site network:** Pi cluster at the home site, x86 VMs at a remote site, bridged over a site-to-site VPN
+- **Tailscale overlay** on every cluster node + jump hosts (subnet routes, MagicDNS, in-tailscaled SSH)
 
 ## Stack
 
-| Component | Tool | Purpose |
-|-----------|------|---------|
-| Kubernetes | K3s | Lightweight K8s distribution |
-| Container Runtime | containerd | Bundled with K3s |
-| CNI (Networking) | Flannel | Pod-to-pod networking (bundled with K3s) |
-| Ingress | Traefik | HTTP/HTTPS routing (bundled with K3s) |
-| Load Balancer | MetalLB | Assigns real IPs to services |
-| Storage (now) | local-path-provisioner | Local eMMC storage (bundled with K3s) |
-| Storage (future) | Longhorn | Distributed storage across M.2 NVMe drives |
-| TLS Certificates | cert-manager | Automatic Let's Encrypt certs |
-| Monitoring | Prometheus + Grafana | Metrics collection + dashboards |
-| Git + CI/CD | Gitea (or GitLab) | Self-hosted git with CI/CD |
-| GitOps | ArgoCD | Watches git repos, auto-deploys to cluster |
-| External Access | Cloudflare Tunnel | Expose services without public IP |
-| Secrets | SOPS + age | Encrypt secrets safely in git |
-| Provisioning | Ansible | Automate everything |
+### Cluster core
+| Layer | Tool | Notes |
+|-------|------|-------|
+| Distribution | K3s | Single-binary K8s, embedded etcd HA |
+| Container runtime | containerd | Bundled with K3s |
+| CNI | Flannel | Bundled; VXLAN across sites |
+| Ingress | Traefik | Bundled; cluster-wide HTTP→HTTPS redirect via `HelmChartConfig` |
+| LoadBalancer | MetalLB | L2/ARP mode on the home VLAN |
+| Control-plane VIP | kube-vip | ARP VIP shared by the 3 servers |
+| Storage (default) | Longhorn | 2 replicas, `longhorn-storage` SC pins big PVCs to x86/SFF |
+| Storage tier (pinned) | `longhorn-storage` SC | x86/SFF nodes tagged `storage`; keeps replicas off Pi eMMC |
+| Internal TLS | cert-manager + self-signed CA | 10-year ECDSA root, per-host leaf certs minted by ingress-shim |
 
-## Quick Start
+### GitOps + supply chain
+| Layer | Tool | Notes |
+|-------|------|-------|
+| Self-hosted git | Gitea + Forgejo | Both run side-by-side; Forgejo for personal repos, Gitea for the container registry + DR mirror sources |
+| Container registry | Gitea registry + ghcr.io | Mixed (in-cluster + public) |
+| GitOps controller | ArgoCD | CRD-based applications |
+| Image promotion | Argo CD Image Updater v1.1 | CRD-based, digest strategy, 2-min poll |
+| Renovate (chart/version tracking) | Mend Cloud | Custom regex managers for K3s, kube-vip, alertmanager-ntfy, Wazuh |
 
-> **First time?** Start with the [Prerequisites Guide](docs/00-prerequisites.md) and work through the docs in order.
+### Identity, secrets, certs
+| Layer | Tool | Notes |
+|-------|------|-------|
+| SSO / IdP | Authentik | OIDC; wave 1 wired for Grafana + ArgoCD |
+| Password vault | Vaultwarden | LAN-only HTTPS via internal CA |
+| Cluster secrets | Ansible Vault | Encrypted `vault.yml` next to inventory |
+| Cert chain | `selfsigned-bootstrap` → internal CA root → cluster issuer | All `*.<local-domain>` ingresses on `websecure` |
 
-If everything is already set up on your workstation and the Pis are flashed + networked:
+### Observability + security
+| Layer | Tool | Notes |
+|-------|------|-------|
+| Metrics | Prometheus | 20 d retention, x86-pinned PVC |
+| Dashboards | Grafana | OIDC via Authentik + native admin break-glass |
+| Alerts → mobile | Alertmanager → `alertmanager-ntfy` bridge → self-hosted ntfy | Push notifications to phone |
+| Logs (cluster pods + journald) | Grafana Alloy DS | Successor to Promtail; ships to Loki |
+| Logs (Pi-hole) | Promtail (Docker) | Tails `pihole.log` on the DNS box → Loki via NodePort |
+| Log store | Loki (single-binary) | x86-pinned, structured metadata for high-cardinality fields |
+| Disk SMART | `prometheus-smartctl-exporter` | DaemonSet on x86 nodes only (Pi eMMC has no useful SMART) |
+| K8s vulnerability scanning | Trivy Operator | ClientServer mode; reports as `VulnerabilityReport` CRDs |
+| Host IDS / agent | Wazuh | Manager on a standalone VM; agents on every cluster + SFF node |
+| Web UI | Headlamp | Kubernetes dashboard (successor to the retired upstream one) |
+
+### External access + backup
+| Layer | Tool | Notes |
+|-------|------|-------|
+| Public ingress | Cloudflare Tunnel | Zero-trust egress; no inbound NAT |
+| Remote access | Tailscale | Subnet routes from the 3 K3s servers; MagicDNS clean names |
+| Longhorn backups | S3-compatible (Cloudflare R2) | Daily, retain 30; critical PVCs labeled for `critical-backup` RecurringJob |
+| etcd snapshots | K3s built-in + S3 push | 6 h cron, retain 12, offsite to R2 |
+
+### Workloads (not exhaustive)
+- **Pi-hole DNS** on a SFF box (Docker), with structured-metadata log shipping + ntfy notifications on alert rules
+- **Open WebUI + Ollama** (GPU server runs Ollama in Docker; Open WebUI runs in cluster, talks to Ollama via headless service)
+- **Headlamp** — Kubernetes web UI
+- Various personal data-tracking apps deployed via Image Updater (prod + test environments)
+
+## Quick start
 
 ```bash
-# Flash a CM5 node (eMMC via USB, injects cloud-init automatically)
+# Flash a CM5 node from a base Ubuntu image (cloud-init seeded automatically)
 make flash NODE=rpi-k3s-1 IMAGE=~/Downloads/ubuntu-server.img.xz
 
-# Full cluster deployment from scratch (after all nodes are flashed + booted)
+# Full cluster build from clean slate
 make all
 
-# Or step by step
-make prepare      # Prepare all nodes (apt packages, kernel config)
-make k3s          # Install K3s server + agents
-make post-install # Install Helm, configure kubectl
-make monitoring   # Deploy Prometheus + Grafana
-make gitea        # Deploy Gitea (lightweight git server)
-make argocd       # Deploy ArgoCD (GitOps continuous deployment)
-make cloudflare   # Deploy Cloudflare Tunnel
+# Tear down + rebuild
+make nuke && make all
 ```
 
-## Destroy and Rebuild
+Selected sub-commands (full list: `make help`):
 
 ```bash
-# Tear down everything and start fresh
-make nuke
-# Wait a minute, then:
-make all
+make prepare          # Apply common role to every node (Debian + Arch dispatch)
+make k3s              # Install K3s HA control plane + agents
+make monitoring       # Prometheus + Grafana + Loki + Alloy + smartctl-exporter + alertmanager-ntfy
+make longhorn         # Distributed storage with x86-pinned class
+make backup           # Configure Longhorn → R2 + etcd snapshots
+make gitea forgejo    # Self-hosted git stack
+make argocd           # GitOps controller + Image Updater
+make cert-manager     # Internal CA + cluster-wide HTTPS redirect
+make authentik        # OIDC provider (manual wave-1 client provisioning)
+make headlamp         # Kubernetes web UI
+make upgrade-packages # Fleet-wide OS package upgrade with rolling reboots
 ```
 
-## Documentation
+## Operational references
 
-Read these guides **in order** if this is your first time:
+- `ansible/` — playbooks (`00-` bootstrap, numbered in dependency order) and roles (`common`, `common-arch`, `k3s-server`, `k3s-agent`, `tailscale`, `ollama`, `pihole-monitor`)
+- `k8s/` — Helm values files (one per service) + Kustomize overlays for app manifests
+- `docs/incidents/` — resolved post-mortems with templates
+- `docs/ops-commands.md` — day-to-day cheatsheet
 
-| # | Guide | What You'll Learn |
-|---|-------|-------------------|
-| 00 | [Prerequisites](docs/00-prerequisites.md) | What to install on your Mac/PC before starting |
-| 01 | [Flash Ubuntu](docs/01-flash-ubuntu.md) | How to flash Ubuntu on CM5 modules |
-| 02 | [Network Setup](docs/02-network-setup.md) | Setting static IPs on UniFi Gateway |
-| 03 | [Install Ansible](docs/03-install-ansible.md) | Setting up Ansible on your workstation |
-| 04 | [Prepare Nodes](docs/04-prepare-nodes.md) | Running the node preparation playbook |
-| 05 | [Install K3s](docs/05-install-k3s.md) | Deploying K3s cluster |
-| 06 | [Kubectl Basics](docs/06-kubectl-basics.md) | Essential kubectl commands for beginners |
-| 07 | [Deploy Monitoring](docs/07-deploy-monitoring.md) | Prometheus + Grafana setup |
-| 08 | [Deploy Gitea](docs/08-deploy-gitea.md) | Self-hosted git server with CI/CD |
-| 09 | [Cloudflare Tunnel](docs/09-cloudflare-tunnel.md) | External access without public IP |
-| 10 | [Destroy and Rebuild](docs/10-destroy-rebuild.md) | Nuke the cluster and rebuild from scratch |
-| 11 | [Deploy ArgoCD](docs/11-deploy-argocd.md) | GitOps - auto-deploy from git to cluster |
+## Design notes
 
-## Repository Structure
+- **`make nuke && make all` reproduces the entire state.** All secrets live in Ansible Vault; all chart versions are pinned; all PVCs that should survive a rebuild are labeled for R2 backup and restored by `make restore-volumes` from the latest R2 snapshot.
+- **Pi nodes are not tainted.** Workloads run everywhere; the `longhorn-storage` SC is the mechanism for keeping large PVCs off the 32 GB eMMC.
+- **OS dispatch.** The `common` role targets Debian-family nodes; `common-arch` targets the single CachyOS box. `01-prepare-nodes.yml` picks the right one per host via `ansible_os_family`.
+- **Two-remote git.** This repository's origin lives on a self-hosted Forgejo instance with full granular history. The GitHub copy receives squashed, sanitized force-pushes.
+
+## Repository layout
 
 ```
 .
-├── README.md                 # This file
-├── Makefile                  # Simple commands for common operations
-├── docs/                     # Step-by-step guides (read in order)
+├── README.md
+├── Makefile                  # Top-level commands; see `make help`
 ├── ansible/
-│   ├── ansible.cfg           # Ansible configuration
+│   ├── ansible.cfg
 │   ├── inventory/
-│   │   └── hosts.yml         # Node inventory (IPs, roles)
-│   ├── playbooks/            # Numbered playbooks (run in order)
-│   └── roles/                # Reusable Ansible roles
+│   │   └── hosts.yml         # Inventory groups + var refs
+│   ├── playbooks/            # 00-bootstrap through 80-upgrade-packages
+│   └── roles/                # common, common-arch, k3s-server, k3s-agent, tailscale, ollama, pihole-monitor
 ├── k8s/
-│   ├── namespaces/           # Namespace definitions
-│   ├── monitoring/           # Prometheus + Grafana Helm values
-│   ├── gitea/                # Gitea Helm values
-│   ├── gitlab/               # GitLab Helm values (alternative)
-│   ├── argocd/               # ArgoCD Helm values + app manifests
-│   ├── cloudflare/           # Cloudflare tunnel manifests
-│   ├── cert-manager/         # TLS certificate config
-│   └── metallb/              # Load balancer config
-└── scripts/                  # Helper scripts
+│   ├── monitoring/           # Prometheus, Grafana, Loki, Alloy, smartctl, alertmanager-ntfy
+│   ├── longhorn/             # Helm values + RecurringJob CRs
+│   ├── cert-manager/         # ClusterIssuer chain
+│   ├── argocd/               # Argo CD + Image Updater
+│   ├── gitea/  forgejo/      # Git stack
+│   ├── authentik/            # OIDC provider
+│   ├── headlamp/  vaultwarden/  open-webui/  etc.
+│   └── network-policies/     # Per-namespace NetworkPolicies
+├── docs/                     # Setup guides + incident archives
+└── scripts/                  # bootstrap, flash, ca-backup, nuke
 ```

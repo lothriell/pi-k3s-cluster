@@ -26,3 +26,9 @@ monitor_alert_rules_file: "{{ playbook_dir }}/../../secrets/pihole-alert-rules.c
 
 # Promtail config (ships ALL logs to Loki, not just alerts)
 promtail_port: 9080
+# Pinned tag — using `:latest` risks a silent upstream change breaking the
+# Pi-hole regex pipeline (we've already burned ourselves on the
+# `action_on_failure: fudge` timestamp-corruption default — see
+# memory/feedback_promtail_pipeline_traps.md). Bump deliberately.
+# Upstream stable as of 2026-05-13: 3.5.1 (matches helm chart 6.17.1).
+promtail_image: "grafana/promtail:3.5.1"

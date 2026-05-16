@@ -1,0 +1,134 @@
+# =============================================================================
+# Helm Values: grafana/alloy
+# =============================================================================
+# Grafana Alloy DaemonSet — successor to Promtail (deprecated). Same two
+# log sources as before (cluster pod logs + node systemd journal) shipping
+# to in-cluster Loki, but expressed as Alloy River components.
+#
+# Migration from values-promtail.yml made 2026-05-11.
+#
+# Install with:
+#   helm upgrade --install alloy grafana/alloy -n monitoring -f values-alloy.yml
+# =============================================================================
+
+controller:
+  type: daemonset
+  # Tolerate all taints (none today; future-proof so a tainted control
+  # plane still gets log shipping — that's exactly when you need it).
+  tolerations:
+    - effect: NoSchedule
+      operator: Exists
+    - effect: NoExecute
+      operator: Exists
+  # /etc/machine-id is needed by journald for boot_id resolution.
+  volumes:
+    extra:
+      - name: machine-id
+        hostPath:
+          path: /etc/machine-id
+
+alloy:
+  mounts:
+    # /var/log mount covers /var/log/journal for the journal source.
+    varlog: true
+    extra:
+      - name: machine-id
+        mountPath: /etc/machine-id
+        readOnly: true
+
+  # NB: chart's default daemonset already sets HOSTNAME env from
+  # spec.nodeName — don't duplicate (Helm errors with "duplicate entries
+  # for key [name=HOSTNAME]"). River reads it via sys.env("HOSTNAME").
+
+  # Light footprint per node; steady-state comparable to Promtail.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+
+  configMap:
+    create: true
+    content: |
+      // -------- cluster pod logs (via Kubernetes API) --------
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      discovery.relabel "pod_logs" {
+        targets = discovery.kubernetes.pods.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_namespace", "__meta_kubernetes_pod_container_name"]
+          separator     = "/"
+          target_label  = "job"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+          target_label  = "app"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_node_name"]
+          target_label  = "node"
+        }
+      }
+
+      loki.source.kubernetes "pods" {
+        targets    = discovery.relabel.pod_logs.output
+        forward_to = [loki.write.default.receiver]
+      }
+
+      // -------- node systemd journal --------
+      loki.relabel "journal" {
+        forward_to = []
+
+        rule {
+          source_labels = ["__journal__systemd_unit"]
+          target_label  = "unit"
+        }
+        rule {
+          source_labels = ["__journal__transport"]
+          target_label  = "transport"
+        }
+        rule {
+          source_labels = ["__journal__boot_id"]
+          target_label  = "boot_id"
+        }
+      }
+
+      loki.source.journal "journal" {
+        path           = "/var/log/journal"
+        max_age        = "12h"
+        format_as_json = false
+        relabel_rules  = loki.relabel.journal.rules
+        forward_to     = [loki.write.default.receiver]
+        labels = {
+          job  = "systemd-journal",
+          node = sys.env("HOSTNAME"),
+        }
+      }
+
+      // -------- writer --------
+      loki.write "default" {
+        endpoint {
+          url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
+        }
+      }
+
+# No ServiceMonitor (Prometheus operator CRDs aren't installed).
+serviceMonitor:
+  enabled: false

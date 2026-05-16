@@ -1,0 +1,19 @@
+---
+# Handlers for the common-arch role — mirror common/handlers/main.yml.
+
+- name: reboot and wait
+  ansible.builtin.reboot:
+    msg: "Rebooting after kernel module changes"
+    reboot_timeout: 300
+    connect_timeout: 30
+    pre_reboot_delay: 5
+    post_reboot_delay: 30
+    test_command: uptime
+
+# On first install K3s isn't running yet — the install playbook (02) will
+# pick up the freshly-written registries.yaml when it starts the agent.
+- name: restart k3s
+  ansible.builtin.systemd:
+    name: "{{ 'k3s' if 'k3s_server' in group_names else 'k3s-agent' }}"
+    state: restarted
+  failed_when: false

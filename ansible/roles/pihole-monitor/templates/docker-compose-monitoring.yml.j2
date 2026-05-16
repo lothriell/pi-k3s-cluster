@@ -15,7 +15,7 @@ services:
       - TZ=UTC
 
   promtail:
-    image: grafana/promtail:latest
+    image: {{ promtail_image }}
     container_name: promtail
     restart: unless-stopped
     volumes:

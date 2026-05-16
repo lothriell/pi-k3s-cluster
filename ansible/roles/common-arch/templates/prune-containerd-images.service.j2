@@ -1,0 +1,13 @@
+[Unit]
+Description=Prune unused containerd images via k3s crictl
+# Run only if k3s is active — on agents the service is k3s-agent, on servers it's k3s.
+ConditionPathExists=/usr/local/bin/k3s
+After=k3s.service k3s-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/k3s crictl rmi --prune
+# Swallow "no images pruned" non-zero exits gracefully
+SuccessExitStatus=0 1
+Nice=10
+IOSchedulingClass=idle

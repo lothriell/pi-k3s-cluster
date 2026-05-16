@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 K3s Kubernetes cluster with mixed-architecture nodes, fully automated with Ansible. The cluster is designed to be destroyed and rebuilt from scratch in minutes.
 
 **ARM64 nodes:** 4x Raspberry Pi CM5 (16GB RAM, 32GB eMMC) — home site
-**x86 nodes:** 2x Proxmox VMs (4 vCPU, 16GB RAM, 50GB disk) — remote site
-**OS:** Ubuntu 24.04 LTS on all nodes
+**x86 nodes:** 2x Proxmox VMs (4 vCPU, 16GB RAM, 50GB disk) — remote site, Ubuntu 24.04 LTS
+**x86 SFF:** 1x Minisforum (62GB RAM) — home site, CachyOS (Arch family); uses `roles/common-arch`
 **Networking:** Two sites connected via UniFi Site Magic VPN
 **Users:** personal user (for bootstrap), `ansible` (service account with passwordless sudo)
 
@@ -52,17 +52,18 @@ ansible-playbook ansible/playbooks/00-bootstrap-user.yml --limit rpi-k3s-1 -K -u
 
 ```
 Home Site (home subnet)                Remote Site (remote subnet)
-┌─────────────────────┐                ┌──────────────────────┐
-│ rpi-k3s-1 (control) │                │ k3s-x86-1 (agent)    │
-│ rpi-k3s-2 (agent)   │◄──Site Magic──►│ k3s-x86-2 (agent)    │
-│ rpi-k3s-3 (agent)   │    VPN         │                      │
-│ rpi-k3s-4 (agent)   │                │ wazuh-server (standalone)
-└─────────────────────┘                └──────────────────────┘
+┌──────────────────────────┐                ┌──────────────────────┐
+│ rpi-k3s-1 (control,etcd) │                │ k3s-x86-1 (agent)    │
+│ rpi-k3s-2 (control,etcd) │◄──Site Magic──►│ k3s-x86-2 (agent)    │
+│ rpi-k3s-3 (control,etcd) │    VPN         │                      │
+│ rpi-k3s-4 (agent)        │                │ wazuh-server (standalone)
+│ minisforum-c (agent,Arch)│                │
+└──────────────────────────┘                └──────────────────────┘
 
 Other managed nodes (via Tailscale):
   gpu-1 (GPU server)       — Ollama LLM serving (Docker, not K8s)
-  athena, artemis,         — SFF PCs (Wazuh agents, Pi-hole on athena)
-    minisforum-c
+  athena, artemis          — SFF PCs (Wazuh agents, Pi-hole on athena)
+    (minisforum-c is now a K3s agent, see above)
   arch-t-01, cachy-t-01    — Desktops (Arch/CachyOS)
 ```
 

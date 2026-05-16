@@ -34,6 +34,22 @@
       changed_when: false
       tags: [prometheus]
 
+    # The `syncthing-tokens` Secret carries one bearer token per host. Mounted
+    # into the Prometheus pod at /etc/syncthing-tokens via extraSecretMounts in
+    # values-prometheus.yml.j2; each scrape job reads its own file. Tokens are
+    # the GUI API keys from each Syncthing config.xml — see project_syncthing.md.
+    - name: Create Syncthing API-token Secret in monitoring namespace
+      ansible.builtin.shell: |
+        kubectl create secret generic syncthing-tokens \
+          --namespace monitoring \
+          --from-literal=macair={{ syncthing_apikey_macair | quote }} \
+          --from-literal=macmini={{ syncthing_apikey_macmini | quote }} \
+          --from-literal=thor1={{ syncthing_apikey_thor1 | quote }} \
+          --dry-run=client -o yaml | kubectl apply -f -
+      register: syncthing_secret
+      changed_when: "'configured' in syncthing_secret.stdout"
+      tags: [prometheus, syncthing]
+
     - name: Render Prometheus values from template
       ansible.builtin.template:
         src: "{{ prometheus_values_template }}"
@@ -209,6 +225,85 @@
       register: cluster_dashboard
       changed_when: "'configured' in cluster_dashboard.stdout"
       tags: [grafana, cluster]
+
+    - name: Deploy Syncthing Grafana dashboard
+      ansible.builtin.shell: |
+        kubectl create configmap syncthing-dashboard \
+          --namespace monitoring \
+          --from-file=syncthing.json={{ playbook_dir }}/../../k8s/monitoring/dashboards/syncthing.json \
+          --dry-run=client -o yaml | \
+        kubectl label --local -f - grafana_dashboard=1 -o yaml --dry-run=client | \
+        kubectl apply -f -
+      register: syncthing_dashboard
+      changed_when: "'configured' in syncthing_dashboard.stdout"
+      tags: [grafana, syncthing]
+
+    # -- Loki ------------------------------------------------------------------
+
+    - name: Deploy Loki via Helm (single-binary, x86-pinned)
+      ansible.builtin.shell: |
+        helm upgrade --install loki grafana/loki \
+          --namespace monitoring \
+          --version 7.0.0 \
+          -f {{ playbook_dir }}/../../k8s/monitoring/values-loki.yml
+      register: loki_helm
+      changed_when: "'STATUS: deployed' in loki_helm.stdout or 'has been upgraded' in loki_helm.stdout"
+      tags: [loki]
+
+    - name: Wait for Loki pod to be ready
+      ansible.builtin.command: >
+        kubectl wait --for=condition=ready pod
+        -l app.kubernetes.io/name=loki -n monitoring --timeout=300s
+      changed_when: false
+      tags: [loki]
+
+    # -- Alloy (cluster pod logs + node systemd journal -> Loki) ---------------
+    # Successor to grafana/promtail (deprecated upstream 2026-Q1).
+    # Same two log sources expressed as Alloy River components.
+
+    - name: Deploy Grafana Alloy DaemonSet (logs -> Loki)
+      ansible.builtin.shell: |
+        helm upgrade --install alloy grafana/alloy \
+          --namespace monitoring \
+          -f {{ playbook_dir }}/../../k8s/monitoring/values-alloy.yml
+      register: alloy_helm
+      changed_when: "'STATUS: deployed' in alloy_helm.stdout or 'has been upgraded' in alloy_helm.stdout"
+      tags: [alloy, promtail]
+
+    - name: Wait for Alloy DaemonSet to be ready
+      ansible.builtin.command: >
+        kubectl rollout status ds/alloy -n monitoring --timeout=300s
+      changed_when: false
+      tags: [alloy, promtail]
+
+    # Defensive: ensure the deprecated grafana/promtail chart is gone if
+    # an older make run left it installed. Skip silently if absent.
+    - name: Uninstall legacy Promtail release if present
+      ansible.builtin.command: helm uninstall promtail -n monitoring
+      register: promtail_uninstall
+      failed_when: false
+      changed_when: promtail_uninstall.rc == 0
+      tags: [alloy, promtail]
+
+    # -- smartctl-exporter (storage SSD/NVMe SMART metrics) --------------------
+    # Pinned to amd64 nodes (the 3 storage-tagged ones). Pi eMMC reports no
+    # useful SMART; the chart's image is also x86-only. The accompanying
+    # scrape job lives in values-prometheus.yml.j2 (job_name: smartctl-exporter).
+
+    - name: Deploy smartctl-exporter on storage nodes
+      ansible.builtin.shell: |
+        helm upgrade --install smartctl-exporter prometheus-community/prometheus-smartctl-exporter \
+          --namespace monitoring \
+          -f {{ playbook_dir }}/../../k8s/monitoring/values-smartctl-exporter.yml
+      register: smartctl_helm
+      changed_when: "'STATUS: deployed' in smartctl_helm.stdout or 'has been upgraded' in smartctl_helm.stdout"
+      tags: [smartctl]
+
+    - name: Wait for smartctl-exporter to be ready
+      ansible.builtin.command: >
+        kubectl rollout status ds/smartctl-exporter-prometheus-smartctl-exporter-0 -n monitoring --timeout=180s
+      changed_when: false
+      tags: [smartctl]
 
     # -- Summary ---------------------------------------------------------------
 
