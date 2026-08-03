@@ -27,6 +27,9 @@ Each file follows the template at the bottom of this document. To open a new one
 | 2026-05-06 | Low  | Resolved | [eve-tracker-backend probe flap from 302s cache refresh](2026-05-06-eve-backend-probe-flap.md) |
 | 2026-05-09 | Low  | Resolved | [Cluster disruption (k3s-x86-2 + gitea reboot) blocks eve-tracker-test rollout](2026-05-09-cluster-disruption-blocks-test-rollout.md) |
 | 2026-05-09 | Med  | Resolved | [eve-tracker prod boot probe-flap (Pi cluster CPU vs 9-hub × 324K-order Jita aggregation)](2026-05-09-eve-prod-probe-flap.md) |
+| 2026-06-04 | High | Resolved | [Gitea/Prometheus Longhorn attach storm — snapshot-OOM trigger + k3s-x86-2 dead resolver](2026-06-04-longhorn-attach-storm-dns-oom.md) |
+| 2026-06-16 | High | Resolved | [Post-power-outage recovery — Longhorn csi mount-propagation wedge + k3s-x86-2 dead journald](2026-06-16-power-outage-recovery.md) |
+| 2026-07-26 | Med  | Resolved | [`--tags config` roll wiped agent join config; 4 agents NotReady + lease-suicide cascade](2026-07-26-agent-join-config-wipe.md) |
 
 ## Template
 

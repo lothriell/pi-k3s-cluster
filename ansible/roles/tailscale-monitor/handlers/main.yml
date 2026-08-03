@@ -1,0 +1,14 @@
+---
+- name: restart tailscale-peer-check-timer
+  ansible.builtin.systemd:
+    name: tailscale-peer-check.timer
+    state: restarted
+    daemon_reload: true
+  become: true
+
+- name: restart tailscale-monitor-exporter
+  ansible.builtin.systemd:
+    name: tailscale-monitor-exporter
+    state: restarted
+    daemon_reload: true
+  become: true

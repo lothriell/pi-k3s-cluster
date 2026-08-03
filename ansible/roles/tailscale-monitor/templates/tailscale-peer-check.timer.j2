@@ -1,0 +1,10 @@
+[Unit]
+Description=Run tailscale peer offline check every {{ tailscale_monitor_check_interval_sec }}s
+
+[Timer]
+OnBootSec=120
+OnUnitActiveSec={{ tailscale_monitor_check_interval_sec }}
+RandomizedDelaySec=15
+
+[Install]
+WantedBy=timers.target

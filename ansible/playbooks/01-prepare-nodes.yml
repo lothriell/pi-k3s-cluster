@@ -14,12 +14,17 @@
   gather_facts: true
 
   tasks:
+    # tags: [always] on the includes so tag-limited runs (--tags kernel etc.)
+    # still load the role and let the inner task tags do the filtering —
+    # an untagged include is skipped entirely under --tags.
     - name: Apply Debian common role
       ansible.builtin.include_role:
         name: ../roles/common
       when: ansible_os_family == 'Debian'
+      tags: [always]
 
     - name: Apply Archlinux common role
       ansible.builtin.include_role:
         name: ../roles/common-arch
       when: ansible_os_family == 'Archlinux'
+      tags: [always]

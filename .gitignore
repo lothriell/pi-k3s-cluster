@@ -29,19 +29,18 @@ ansible/inventory/group_vars/all/vault.yml
 kubeconfig
 kubeconfig.*
 
-# Private docs with real IPs/secrets
-docs/eve-tracker-deployment.md
+# NOTE: private planning docs/runbooks (improvement-plan.md, ops-commands.md,
+# 18-architecture.md, 13-deploy-eve-tracker-dev.md, eve-tracker-deployment.md, pipeline/)
+# are NO LONGER gitignored — they are committed to the private origin and listed in
+# .publicignore, which strips them from the public mirror (scripts/publish-public.sh).
+# Only true secrets + real-value config stay below.
+
+# Private secrets with real IPs/secrets
 k8s/eve-tracker/secret.yml
 k8s/eve-tracker/overlays/*/secret.yml
 k8s/argocd/values-image-updater.yml
 k8s/argocd/eve-tracker-image-updater.yml
 k8s/argocd/eve-tracker-dev-image-updater.yml
-
-# Private runbooks with real values
-docs/13-deploy-eve-tracker-dev.md
-docs/improvement-plan.md
-docs/ops-commands.md
-docs/18-architecture.md
 
 # Local Ingress overrides (so private hostnames don't leak to public repo)
 k8s/*/ingress.local.yml
@@ -62,3 +61,4 @@ k8s/argocd/values-argocd.yml
 k8s/argocd/eve-tracker-test-app.yml
 k8s/monitoring/values-grafana.yml
 k8s/argocd/eve-tracker-test-image-updater.yml
+k8s/argocd/gitea-repo-secret.yml

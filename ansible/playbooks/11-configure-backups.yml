@@ -161,9 +161,14 @@
   gather_facts: false
 
   vars:
+    # snap: false = keep nightly R2 backup (03:00, which snapshots internally)
+    # but skip the standalone 02:00 critical-snapshot job. Added 2026-07-26 for
+    # the eve volumes: with zone-spread replicas their writes are synchronous
+    # cross-site, and the doubled nightly I/O (02:00 snapshot + 03:00 backup)
+    # stalled the backends past their liveness budget (10 kills/night).
     critical_pvcs:
-      - { namespace: eve-tracker, name: eve-tracker-data }
-      - { namespace: eve-tracker-test, name: eve-tracker-data }
+      - { namespace: eve-tracker, name: eve-tracker-data, snap: false }
+      - { namespace: eve-tracker-test, name: eve-tracker-data, snap: false }
       - { namespace: gitea, name: gitea-shared-storage }
       - { namespace: forgejo, name: gitea-shared-storage }
       - { namespace: monitoring, name: grafana }
@@ -247,7 +252,7 @@
           cron: "0 2 * * *"
           task: snapshot
           groups:
-            - critical
+            - critical-snap
           retain: 7
           concurrency: 2
         EOF
@@ -292,7 +297,9 @@
     - name: Label critical Longhorn volumes with recurring-job-group
       ansible.builtin.command: >
         kubectl -n longhorn-system label volumes.longhorn.io {{ item.stdout }}
-        recurring-job-group.longhorn.io/critical=enabled --overwrite
+        recurring-job-group.longhorn.io/critical=enabled
+        recurring-job-group.longhorn.io/critical-snap={{ 'enabled' if item.item.snap | default(true) else 'disabled' }}
+        --overwrite
       loop: "{{ critical_volume_lookup.results }}"
       when: item.rc == 0 and item.stdout != ""
       loop_control:

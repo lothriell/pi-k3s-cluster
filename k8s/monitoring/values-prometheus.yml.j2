@@ -43,12 +43,33 @@ alertmanager:
       # but do not page. Only critical severity routes to ntfy.
       receiver: 'null'
       routes:
+        # Dead-man's-switch heartbeat. The always-firing Watchdog alert (see the
+        # `watchdog` rule group below) is re-sent every minute to athena's
+        # external heartbeat receiver. If THIS Alertmanager or Prometheus dies,
+        # the POSTs stop and athena pages independently — the only way to learn
+        # that monitoring itself is down. See ansible/roles/monitoring-watchdog
+        # and playbook 15-deploy-monitoring-watchdog.yml.
+        - matchers:
+            - alertname="Watchdog"
+          receiver: heartbeat
+          group_wait: 0s
+          group_interval: 1m
+          repeat_interval: 1m
+          continue: false
         - matchers:
             - severity="critical"
           receiver: ntfy
+          # Re-page hourly while a critical alert keeps firing (overrides the
+          # 4h default on the parent route) so an ongoing issue can't go silent
+          # after a single notification.
+          repeat_interval: 1h
           continue: false
     receivers:
       - name: 'null'
+      - name: heartbeat
+        webhook_configs:
+          - url: "http://{{ watchdog_athena_host }}:{{ watchdog_receiver_port }}/heartbeat"
+            send_resolved: false
       # Routed through the alertmanager-ntfy bridge so notifications arrive
       # nicely formatted (title / body / priority / tags) instead of raw
       # Alertmanager JSON. Bridge config: k8s/monitoring/alertmanager-ntfy.yml.j2
@@ -81,6 +102,20 @@ prometheus-node-exporter:
     limits:
       cpu: 100m
       memory: 64Mi
+  # Unit-health via the TEXTFILE collector (tasks #58/#59, 2026-07-27): the
+  # `systemd` collector is AppArmor-blocked on Ubuntu (D-Bus), so the common
+  # role runs node-unit-health.timer (60 s) which writes `systemctl is-active`
+  # results for journald/resolved/tailscaled/iscsid/k3s to
+  # /var/lib/node_exporter/textfile/unit-health.prom — deliberately without
+  # logging, so it keeps reporting when journald itself is dead (the 18-day
+  # silent wedge of 2026-06-16). Alerts: `units` group below.
+  extraArgs:
+    - --collector.textfile.directory=/host/textfile
+  extraHostVolumeMounts:
+    - name: textfile
+      hostPath: /var/lib/node_exporter/textfile
+      mountPath: /host/textfile
+      readOnly: true
   # Disable default scrape annotation so the built-in kubernetes-service-endpoints
   # job does NOT scrape node-exporter. We use a dedicated job in extraScrapeConfigs
   # that labels instance with hostname instead of IP (prevents Grafana duplicates).
@@ -107,18 +142,29 @@ kube-state-metrics:
     limits:
       cpu: 100m
       memory: 128Mi
+  # Zone label on kube_node_labels — join target for the replica-placement
+  # view (topology label becomes label_topology_kubernetes_io_zone). The
+  # replica→node placement itself comes from Longhorn v1.12's NATIVE
+  # longhorn_replica_info{job="longhorn"} (task #70 originally planned a KSM
+  # custom-resource-state export, unnecessary since the v1.12 upgrade —
+  # always filter that metric by job, KSM would collide on the family name
+  # if CRS were ever added).
+  metricLabelsAllowlist:
+    - nodes=[topology.kubernetes.io/zone]
 
 # ---------------------------------------------------------------------------
 # Prometheus Server -- the core metrics database.
 # ---------------------------------------------------------------------------
 server:
-  # -- How long to keep metrics. Actual rate measured 2026-04-14 is
-  #    ~770 MB/day across 30 scrape targets.
-  #    30d × 770 MB ≈ 23 GB actual, fits in 30Gi with ~7 GB compaction
-  #    headroom. x86 VM disks were expanded 50→80GB on 2026-04-15 in a
-  #    parallel session, which unblocked this bump from the earlier
-  #    emergency 15Gi/20d → current 30Gi/30d.
-  retention: "30d"
+  # -- Retention is capped by BOTH time and size; whichever hits first wins.
+  #    2026-05-28 incident: with only a time cap, the TSDB outgrew the 30Gi
+  #    volume (scrape targets added Apr–May: alloy, loki, smartctl, syncthing),
+  #    filled the disk, and Prometheus crashlooped 6 days unable to open its
+  #    WAL — silently, because a dead Prometheus can't evaluate its own alert
+  #    rules. The hard size cap below makes the TSDB self-trim so it can never
+  #    fill the disk again, regardless of cardinality growth.
+  retention: "14d"         # was 30d — cut 2026-06-05 to relieve x86-1 disk pressure (time cap binds first at 14d)
+  retentionSize: "36GiB"   # ~80% of the 45Gi volume; retained as the hard self-trim guard (2026-05-28 incident)
 
   # -- Resource requests/limits sized for a Pi with 16GB RAM.
   #    Prometheus is the heaviest component; 1Gi limit needed for 6 nodes.
@@ -133,18 +179,20 @@ server:
   # -- Persistent storage so metrics survive pod restarts.
   persistentVolume:
     enabled: true
-    # 30Gi × 2 replicas = 60 GB total across the two x86 nodes (now 80GB
-    # each after the 2026-04-15 disk expansion). Per-node free space
-    # budget: x86-1 ~60 GB free, x86-2 ~66 GB free → 30Gi replica each
-    # leaves ~30 GB headroom per node. At ~770 MB/day burn rate this
-    # buys ~30d of retention with ~7 GB compaction buffer.
+    # 45Gi × 2 replicas across the two x86 nodes (150 GB disks each after the
+    # 2026-05-28 +20G Proxmox expansion; ~77 GB free per node). The
+    # retentionSize cap above (36GiB) is the real guard against disk-full — the
+    # volume only needs headroom above the cap for WAL + compaction scratch.
+    # Longhorn over-provisioning is back at the default 100% (briefly raised to
+    # 150% during the 2026-05-28 recovery to allow the 30→45Gi online expand
+    # before the VM disks were grown).
     #
     # Online-expand path: Longhorn can grow this live (allowVolumeExpansion
     # is true on longhorn-storage). Bump the number + re-run the Prometheus
     # tag: `ansible-playbook 04-deploy-monitoring.yml --tags prometheus`.
     # Do NOT use `make monitoring` — it re-rolls Grafana too and trips the
     # RWO PVC deadlock documented in CLAUDE.md.
-    size: 30Gi
+    size: 45Gi
     # Uses the longhorn-storage StorageClass (nodeSelector=storage) which
     # only schedules replicas on x86 Proxmox VMs — the 32Gi Pi eMMCs can't
     # host a 30Gi replica. See feedback_longhorn_storage memory for the
@@ -237,6 +285,25 @@ extraScrapeConfigs: |
         regex: metrics
         action: keep
 
+  # Embedded etcd on the 3 control-plane Pis. Exposed by
+  # `etcd-expose-metrics: true` in /etc/rancher/k3s/config.yaml
+  # (0.0.0.0:2381, plain HTTP). Pi eMMC is marginal for etcd — fsync/apply
+  # latency and DB size must be visible before disk pressure breaks leases
+  # (2026-07-23 kube-vip lease flap; 2026-07-26 snapshot-suicide). Task #64.
+  - job_name: etcd
+    scrape_interval: 30s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['{{ node_ip_1 }}:2381']
+        labels:
+          instance: rpi-k3s-1
+      - targets: ['{{ node_ip_2 }}:2381']
+        labels:
+          instance: rpi-k3s-2
+      - targets: ['{{ node_ip_3 }}:2381']
+        labels:
+          instance: rpi-k3s-3
+
   # Syncthing instances on the user's Mac/WSL machines, scraped over Tailscale
   # IPs (cluster pods can route to 100.x — verified 2026-05-08). Each host has
   # its GUI bound to its own tailnet IP and authenticates /metrics with the
@@ -260,14 +327,31 @@ extraScrapeConfigs: |
       - targets: ['{{ syncthing_macmini_tsip }}:8384']
         labels:
           instance: mac-mini
-  - job_name: syncthing-thor1
+  - job_name: syncthing-thorwsl
     scrape_interval: 60s
     metrics_path: /metrics
-    bearer_token_file: /etc/syncthing-tokens/thor1
+    bearer_token_file: /etc/syncthing-tokens/thorwsl
     static_configs:
-      - targets: ['{{ syncthing_thor1_tsip }}:8384']
+      - targets: ['{{ syncthing_thorwsl_tsip }}:8384']
         labels:
-          instance: thor-1
+          instance: thorwsl
+
+  # Tailnet peer-offline monitor on athena (tailscale-monitor role, playbook
+  # 18). Scraped over athena's LAN IP on purpose — the tailnet IP would go
+  # dark exactly when tailscale_local_tailscaled_up=0 matters. Alerting for
+  # this monitor is direct-to-ntfy on athena (cluster-independent); no
+  # Prometheus alert rule here, or every dropout would page twice.
+  - job_name: tailscale-monitor
+    scrape_interval: 60s
+    metrics_path: /metrics.prom
+    # The exporter is a plain file server (python http.server) that returns
+    # application/octet-stream; Prometheus 3.x refuses that without an
+    # explicit fallback protocol.
+    fallback_scrape_protocol: "PrometheusText0.0.4"
+    static_configs:
+      - targets: ['{{ sff_athena_ip }}:9925']
+        labels:
+          instance: athena
 
   # smartctl-exporter DaemonSet on the 3 storage-tagged amd64 nodes
   # (k3s-x86-1, k3s-x86-2, minisforum-c). The chart's Service annotation
@@ -353,6 +437,10 @@ serverFiles:
             annotations:
               summary: "Node exporter down on {{ '{{' }} $labels.instance {{ '}}' }}"
               description: "Node has not reported metrics for 5 minutes."
+          # TODO: NodeResolverDown / NodeServiceDown (systemd-resolved / tailscaled /
+          # k3s health) — pending the node-exporter TEXTFILE-collector approach;
+          # the systemd-collector source was reverted (AppArmor-blocked). See the
+          # note in the prometheus-node-exporter section above.
       - name: kubernetes
         rules:
           - alert: KubeNodeNotReady
@@ -372,7 +460,10 @@ serverFiles:
               summary: "Pod {{ '{{' }} $labels.namespace {{ '}}' }}/{{ '{{' }} $labels.pod {{ '}}' }} crash-looping"
               description: "More than 3 restarts in the last 15 minutes."
           - alert: PodExcessiveRestarts
-            expr: increase(kube_pod_container_status_restarts_total[24h]) * on(namespace, pod) group_left() kube_pod_info > 5
+            # uid in the join (task #51): a recreated pod (same ns+pod, new
+            # uid — typical StatefulSet) must not fire on the OLD incarnation's
+            # restart counts lingering in the 24h increase() window.
+            expr: increase(kube_pod_container_status_restarts_total[24h]) * on(namespace, pod, uid) group_left() kube_pod_info > 5
             for: 10m
             labels:
               severity: critical
@@ -380,13 +471,20 @@ serverFiles:
               summary: "Pod {{ '{{' }} $labels.namespace {{ '}}' }}/{{ '{{' }} $labels.pod {{ '}}' }} restarted too many times"
               description: "More than 5 restarts in the last 24 hours."
           - alert: ContainerOOMKilled
-            expr: kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} > 0
+            # last_terminated_reason is sticky (stays 1 until the NEXT
+            # termination overwrites it) — alone it re-pages the same old kill
+            # on every repeat_interval (2026-08-02/03). Gate on a recent
+            # restart so the alert fires ~30m per event, then resolves.
+            expr: >-
+              (increase(kube_pod_container_status_restarts_total[30m]) > 0)
+              and on(namespace, pod, container)
+              (kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1)
             for: 0m
             labels:
               severity: critical
             annotations:
               summary: "Container {{ '{{' }} $labels.container {{ '}}' }} in {{ '{{' }} $labels.namespace {{ '}}' }}/{{ '{{' }} $labels.pod {{ '}}' }} OOMKilled"
-              description: "Container was terminated due to out-of-memory. Check resource limits."
+              description: "Container was OOM-killed within the last 30 minutes. Check resource limits."
           - alert: PodNotReady
             expr: sum by (namespace, pod) (kube_pod_status_phase{phase=~"Pending|Unknown|Failed"}) > 0
             for: 15m
@@ -395,6 +493,102 @@ serverFiles:
             annotations:
               summary: "Pod {{ '{{' }} $labels.namespace {{ '}}' }}/{{ '{{' }} $labels.pod {{ '}}' }} not ready"
               description: "Pod has been in a non-ready phase for 15 minutes."
+      - name: units
+        rules:
+          # journald dead = every synchronous logger (sshd, k3s) eventually
+          # blocks; the node limps for days with no signal because the dead
+          # component IS the logger (18 days on k3s-x86-2, 2026-06-16
+          # incident). The textfile timer keeps writing without journald.
+          - alert: NodeJournaldDown
+            expr: node_unit_active{unit="systemd-journald"} == 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "systemd-journald dead on {{ '{{' }} $labels.instance {{ '}}' }}"
+              description: "Logger down — sshd/k3s will progressively block on /dev/log. Restart journald FIRST, then any wedged services (see feedback_node_journald_wedge)."
+          - alert: NodeUnitDown
+            expr: node_unit_active{unit!="systemd-journald"} == 0
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Unit {{ '{{' }} $labels.unit {{ '}}' }} down on {{ '{{' }} $labels.instance {{ '}}' }}"
+              description: "systemctl is-active reports not-active for 10m. resolved dying wedges Longhorn IMs; tailscaled dying cuts the remote path."
+          # Dead timer = silently blind unit metrics. mtime stops advancing.
+          - alert: NodeUnitMetricsStale
+            expr: time() - node_textfile_mtime_seconds{file="unit-health.prom"} > 900
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "unit-health metrics stale on {{ '{{' }} $labels.instance {{ '}}' }}"
+              description: "node-unit-health.timer stopped writing >15m ago — unit alerts for this node are blind. Check the timer."
+      - name: etcd
+        rules:
+          - alert: EtcdMetricsDown
+            expr: up{job="etcd"} == 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "etcd metrics endpoint down on {{ '{{' }} $labels.instance {{ '}}' }}"
+              description: "Port 2381 unreachable for 5 minutes — k3s down, restarting, or the node is off."
+          - alert: EtcdLeaderMissing
+            expr: etcd_server_has_leader == 0
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "etcd member {{ '{{' }} $labels.instance {{ '}}' }} has no leader"
+              description: "Member cannot see a raft leader — quorum at risk."
+          - alert: EtcdLeaderChanges
+            expr: increase(etcd_server_leader_changes_seen_total[1h]) > 2
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "etcd leader flapping ({{ '{{' }} $value {{ '}}' }} changes/h)"
+              description: "More than 2 leader changes in an hour — usually eMMC I/O starvation on a server Pi. Check what is generating disk I/O (Longhorn jobs, snapshots, backups)."
+          # Chronic baseline is ~250 slow applies/hour (~0.07/s) around the
+          # clock — Pi eMMC. 0.5/s sustained means real I/O contention of the
+          # kind that broke kube-vip leases (2026-07-23) and killed k3s
+          # mid-snapshot (2026-07-26).
+          - alert: EtcdSlowApplies
+            expr: rate(etcd_server_slow_apply_total[10m]) > 0.5
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "etcd slow-apply storm on {{ '{{' }} $labels.instance {{ '}}' }}"
+              description: "{{ '{{' }} $value | humanize {{ '}}' }} slow applies/s for 15m (baseline ~0.07/s). Sustained disk pressure on the control plane — lease losses likely next."
+          - alert: EtcdFsyncSlow
+            expr: histogram_quantile(0.99, sum by (instance, le) (rate(etcd_disk_wal_fsync_duration_seconds_bucket[10m]))) > 0.5
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "etcd WAL fsync p99 {{ '{{' }} $value | humanizeDuration {{ '}}' }} on {{ '{{' }} $labels.instance {{ '}}' }}"
+              description: "p99 fdatasync above 500ms for 15m. At ~2s+ the 5s lease renews start failing (k3s exits on leaderelection lost)."
+          - alert: EtcdDatabaseFragmented
+            expr: >-
+              (etcd_mvcc_db_total_size_in_bytes - etcd_mvcc_db_total_size_in_use_in_bytes)
+              / etcd_mvcc_db_total_size_in_bytes > 0.5
+              and etcd_mvcc_db_total_size_in_bytes > 150e6
+            for: 6h
+            labels:
+              severity: warning
+            annotations:
+              summary: "etcd DB >50% fragmented on {{ '{{' }} $labels.instance {{ '}}' }}"
+              description: "Free pages bloat the DB file; every 6h snapshot streams the full file over eMMC. Defrag procedure: docs/improvement-plan.md task #64."
+          - alert: EtcdDatabaseSizeLarge
+            expr: etcd_mvcc_db_total_size_in_bytes > 1.5e9
+            for: 30m
+            labels:
+              severity: critical
+            annotations:
+              summary: "etcd DB {{ '{{' }} $value | humanize1024 {{ '}}' }}B on {{ '{{' }} $labels.instance {{ '}}' }}"
+              description: "Approaching the 2 GiB quota — etcd goes read-only at quota. Compact/defrag or find the writer."
       - name: trivy
         rules:
           # Delta-based: fires when the cluster-wide CRITICAL count rises vs
@@ -435,3 +629,78 @@ serverFiles:
             annotations:
               summary: "Longhorn storage >80% on {{ '{{' }} $labels.node {{ '}}' }}"
               description: "Longhorn will stop scheduling new replicas soon."
+          # Site-concentration watchdog (task #70). Hard zone anti-affinity
+          # should make this impossible; it silently regressed on 2026-07-24
+          # when replica replenishment rebuilt everything onto the x86 pair
+          # and amplified the next day's host reboot to 11/13 volumes faulted.
+          # Fires when a multi-replica volume has all replicas in ONE zone.
+          # 30m grace: legitimate transient during a node outage (rebuild
+          # targets limited to surviving zone) — paging then is still correct,
+          # just not instantly.
+          - alert: LonghornVolumeZoneConcentrated
+            expr: >-
+              (count by (volume) (count by (volume, label_topology_kubernetes_io_zone)
+                (longhorn_replica_info{job="longhorn"}
+                 * on(node) group_left(label_topology_kubernetes_io_zone)
+                 kube_node_labels{label_topology_kubernetes_io_zone!=""})) == 1)
+              and on(volume)
+              (count by (volume) (longhorn_replica_info{job="longhorn"}) > 1)
+            for: 30m
+            labels:
+              severity: critical
+            annotations:
+              summary: "All replicas of {{ '{{' }} $labels.volume {{ '}}' }} sit in one zone"
+              description: "Zone anti-affinity regressed or a rebuild concentrated this volume on one site — a single host/site outage faults it. Re-spread a replica to the other zone."
+      - name: volumes
+        rules:
+          # PVC-fullness early warning. Added after the 2026-05-28 incident
+          # where the Prometheus TSDB volume filled to 100% and crashlooped
+          # Prometheus for 6 days — silently, since a dead Prometheus can't
+          # evaluate its own rules. A full PVC crashes its workload; these fire
+          # while there is still runway to act. kubelet_volume_stats_* come
+          # from the kubelet scrape; max by() dedupes duplicate scrape series.
+          - alert: PersistentVolumeFillingUp
+            expr: (max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_available_bytes) / max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_capacity_bytes)) < 0.12
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "PVC {{ '{{' }} $labels.namespace {{ '}}' }}/{{ '{{' }} $labels.persistentvolumeclaim {{ '}}' }} filling up"
+              description: "Less than 12% free for 15m. Plan an expansion before it fills."
+          - alert: PersistentVolumeAlmostFull
+            expr: (max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_available_bytes) / max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_capacity_bytes)) < 0.08
+            for: 10m
+            labels:
+              severity: critical
+            annotations:
+              summary: "PVC {{ '{{' }} $labels.namespace {{ '}}' }}/{{ '{{' }} $labels.persistentvolumeclaim {{ '}}' }} almost full"
+              description: "Less than 8% free for 10m — a full volume crashes its workload (this is what silently killed monitoring for 6 days on 2026-05-28). Expand now."
+          # eve-tracker holds real user data (SQLite on a tiny 1Gi PVC, in the
+          # critical-backup group). The generic critical above only pages at
+          # <8% free, which gives almost no runway on a 1Gi volume that fills
+          # fast. This dedicated rule pages via ntfy at >80% full (severity
+          # critical → ntfy route) so there's time to expand before the backend
+          # starts failing writes. Scoped to all eve-tracker namespaces.
+          - alert: EveTrackerVolumeAlmostFull
+            expr: (max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_available_bytes{namespace=~"eve-tracker.*"}) / max by (namespace, persistentvolumeclaim) (kubelet_volume_stats_capacity_bytes{namespace=~"eve-tracker.*"})) < 0.2
+            for: 10m
+            labels:
+              severity: critical
+            annotations:
+              summary: "eve-tracker PVC {{ '{{' }} $labels.namespace {{ '}}' }}/{{ '{{' }} $labels.persistentvolumeclaim {{ '}}' }} >80% full"
+              description: "eve-tracker SQLite volume is over 80% used. Expand the 1Gi PVC (Longhorn online resize) before writes fail."
+      - name: watchdog
+        rules:
+          # Dead-man's-switch. Always firing by design — its job is to be
+          # delivered, not to alert. Alertmanager routes it (by alertname) to
+          # athena's external heartbeat receiver every minute. If Prometheus or
+          # Alertmanager is down, the heartbeat stops and athena pages on its
+          # own. This is the ONLY signal that survives the whole monitoring
+          # stack dying — the gap that hid the 2026-05-28 6-day outage.
+          - alert: Watchdog
+            expr: vector(1)
+            labels:
+              severity: none
+            annotations:
+              summary: "Monitoring heartbeat (always firing)"
+              description: "Absence of this alert at athena means Prometheus/Alertmanager is down and in-cluster alerting is dead."

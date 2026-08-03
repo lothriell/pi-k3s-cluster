@@ -1,0 +1,68 @@
+# Fleet ssh aliases — vantage: INSIDE the network fabric (all LAN subnets
+# inter-VLAN/Site-Magic routable), so plain aliases go straight to LAN IPs
+# with no ProxyJump. "-ts" suffix = Tailscale-direct fallback (only works on
+# hosts that are themselves on the tailnet — rpizerow isn't).
+# thor is the one exception where plain=tailnet: WSL2 NAT means no LAN sshd.
+
+Host rpi1
+    HostName {{ node_ip_1 }}
+Host rpi2
+    HostName {{ node_ip_2 }}
+Host rpi3
+    HostName {{ node_ip_3 }}
+Host rpi4
+    HostName {{ node_ip_4 }}
+Host mini gpu
+    HostName {{ sff_minisforum_ip }}
+Host x1
+    HostName {{ x86_node_ip_1 }}
+Host x2
+    HostName {{ x86_node_ip_2 }}
+Host athena
+    HostName {{ sff_athena_ip }}
+Host artemis
+    HostName {{ sff_artemis_ip }}
+Host wazuh wazuh-server
+    HostName {{ wazuh_manager_ip }}
+Host lab
+    HostName {{ pve_lan_ip }}
+Host arch-t
+    HostName {{ desktop_arch_t_lan_ip }}
+Host cachy-t
+    HostName {{ desktop_cachy_t_lan_ip }}
+Host macmini macmini-lan
+    HostName {{ macmini_lan_ip }}
+Host zero rpizerow
+    HostName {{ display_rpizerow_ip }}
+Host thor thorwsl thor-ts thorwsl-ts
+    HostName {{ tailscale_thorwsl }}
+
+# Tailscale-direct variants
+Host rpi1-ts
+    HostName {{ tailscale_rpi1 }}
+Host rpi2-ts
+    HostName {{ tailscale_rpi2 }}
+Host rpi3-ts
+    HostName {{ tailscale_rpi3 }}
+Host rpi4-ts
+    HostName {{ tailscale_rpi4 }}
+Host mini-ts gpu-ts
+    HostName {{ tailscale_minisforum }}
+Host x1-ts
+    HostName {{ tailscale_x86_1 }}
+Host x2-ts
+    HostName {{ tailscale_x86_2 }}
+Host athena-ts
+    HostName {{ tailscale_athena }}
+Host artemis-ts
+    HostName {{ tailscale_artemis }}
+Host wazuh-ts
+    HostName {{ tailscale_wazuh_server }}
+Host lab-ts
+    HostName {{ pve_host_ip }}
+Host arch-t-ts
+    HostName {{ tailscale_arch_t_01 }}
+Host cachy-t-ts
+    HostName {{ tailscale_cachy_t_01 }}
+Host macmini-ts
+    HostName {{ tailscale_macmini }}

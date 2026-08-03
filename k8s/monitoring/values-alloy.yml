@@ -52,9 +52,20 @@ alloy:
   configMap:
     create: true
     content: |
-      // -------- cluster pod logs (via Kubernetes API) --------
+      // -------- node-local pod logs (via Kubernetes API) --------
+      // Field selector restricts discovery to pods on THIS node so each
+      // alloy DS instance ships only its own node's logs. Without it,
+      // every pod discovers every pod cluster-wide -> N x duplication and
+      // API client-side throttling that wedged alloy-qpp75 on minisforum-c
+      // at 301m CPU / 7,666 CPU-hours over 22 days (2026-06-03 finding).
+      // sys.env("HOSTNAME") resolves to spec.nodeName via the chart's
+      // default env injection.
       discovery.kubernetes "pods" {
         role = "pod"
+        selectors {
+          role  = "pod"
+          field = "spec.nodeName=" + sys.env("HOSTNAME")
+        }
       }
 
       discovery.relabel "pod_logs" {

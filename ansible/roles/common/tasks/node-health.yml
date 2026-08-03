@@ -1,0 +1,105 @@
+---
+# Journald size cap (task #58) + unit-health textfile metrics (task #59).
+# Included by BOTH roles/common and roles/common-arch (identical needs;
+# common-arch includes this file cross-role to keep a single copy).
+
+# --- #58: cap journald so archives can't eat the 32 GB eMMC roots ----------
+# rpi-k3s-3 hit 76% root usage with 1.1 GB of archived journals (2026-06-10);
+# kubelet image-GC started failing. Drop-in beats editing journald.conf.
+- name: Ensure journald drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [system, journald]
+
+- name: Cap journald disk usage (drop-in)
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/00-size-cap.conf
+    content: |
+      # Managed by Ansible (task #58). 32 GB eMMC nodes cannot afford
+      # unbounded journal archives (1.1 GB found on rpi-k3s-3 2026-06-10).
+      [Journal]
+      SystemMaxUse=200M
+      SystemMaxFileSize=50M
+    owner: root
+    group: root
+    mode: "0644"
+  register: journald_cap
+  tags: [system, journald]
+
+- name: Restart journald to apply the size cap
+  ansible.builtin.systemd:
+    name: systemd-journald
+    state: restarted
+  when: journald_cap.changed
+  tags: [system, journald]
+
+# --- #59: unit-health textfile metrics (survives dead journald) ------------
+# The node-exporter systemd collector is AppArmor-blocked on Ubuntu (D-Bus),
+# so a timer writes `systemctl is-active` results to a .prom file instead —
+# no logging, no D-Bus. node-exporter mounts /var/lib/node_exporter/textfile
+# (see prometheus-node-exporter extraHostVolumeMounts in values-prometheus).
+- name: Create node-exporter textfile directory
+  ansible.builtin.file:
+    path: /var/lib/node_exporter/textfile
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [system, unit-health]
+
+- name: Install node-unit-health script
+  ansible.builtin.copy:
+    # Explicit ../.. path: this task file is also included cross-role by
+    # common-arch, and copy src resolves against the INCLUDING role's files/
+    # dir — a bare filename breaks there. This form lands on
+    # roles/common/files/ from both roles.
+    src: ../../common/files/node-unit-health.sh
+    dest: /usr/local/bin/node-unit-health.sh
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [system, unit-health]
+
+- name: Install node-unit-health service + timer
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.name }}"
+    content: "{{ item.content }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - name: node-unit-health.service
+      content: |
+        [Unit]
+        Description=Write systemd unit health metrics for node-exporter
+        # No journal dependency on purpose — must run with journald dead.
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/local/bin/node-unit-health.sh
+        StandardOutput=null
+        StandardError=null
+    - name: node-unit-health.timer
+      content: |
+        [Unit]
+        Description=Run node-unit-health every 60s
+        [Timer]
+        OnBootSec=2min
+        OnUnitActiveSec=60
+        [Install]
+        WantedBy=timers.target
+  loop_control:
+    label: "{{ item.name }}"
+  register: unit_health_units
+  tags: [system, unit-health]
+
+- name: Enable + start node-unit-health timer
+  ansible.builtin.systemd:
+    name: node-unit-health.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ unit_health_units.changed | default(false) }}"
+  tags: [system, unit-health]

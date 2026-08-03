@@ -1,0 +1,14 @@
+---
+# Playbook 19: WSL node hardening (task #62).
+# Codifies thorwsl's SSH key-only hardening + boot-enable + Tailscale MTU
+# workaround so a WSL rebuild can't silently lose them.
+#
+# Usage: ansible-playbook ansible/playbooks/19-harden-wsl-node.yml
+#        (or: make harden-wsl)
+
+- name: Harden WSL nodes (sshd key-only + tailscale MTU)
+  hosts: windows_wsl_nodes
+  become: true
+  gather_facts: true
+  roles:
+    - ../roles/wsl-node

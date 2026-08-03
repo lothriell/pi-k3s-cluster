@@ -58,6 +58,9 @@ A 7-node K3s cluster spanning Raspberry Pi CM5s, x86 Proxmox VMs, and a bare-met
 | Metrics | Prometheus | 20 d retention, x86-pinned PVC |
 | Dashboards | Grafana | OIDC via Authentik + native admin break-glass |
 | Alerts → mobile | Alertmanager → `alertmanager-ntfy` bridge → self-hosted ntfy | Push notifications to phone |
+| Tailnet fleet watch | `tailscale-monitor` (systemd timer on a SFF box) | Pages ntfy when always-on nodes drop off Tailscale; metrics → Prometheus + "Tailscale Fleet" Grafana dashboard |
+| Release watch | `release-watcher` CronJob (in-cluster, 2×/day) | Compares LIVE Helm releases / image tags / K3s against upstream latests; ntfy digest only when updates exist |
+| Storage fleet view | "Longhorn Fleet" Grafana dashboard | Volume health/state history, per-volume table, node capacity; replica-placement zone matrix planned |
 | Logs (cluster pods + journald) | Grafana Alloy DS | Successor to Promtail; ships to Loki |
 | Logs (Pi-hole) | Promtail (Docker) | Tails `pihole.log` on the DNS box → Loki via NodePort |
 | Log store | Loki (single-binary) | x86-pinned, structured metadata for high-cardinality fields |

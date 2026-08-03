@@ -29,7 +29,7 @@ global:
   # the Authentik server image so server + worker share the tag.
   image:
     repository: ghcr.io/goauthentik/server
-    tag: "2026.2.2"
+    tag: "2026.5.6"
     pullPolicy: IfNotPresent
 
 # -- Authentik configuration --------------------------------------------------

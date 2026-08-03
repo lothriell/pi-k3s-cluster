@@ -1,0 +1,88 @@
+---
+# wsl-node: codifies thorwsl's hand-applied hardening (task #62) so a WSL
+# rebuild (`wsl --unregister`) can't silently lose it. Opt-in via the
+# windows_wsl_nodes group only — never runs on cluster nodes.
+
+- name: Ensure sshd drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [ssh]
+
+- name: Key-only SSH hardening drop-in
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/10-hardening.conf
+    content: |
+      # Managed by Ansible (kubernetes repo, task #62) — key-only SSH
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PubkeyAuthentication yes
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/sshd -t -f /etc/ssh/sshd_config -c %s
+  register: sshd_hardening
+  tags: [ssh]
+
+- name: Reload sshd on config change
+  ansible.builtin.systemd:
+    name: ssh
+    state: reloaded
+  when: sshd_hardening.changed
+  tags: [ssh]
+
+# WSL doesn't start systemd services on distro launch unless enabled; a
+# rebuild leaves sshd present but dead.
+- name: Enable + start ssh at WSL boot
+  ansible.builtin.systemd:
+    name: ssh
+    enabled: true
+    state: started
+  tags: [ssh]
+
+# WSL2's network path to the LAN blackholes tunnel packets >~1213 bytes
+# (default Tailscale MTU 1280): OpenSSH 10's post-quantum kex packet is
+# lost and sshd times out "before authentication" on tailnet connections.
+# Verified 2026-07-11; memory thorwsl-tailscale-mtu-blackhole.
+- name: Ensure tailscaled drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/tailscaled.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [tailscale]
+
+- name: Tailscale MTU drop-in (WSL2 tunnel blackhole workaround)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/tailscaled.service.d/mtu.conf
+    content: |
+      [Service]
+      # WSL2 path to LAN blackholes tunnel packets >~1213 bytes (default MTU 1280).
+      # Verified 2026-07-11: sshd "Timeout before authentication", PQ kex packet lost.
+      Environment=TS_DEBUG_MTU=1200
+    owner: root
+    group: root
+    mode: "0644"
+  register: ts_mtu
+  tags: [tailscale]
+
+# Ansible reaches thorwsl over the tailnet, so a synchronous tailscaled
+# restart would cut its own connection mid-task. Fire-and-forget async;
+# the next task's ping-back via the reconnect confirms it came up.
+- name: Restart tailscaled on MTU change (async — we're connected through it)
+  ansible.builtin.shell: sleep 2 && systemctl daemon-reload && systemctl restart tailscaled
+  async: 60
+  poll: 0
+  when: ts_mtu.changed
+  tags: [tailscale]
+
+- name: Wait for tailscaled back after restart
+  ansible.builtin.wait_for_connection:
+    delay: 5
+    timeout: 120
+  when: ts_mtu.changed
+  tags: [tailscale]

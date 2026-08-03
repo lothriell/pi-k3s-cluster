@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""Monitoring watchdog heartbeat receiver (deployed on athena).
+
+The cluster Alertmanager POSTs the always-firing "Watchdog" alert here every
+~1 min. Each request bumps the mtime of the heartbeat file; the companion
+checker (monitoring-watchdog-check, run by a systemd timer) pages via ntfy if
+that file goes stale — meaning Prometheus/Alertmanager stopped and in-cluster
+alerting is dead. Templated by the monitoring-watchdog Ansible role.
+"""
+import http.server
+import os
+import sys
+
+HB_FILE = "{{ watchdog_heartbeat_file }}"
+PORT = {{ watchdog_receiver_port }}
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def _beat(self):
+        code = 200
+        try:
+            with open(HB_FILE, "a"):
+                pass
+            os.utime(HB_FILE, None)
+        except OSError as exc:
+            sys.stderr.write("heartbeat touch failed: %s\n" % exc)
+            code = 500
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"ok\n" if code == 200 else b"error\n")
+
+    do_GET = _beat
+    do_POST = _beat
+
+    def log_message(self, *args):  # silence per-request logging
+        pass
+
+
+if __name__ == "__main__":
+    http.server.HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

@@ -32,9 +32,9 @@ def load_rules(path):
     Format per line:
         domain_pattern | ip_or_* | label
     Examples:
-        *.sme.sk | 10.69.0.42 | duck domain
+        *.sme.sk | 10.0.0.42 | duck domain
         *.facebook.com | * | social media
-        bad-site.org | 10.69.0.42 | phishing
+        bad-site.org | 10.0.0.42 | phishing
     """
     rules = []
     try:

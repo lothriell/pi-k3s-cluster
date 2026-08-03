@@ -1,8 +1,30 @@
 ---
 # Handlers for the k3s-server role
 
+# The readiness gate matters: systemd returns as soon as the process starts,
+# but a restarted server needs minutes on Pi eMMC to finish etcd replay +
+# apiserver startup. Rolling the next server while the previous is still
+# catching up multiplies I/O; on 2026-07-26 a plain serial restart of all 3
+# servers cascaded into CCM lease-loss suicides on each ("leaderelection
+# lost" is fatal to k3s) and took the kube-vip VIP down for ~3 minutes.
 - name: restart k3s
   ansible.builtin.systemd:
     name: k3s
     state: restarted
     daemon_reload: true
+
+- name: restart k3s | wait for local apiserver ready
+  listen: restart k3s
+  ansible.builtin.command: k3s kubectl get --raw=/readyz
+  register: k3s_readyz
+  until: k3s_readyz.rc == 0 and k3s_readyz.stdout == "ok"
+  retries: 60
+  delay: 10
+  changed_when: false
+
+# Readyz alone can pass while etcd is still draining the replay I/O backlog —
+# give the member time to settle before the play moves to the next server.
+- name: restart k3s | settle before next server
+  listen: restart k3s
+  ansible.builtin.pause:
+    seconds: 60

@@ -17,7 +17,7 @@ $ kubectl get pods -n eve-tracker-test
 NAME                                    READY   STATUS    RESTARTS   AGE
 eve-tracker-backend-557dbb78c-dktcq     1/1     Running   0          91m
 eve-tracker-frontend-6b5b88b7d9-b9zcx   1/1     Running   0          92m
-$ curl -s https://eve-test.example.com/api/version
+$ curl -s https://test-eve.<public_domain>/api/version
 {"version":"5.33.0",…}
 ```
 
@@ -71,10 +71,10 @@ The mount errors look transient (re-registration race during reschedule); pod is
 
 ## App-side state (no action needed from this side until cluster heals)
 
-- Dev (`100.x.x.x:9000`) is on **v5.35.0** (latest, includes BPC cost fix + scenario profiles + reaction ME10 fix + T2 verdict split).
-- Test (`eve-test.example.com`) is on **v5.33.0**, healthy, 92 min uptime, 0 restarts. Market_history first sync ran cleanly partway (2000/4948 types when last checked). Will finish under its own paced schedule.
-- Prod (`eve-prod.example.com`) untouched, on **v5.29.0** since 2026-05-08.
-- Test bundle to roll once cluster heals: v5.34.1 (digest `d94f908`) — backend + frontend images both already pushed and tagged `:test` at `gitea.example.com/<user>/eve-tracking-jobs-{backend,frontend}`. Image-updater just needs to poll and pick them up.
+- Dev (`<dev-tailscale-ip>:9000`) is on **v5.35.0** (latest, includes BPC cost fix + scenario profiles + reaction ME10 fix + T2 verdict split).
+- Test (`test-eve.<public_domain>`) is on **v5.33.0**, healthy, 92 min uptime, 0 restarts. Market_history first sync ran cleanly partway (2000/4948 types when last checked). Will finish under its own paced schedule.
+- Prod (`eve.<public_domain>`) untouched, on **v5.29.0** since 2026-05-08.
+- Test bundle to roll once cluster heals: v5.34.1 (digest `d94f908`) — backend + frontend images both already pushed and tagged `:test` at `gitea.<local_domain>/<user>/eve-tracking-jobs-{backend,frontend}`. Image-updater just needs to poll and pick them up.
 - v5.35.0 not yet built for test/prod — would `./deploy-k8s.sh --test` once the v5.34.1 rollout completes and we can soak it.
 
 ## Resolution checklist
@@ -82,7 +82,7 @@ The mount errors look transient (re-registration race during reschedule); pod is
 - [x] `k3s-x86-2` Ready (all 6 nodes Ready by 10:14 CEST)
 - [x] Image-updater polling fresh — last cycle 07:53Z UTC then continued on 2-min cadence as gitea recovered
 - [x] Test app sync flipped from `Unknown` back to `Synced,Healthy`
-- [x] Test pods rolled to v5.34.1 — backend `eve-tracker-backend-5f4464f7dd-58rv7` 13m, frontend `eve-tracker-frontend-797f4db64c-wmqlw` 18m, both READY 1/1, 0 restarts. `curl https://eve-test.example.com/api/version` → `{"version":"5.34.1",…}`
+- [x] Test pods rolled to v5.34.1 — backend `eve-tracker-backend-5f4464f7dd-58rv7` 13m, frontend `eve-tracker-frontend-797f4db64c-wmqlw` 18m, both READY 1/1, 0 restarts. `curl https://test-eve.<public_domain>/api/version` → `{"version":"5.34.1",…}`
 - [ ] Skill cache 24h prod soak follow-up still pending (separate from this incident — see `tasks/todo.md`)
 
 ## Verification
@@ -96,7 +96,7 @@ NAME                                    READY   STATUS    RESTARTS   AGE
 eve-tracker-backend-5f4464f7dd-58rv7    1/1     Running   0          13m
 eve-tracker-frontend-797f4db64c-wmqlw   1/1     Running   0          18m
 
-$ curl -s https://eve-test.example.com/api/version
+$ curl -s https://test-eve.<public_domain>/api/version
 {"version":"5.34.1","name":"EVE Industry Tracker","buildDate":"2026-05-09"}
 ```
 

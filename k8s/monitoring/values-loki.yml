@@ -2,7 +2,7 @@
 # Helm Values: grafana/loki
 # =============================================================================
 # Single-binary Loki for Pi-hole DNS log aggregation.
-# 3-month retention, filesystem storage on a 10Gi PVC.
+# 14-day retention, filesystem storage on a 10Gi PVC.
 #
 # Install with:
 #   helm install loki grafana/loki -n monitoring -f values-loki.yml
@@ -17,7 +17,7 @@ loki:
   storage:
     type: filesystem
   limits_config:
-    retention_period: 2160h
+    retention_period: 336h   # 14 days (was 2160h/90d — capped 2026-06-05 to limit Longhorn growth on x86-1)
     # Loki has TWO stream-count limits. max_streams_per_user defaults to
     # 10000 (per-tenant); max_global_streams_per_user defaults to 5000
     # (per user-id across all ingesters) and is the ACTIVE limiter for
@@ -81,6 +81,14 @@ singleBinary:
       memory: 2Gi
   persistence:
     size: 20Gi
+    # NEVER auto-delete the PVC. The chart default renders the StatefulSet
+    # with persistentVolumeClaimRetentionPolicy whenScaled/whenDeleted:
+    # Delete — on 2026-07-12 a routine `kubectl scale sts loki --replicas=0`
+    # (to clear a stale Longhorn device node) DELETED the PVC + PV + 14 days
+    # of log history. The "scale to 0/1" RWO remedy documented for Gitea/
+    # Grafana is only safe on Deployments; with this flag the StatefulSet
+    # keeps its PVC across scale-downs too.
+    enableStatefulSetAutoDeletePVC: false
     # `longhorn-storage` SC pins replicas to the 3 storage-tagged nodes
     # (k3s-x86-1, k3s-x86-2, minisforum-c — see task #46/#53). Bumped
     # 10 -> 20 Gi 2026-05-11 for cluster pod logs + journald.
@@ -126,3 +134,9 @@ test:
 # Disable gateway (direct access)
 gateway:
   enabled: false
+
+# Sidecar image bump (2026-07-25): chart 7.1.0 still defaults kiwigrid 2.5.0 (2 CRIT CVEs)
+sidecar:
+  image:
+    repository: quay.io/kiwigrid/k8s-sidecar
+    tag: 2.8.1

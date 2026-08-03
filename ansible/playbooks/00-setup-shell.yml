@@ -18,7 +18,10 @@
   tasks:
     # -- Install packages ------------------------------------------------------
 
-    - name: Install zsh and dependencies
+    # OS-aware since 2026-07-25: the Arch/CachyOS desktops hit the apt-only
+    # path ("No such file or directory: update") when this play was extended
+    # beyond the Ubuntu fleet.
+    - name: Install zsh and dependencies (Debian family)
       ansible.builtin.apt:
         name:
           - zsh
@@ -28,9 +31,26 @@
           - fontconfig
         state: present
         update_cache: true
+      when: ansible_os_family == 'Debian'
       tags: [packages]
 
-    - name: Install eza (modern ls replacement)
+    - name: Install zsh, eza and dependencies (Arch family)
+      community.general.pacman:
+        name:
+          - zsh
+          - git
+          - curl
+          - unzip
+          - fontconfig
+          - eza
+        state: present
+      when: ansible_os_family == 'Archlinux'
+      tags: [packages]
+
+    # armv6l excluded: gierens ships no armhf/armv6 packages (rpizerow —
+    # Pi Zero W v1). The zshrc's eza aliases are guarded and fall back to
+    # plain ls there.
+    - name: Install eza (Debian family — gierens repo)
       ansible.builtin.shell: |
         if ! command -v eza &>/dev/null; then
           wget -qO- https://raw.githubusercontent.com/eza-community/eza/main/deb.asc | gpg --dearmor -o /etc/apt/keyrings/gierens.gpg
@@ -40,6 +60,7 @@
         fi
       args:
         creates: /usr/bin/eza
+      when: ansible_os_family == 'Debian' and ansible_architecture != 'armv6l'
       tags: [packages]
 
     # -- Install Oh My Posh (host-level, once) --------------------------------
@@ -87,11 +108,20 @@
       when: not item.stat.exists
       tags: [omz]
 
-    - name: Install zsh-autosuggestions plugin per user
-      ansible.builtin.git:
-        repo: https://github.com/zsh-users/zsh-autosuggestions.git
-        dest: "{{ user_homes[item] }}/.oh-my-zsh/custom/plugins/zsh-autosuggestions"
-        depth: 1
+    # As the owning user via sudo -u (same pattern as the omz install task):
+    # root-clone + later chown broke RE-runs with git "dubious ownership"
+    # (rpi-k3s-4, 2026-07-25), and module-level become_user needs acl on the
+    # target for unprivileged temp files — sudo -u avoids both.
+    - name: Install/update zsh-autosuggestions plugin per user
+      ansible.builtin.shell: |
+        DEST="{{ user_homes[item] }}/.oh-my-zsh/custom/plugins/zsh-autosuggestions"
+        if [ -d "$DEST/.git" ]; then
+          sudo -u {{ item }} git -C "$DEST" pull --ff-only >/dev/null 2>&1 && echo present
+        else
+          sudo -u {{ item }} git clone --depth 1 https://github.com/zsh-users/zsh-autosuggestions.git "$DEST" && echo cloned
+        fi
+      register: zsh_plugin
+      changed_when: "'cloned' in zsh_plugin.stdout"
       loop: "{{ shell_users }}"
       tags: [omz]
 
@@ -123,6 +153,44 @@
         mode: "0644"
       loop: "{{ shell_users }}"
       tags: [omp]
+
+    # -- Root prompt (bash + oh-my-posh, NOT zsh) ------------------------------
+    # Root keeps bash as its shell (rescue-path integrity: /bin/bash must
+    # always start, no omz/plugins running as root). This only themes the
+    # prompt: guarded init in .bashrc degrades to a plain prompt if omp or
+    # the theme file is ever missing/broken — a bashrc failure never blocks
+    # root login the way a broken login shell would.
+    - name: Ensure root theme directory exists
+      ansible.builtin.file:
+        path: /root/.config/oh-my-posh/themes
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      tags: [root-prompt]
+
+    - name: Copy atomic theme for root
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../dotfiles/oh-my-posh/atomic.omp.json"
+        dest: /root/.config/oh-my-posh/themes/atomic.omp.json
+        owner: root
+        group: root
+        mode: "0644"
+      tags: [root-prompt]
+
+    - name: Init oh-my-posh in root .bashrc (guarded)
+      ansible.builtin.blockinfile:
+        path: /root/.bashrc
+        create: true
+        owner: root
+        group: root
+        mode: "0644"
+        marker: "# {mark} oh-my-posh prompt (ansible 00-setup-shell, root-prompt)"
+        block: |
+          if command -v oh-my-posh >/dev/null 2>&1 && [ -f /root/.config/oh-my-posh/themes/atomic.omp.json ]; then
+            eval "$(oh-my-posh init bash --config /root/.config/oh-my-posh/themes/atomic.omp.json)"
+          fi
+      tags: [root-prompt]
 
     - name: Deploy .zshrc per user
       ansible.builtin.copy:

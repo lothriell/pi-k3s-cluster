@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""Page via ntfy when watched tailnet peers go offline (or local tailscaled dies).
+
+Deployed on athena by the tailscale-monitor Ansible role; run every
+{{ tailscale_monitor_check_interval_sec }}s by a systemd timer. Pages on the
+offline transition (after a grace threshold), re-pages every renotify interval
+while a peer stays down, and once on recovery — same semantics as the
+monitoring-watchdog checker.
+
+State file: JSON map of peer -> {"first_offline": epoch, "last_page": epoch}.
+A peer present in the state file is currently considered offline; recovery
+removes the entry.
+
+Also writes {{ tailscale_monitor_state_dir }}/metrics.prom, served on
+:{{ tailscale_monitor_exporter_port }} by tailscale-monitor-exporter.service
+for the in-cluster Prometheus (Grafana visibility). Alerting stays here via
+ntfy on purpose — no Prometheus rule, or every dropout would page twice.
+"""
+
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.request
+
+WATCHED = {{ tailscale_monitor_peers | to_json }}
+THRESHOLD = {{ tailscale_monitor_offline_seconds }}
+RENOTIFY = {{ tailscale_monitor_renotify_seconds }}
+STATE_FILE = "{{ tailscale_monitor_state_file }}"
+NTFY_URL = "http://localhost:{{ ntfy_port }}/{{ ntfy_k8s_alerts_topic }}"
+NTFY_USER = "{{ ntfy_alertmanager_user }}"
+NTFY_PASS = "{{ ntfy_alertmanager_password }}"
+METRICS_FILE = "{{ tailscale_monitor_state_dir }}/metrics.prom"
+
+LOCAL_KEY = "_local_tailscaled"
+
+
+def publish(title, priority, tags, body):
+    req = urllib.request.Request(NTFY_URL, data=body.encode(), method="POST")
+    req.add_header("Title", title)
+    req.add_header("Priority", priority)
+    req.add_header("Tags", tags)
+    import base64
+    auth = base64.b64encode(f"{NTFY_USER}:{NTFY_PASS}".encode()).decode()
+    req.add_header("Authorization", f"Basic {auth}")
+    try:
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as e:  # delivery failure must not crash the checker
+        print(f"ntfy publish failed: {e}", file=sys.stderr)
+
+
+def load_state():
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
+
+
+def mark_offline(state, key, now, title, body):
+    """Track an offline peer; page on threshold crossing and renotify interval."""
+    entry = state.setdefault(key, {"first_offline": now, "last_page": 0})
+    age = now - entry["first_offline"]
+    if age < THRESHOLD:
+        return
+    if entry["last_page"] == 0 or now - entry["last_page"] >= RENOTIFY:
+        still = " STILL" if entry["last_page"] else ""
+        publish(f"{title}{still} offline", "high", "warning",
+                f"{body} Offline for {int(age / 60)}m "
+                f"(threshold {THRESHOLD // 60}m). Re-paging every "
+                f"{RENOTIFY // 3600}h until recovery.")
+        entry["last_page"] = now
+
+
+def mark_online(state, key, title, body):
+    entry = state.pop(key, None)
+    if entry and entry["last_page"]:
+        publish(f"{title} recovered", "default", "white_check_mark", body)
+
+
+def write_metrics(now, local_up, online_by_peer, state):
+    lines = [
+        "# HELP tailscale_monitor_last_run_timestamp_seconds Epoch of last check run.",
+        "# TYPE tailscale_monitor_last_run_timestamp_seconds gauge",
+        f"tailscale_monitor_last_run_timestamp_seconds {now}",
+        "# HELP tailscale_local_tailscaled_up 1 if tailscale status works on the monitor host.",
+        "# TYPE tailscale_local_tailscaled_up gauge",
+        f"tailscale_local_tailscaled_up {int(local_up)}",
+        "# HELP tailscale_peer_online 1 if the watched peer is online on the tailnet.",
+        "# TYPE tailscale_peer_online gauge",
+        "# HELP tailscale_peer_offline_seconds How long the watched peer has been offline.",
+        "# TYPE tailscale_peer_offline_seconds gauge",
+    ]
+    for name, online in sorted(online_by_peer.items()):
+        offline_for = 0
+        if not online and name in state:
+            offline_for = now - state[name]["first_offline"]
+        # %-format, not f-strings: literal {braces} would clash with Jinja
+        lines.append('tailscale_peer_online{peer="%s"} %d' % (name, online))
+        lines.append('tailscale_peer_offline_seconds{peer="%s"} %d' % (name, offline_for))
+    tmp = METRICS_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.replace(tmp, METRICS_FILE)
+
+
+def main():
+    now = int(time.time())
+    state = load_state()
+
+    try:
+        out = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True, timeout=30, check=True,
+        ).stdout
+        status = json.loads(out)
+    except Exception as e:
+        mark_offline(state, LOCAL_KEY, now, "tailscaled on athena",
+                     f"'tailscale status' failed on athena ({e}). Tailnet "
+                     "peer monitoring is blind until it recovers.")
+        save_state(state)
+        write_metrics(now, False, {}, state)
+        return
+    mark_online(state, LOCAL_KEY, "tailscaled on athena",
+                "Local tailscaled is answering again; peer monitoring resumed.")
+
+    peers = {p["HostName"].lower(): p for p in status.get("Peer", {}).values()}
+    online_by_peer = {}
+    for name in WATCHED:
+        peer = peers.get(name.lower())
+        online_by_peer[name] = bool(peer and peer.get("Online"))
+        if peer is None:
+            mark_offline(state, name, now, f"Tailscale node {name}",
+                         f"{name} is not in the tailnet peer list at all "
+                         "(removed or key expired?).")
+        elif not peer.get("Online"):
+            mark_offline(state, name, now, f"Tailscale node {name}",
+                         f"{name} ({peer['TailscaleIPs'][0]}) is offline on "
+                         "the tailnet.")
+        else:
+            mark_online(state, name, f"Tailscale node {name}",
+                        f"{name} is back online on the tailnet.")
+
+    save_state(state)
+    write_metrics(now, True, online_by_peer, state)
+
+
+if __name__ == "__main__":
+    main()

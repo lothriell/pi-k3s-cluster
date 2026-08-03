@@ -72,7 +72,7 @@
             name: "{{ ca_secret_name }}"
             namespace: "{{ cert_manager_ns }}"
             annotations:
-              <local-domain>.<cf-zone>/source: "vault.yml (homielab_ca_cert / homielab_ca_key)"
+              homielab.internal/source: "vault.yml (homielab_ca_cert / homielab_ca_key)"
           stringData:
             tls.crt: "{{ homielab_ca_cert }}"
             tls.key: "{{ homielab_ca_key }}"

@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Monitoring watchdog staleness check (deployed on athena, run every minute by
+# a systemd timer). If the cluster Alertmanager heartbeat has gone stale, the
+# in-cluster alert pipeline is presumed dead — page via the LOCAL ntfy, whose
+# athena -> phone delivery path does not depend on the cluster. Pages on the
+# down transition and then RE-PAGES every watchdog_renotify_seconds while it
+# stays down (so a persistent outage can't go silent after one alert), plus
+# ONCE on recovery. STATE_FILE stores the epoch of the last page sent.
+# Templated by the monitoring-watchdog Ansible role.
+set -uo pipefail
+
+HB_FILE="{{ watchdog_heartbeat_file }}"
+STATE_FILE="{{ watchdog_state_file }}"
+THRESHOLD={{ watchdog_stale_seconds }}
+RENOTIFY={{ watchdog_renotify_seconds }}
+NTFY_URL="http://localhost:{{ ntfy_port }}/{{ ntfy_k8s_alerts_topic }}"
+NTFY_USER="{{ ntfy_alertmanager_user }}"
+NTFY_PASS="{{ ntfy_alertmanager_password }}"
+
+now=$(date +%s)
+if [ -f "$HB_FILE" ]; then
+  mtime=$(stat -c %Y "$HB_FILE")
+else
+  mtime=0
+fi
+age=$(( now - mtime ))
+
+publish() {  # $1=title $2=priority $3=tags $4=body
+  curl -fsS -u "${NTFY_USER}:${NTFY_PASS}" \
+    -H "Title: $1" -H "Priority: $2" -H "Tags: $3" \
+    -d "$4" "$NTFY_URL" >/dev/null 2>&1 || true
+}
+
+if [ "$age" -gt "$THRESHOLD" ]; then
+  last_page=0
+  [ -f "$STATE_FILE" ] && last_page=$(cat "$STATE_FILE" 2>/dev/null || echo 0)
+  # First detection (no state file) OR the re-notify interval has elapsed.
+  if [ "$last_page" -eq 0 ] || [ "$(( now - last_page ))" -ge "$RENOTIFY" ]; then
+    if [ "$last_page" -eq 0 ]; then
+      title="Monitoring is DOWN"
+    else
+      title="Monitoring STILL DOWN"
+    fi
+    publish "$title" "urgent" "rotating_light" \
+      "No Alertmanager heartbeat for $((age / 60))m (threshold $((THRESHOLD / 60))m). Prometheus/Alertmanager is likely down — cluster alerts are NOT being evaluated. Re-paging every $((RENOTIFY / 60))m until recovery. This page came from athena's external watchdog."
+    echo "$now" > "$STATE_FILE"
+  fi
+else
+  if [ -f "$STATE_FILE" ]; then
+    publish "Monitoring recovered" "default" "white_check_mark" \
+      "Alertmanager heartbeat resumed (last beat ${age}s ago). In-cluster alerting is back."
+    rm -f "$STATE_FILE"
+  fi
+fi

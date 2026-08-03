@@ -7,12 +7,12 @@ Real-time DNS query monitoring with custom alerts and 3-month searchable log ret
 ```
 athena (Docker)
 ├── Pi-hole → pihole.log (volume mounted to host)
-├── Promtail → ships ALL logs to Loki (3-month retention)
+├── Promtail → ships ALL logs to Loki (14-day retention)
 ├── ntfy → push notifications to phone
 └── pihole-dns-monitor (systemd) → pattern matching → ntfy alerts
 
 K8s cluster
-├── Loki (log aggregation, 3-month retention, 10Gi PVC)
+├── Loki (log aggregation, 14-day retention, 10Gi PVC)
 └── Grafana (Loki datasource for DNS log search)
 ```
 

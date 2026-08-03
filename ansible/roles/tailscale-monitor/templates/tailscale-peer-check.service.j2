@@ -1,0 +1,7 @@
+[Unit]
+Description=Tailscale peer offline check (pages ntfy)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tailscale-peer-check

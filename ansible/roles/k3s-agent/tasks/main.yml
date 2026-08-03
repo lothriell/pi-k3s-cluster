@@ -10,13 +10,28 @@
     mode: "0755"
   tags: [k3s, config]
 
-- name: Deploy K3s agent config.yaml (kubelet image-gc tuning)
+# The join token must be fetched HERE (not relied on as a fact from the
+# server role) so that tag-limited runs like `--tags config` still render a
+# complete config.yaml. On 2026-07-26 the template below overwrote live agent
+# configs that carried server+token (added during the v1.36 upgrade per the
+# token-loss quirk) with a template that lacked them — all 4 agents restarted
+# into `Error: --server is required` and went NotReady simultaneously.
+- name: Fetch join token from first server (config.yaml needs it)
+  ansible.builtin.slurp:
+    src: /var/lib/rancher/k3s/server/node-token
+  delegate_to: "{{ groups['k3s_server'][0] }}"
+  register: k3s_join_token_slurp
+  tags: [k3s, config]
+
+- name: Deploy K3s agent config.yaml (join config + kubelet image-gc tuning)
   ansible.builtin.template:
     src: config.yaml.j2
     dest: /etc/rancher/k3s/config.yaml
     owner: root
     group: root
     mode: "0600"
+  vars:
+    k3s_join_token: "{{ k3s_join_token_slurp.content | b64decode | trim }}"
   notify: restart k3s-agent
   tags: [k3s, config]
 

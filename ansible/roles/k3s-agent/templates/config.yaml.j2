@@ -4,6 +4,14 @@
 # K3s's install script does NOT overwrite this file, so runtime tuning
 # survives reinstalls.
 
+# --- join config ---
+# server+token MUST live here, not only in k3s-agent.service.env: the install
+# script rewrites the env file on every upgrade (token-loss quirk, CLAUDE.md),
+# and this file is the one thing it leaves alone. Removing these lines breaks
+# every agent on its next restart with `Error: --server is required`.
+server: "{{ k3s_api_url }}"
+token: "{{ k3s_join_token }}"
+
 # --- kubelet tuning ---
 # Pi agents have 32 GB eMMC, x86 agents 130 GB. Either way, the default
 # image-gc thresholds (85%/80%) trigger too late; ArgoCD Image Updater

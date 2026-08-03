@@ -40,11 +40,14 @@ x86_node_ip_2: 10.0.0.22
 
 # SFF node IPs
 sff_athena_ip: 10.0.0.30
+
+# Display/infotainment nodes
+display_rpizerow_ip: 10.0.0.60
 sff_artemis_ip: 10.0.0.31
 sff_minisforum_ip: 10.0.0.32
 
 # GPU server IP
-gpu_node_ip_1: 10.0.0.40
+# (gpu_node_ip_1 removed 2026-07-24 — the GPU box IS minisforum-c / sff_minisforum_ip)
 
 # Wazuh manager IP
 wazuh_manager_ip: 10.0.0.50
@@ -61,7 +64,22 @@ tailscale_arch_t_01: 100.x.x.x
 tailscale_cachy_t_01: 100.x.x.x
 tailscale_macmini: 100.x.x.x
 tailscale_wazuh_server: 100.x.x.x
-tailscale_thor: 100.x.x.x   # Windows 11 host with WSL+SSH; CA pushed via WSL interop
+tailscale_thorwsl: 100.64.0.15
+# Fleet tailnet IPs for the distributed ssh aliases (00-setup-ssh-aliases.yml)
+tailscale_rpi1: 100.64.0.11
+tailscale_rpi2: 100.64.0.12
+tailscale_rpi3: 100.64.0.13
+tailscale_rpi4: 100.64.0.14
+tailscale_minisforum: 100.64.0.20
+tailscale_x86_1: 100.64.0.21
+tailscale_x86_2: 100.64.0.22
+tailscale_athena: 100.64.0.30
+tailscale_artemis: 100.64.0.31
+# LAN IPs used only by the ssh-alias template
+macmini_lan_ip: 10.0.0.12
+pve_lan_ip: 10.0.0.10
+desktop_arch_t_lan_ip: 10.0.0.50
+desktop_cachy_t_lan_ip: 10.0.0.51
 
 # Cloudflare tunnel domain
 cloudflare_domain: example.com
@@ -84,6 +102,16 @@ ntfy_topic: "dns-alerts"
 ntfy_base_url: "https://ntfy.yourdomain.com"
 ntfy_k8s_alerts_topic: "k8s-alerts"
 
+# Monitoring dead-man's-switch (external watchdog on athena, role
+# monitoring-watchdog + playbook 15). Cluster Alertmanager re-POSTs the
+# always-firing Watchdog alert here every ~1 min; athena pages via ntfy if the
+# heartbeats stop. The host MUST be athena's TAILNET IP — cluster pods route to
+# 100.x via the node's tailscaled (same path Prometheus uses to scrape
+# Syncthing); a LAN/VLAN IP is less robust across network changes.
+watchdog_athena_host: "100.x.y.z"   # athena tailnet IP
+watchdog_receiver_port: 8099
+watchdog_stale_seconds: 300         # page if no heartbeat for 5 min
+
 # Cloudflare R2 — backup target (credentials in vault.yml)
 r2_account_id: "your-cloudflare-account-id"
 r2_backup_bucket: "k8sbkp"
@@ -95,4 +123,9 @@ r2_endpoint_url: "https://{{ r2_endpoint_host }}"
 # See memory project_syncthing.md for the auto-start strategy per host.
 syncthing_macair_tsip: 100.x.x.x
 syncthing_macmini_tsip: 100.x.x.x
-syncthing_thor1_tsip: 100.x.x.x
+syncthing_thorwsl_tsip: 100.x.x.x
+
+# Proxmox hypervisor (remote site)
+pve_host_ip: 100.64.0.99
+# MAC of the pve uplink NIC (vmbr0 bridge port) — used by bridge-selfheal
+pve_uplink_mac: "aa:bb:cc:dd:ee:ff"

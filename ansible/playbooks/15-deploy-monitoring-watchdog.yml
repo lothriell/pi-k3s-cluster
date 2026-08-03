@@ -1,0 +1,26 @@
+---
+# Playbook 15: Deploy the external monitoring dead-man's-switch on athena.
+#
+# This is the half of the watchdog that lives OUTSIDE the cluster. The cluster
+# half (an always-firing "Watchdog" alert + an Alertmanager heartbeat route)
+# lives in k8s/monitoring/values-prometheus.yml.j2 and ships with the
+# Prometheus deploy:
+#
+#   ansible-playbook ansible/playbooks/04-deploy-monitoring.yml --tags prometheus
+#
+# Flow: cluster Alertmanager re-POSTs the Watchdog alert to athena every ~1 min
+# -> receiver bumps a heartbeat file -> a 1-min timer pages ntfy if that file
+# goes stale (Prometheus/Alertmanager dead). athena -> phone delivery does not
+# depend on the cluster, so it fires even in a full cluster outage. This closes
+# the gap that hid the 2026-05-28 6-day Prometheus disk-full outage (no alert
+# could fire because the thing that fires alerts was the thing that died).
+#
+# Usage:
+#   ansible-playbook ansible/playbooks/15-deploy-monitoring-watchdog.yml
+#   make watchdog
+
+- name: Deploy monitoring dead-man's-switch on athena
+  hosts: athena
+  become: false
+  roles:
+    - role: ../roles/monitoring-watchdog

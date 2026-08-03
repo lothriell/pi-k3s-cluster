@@ -17,9 +17,18 @@ ZSH_DISABLE_COMPFIX=true
 # Aliases
 alias suroot='sudo -E -s'
 alias lla='ls -la'
-alias ls='eza --icons --group-directories-first'
-alias ll='eza -l --icons --no-user --group-directories-first  --time-style long-iso'
-alias la='eza -la --icons --no-user --group-directories-first  --time-style long-iso'
+# eza guarded: no armv6 build exists (rpizerow) — fall back to plain ls
+if command -v eza >/dev/null 2>&1; then
+  alias ls='eza --icons --group-directories-first'
+  alias ll='eza -l --icons --no-user --group-directories-first  --time-style long-iso'
+  alias la='eza -la --icons --no-user --group-directories-first  --time-style long-iso'
+else
+  alias ll='ls -l'
+  alias la='ls -la'
+fi
 
-# Oh My Posh prompt
-eval "$(oh-my-posh init zsh --config ~/.config/oh-my-posh/themes/atomic.omp.json)"
+# Oh My Posh prompt (guarded — degrade to the omz fallback theme rather than
+# erroring on every shell start if the binary is missing or can't run)
+if command -v oh-my-posh >/dev/null 2>&1 && oh-my-posh version >/dev/null 2>&1; then
+  eval "$(oh-my-posh init zsh --config ~/.config/oh-my-posh/themes/atomic.omp.json)"
+fi

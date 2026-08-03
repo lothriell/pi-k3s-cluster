@@ -1,0 +1,311 @@
+---
+# =============================================================================
+# Proxmox host patching (task #68).
+# =============================================================================
+# Default run: userspace-only apt dist-upgrade — safe with VMs running (a new
+# kernel is staged on disk but NOT activated). Imported at the end of
+# 80-upgrade-packages.yml so fleet sweeps keep the host patched.
+#
+#   ansible-playbook ansible/playbooks/81-upgrade-proxmox.yml
+#
+# Reboot window (activates a staged kernel — takes down k3s-x86-1, k3s-x86-2,
+# wazuh AND the desktop VMs simultaneously; plan it):
+#
+#   ansible-playbook ansible/playbooks/81-upgrade-proxmox.yml -e reboot=true
+#
+# Window procedure codified from the 2026-07-25 window + incident
+# (docs/incidents/2026-07-25-proxmox-nic-outage.md):
+#   pre-flight (Longhorn health, replica-placement audit, backup freshness,
+#   onboot=1 on critical VMs) → cordon+drain pve-hosted K3s nodes →
+#   qm shutdown all VMs → reboot host → critical VMs autostart → nodes Ready
+#   → UNCORDON IMMEDIATELY (a cordoned node can't respawn Longhorn
+#   instance-managers, which stalls volume salvage) → Longhorn health gate.
+#
+# If volume salvage stalls after the reboot (seen twice on 2026-07-25): stale
+# instance-manager CRs with dead pod IPs block attachment. Manual fix: delete
+# the IM pods AND their CRs in longhorn-system (one may need --force), then
+# recycle any longhorn-manager pods reporting NodeStatusUnknown.
+# =============================================================================
+
+- name: Proxmox host patching (userspace default; -e reboot=true for window)
+  hosts: proxmox_hosts
+  become: true
+  vars:
+    do_reboot: "{{ reboot | default(false) | bool }}"
+    # -e placement_override=true runs the window even though some volume would
+    # lose ALL its replicas while the host is down (accepted-fault mode).
+    placement_ok_override: "{{ placement_override | default(false) | bool }}"
+    # Kubernetes node names of the K3s VMs on this host (= inventory names).
+    pve_k3s_nodes: [k3s-x86-1, k3s-x86-2]
+    # VMs that MUST autostart after a host reboot: 110/111 = k3s pair, 112 = wazuh.
+    # Desktop VMs (104/105) are shut down too but autostart is not asserted.
+    pve_critical_vmids: [110, 111, 112]
+  tasks:
+    # ------------------------------------------------------------------------
+    # Always: keep the uplink self-heal units codified. Planted manually
+    # during the 2026-07-25 incident (kernel upgrade renamed the NICs and
+    # e1000e link-flapped under the new kernel); managed here so a host
+    # reinstall gets them back.
+    # ------------------------------------------------------------------------
+    - name: Install bridge-selfheal script (e1000e unit-hang mitigation)
+      ansible.builtin.template:
+        src: templates/bridge-selfheal.sh.j2
+        dest: /usr/local/sbin/bridge-selfheal.sh
+        mode: "0755"
+      when: pve_uplink_mac is defined
+
+    - name: Install bridge-selfheal systemd units
+      ansible.builtin.template:
+        src: "templates/{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: "0644"
+      loop:
+        - bridge-selfheal.service
+        - bridge-selfheal.timer
+      when: pve_uplink_mac is defined
+      register: selfheal_units
+
+    - name: Enable + start bridge-selfheal timer
+      ansible.builtin.systemd:
+        name: bridge-selfheal.timer
+        enabled: true
+        state: started
+        daemon_reload: "{{ selfheal_units.changed | default(false) }}"
+      when: pve_uplink_mac is defined
+
+    # ------------------------------------------------------------------------
+    # Userspace patching — Proxmox needs dist-upgrade (plain upgrade can hold
+    # back pve-* meta-packages and break dependencies).
+    # ------------------------------------------------------------------------
+    - name: apt update + dist-upgrade (kernel staged, not activated)
+      ansible.builtin.apt:
+        update_cache: yes
+        upgrade: dist
+        autoremove: yes
+        autoclean: yes
+
+    - name: Detect newest installed kernel
+      ansible.builtin.shell: ls -1 /boot/vmlinuz-* | sed 's/.*vmlinuz-//' | sort -V | tail -1
+      register: newest_kernel
+      changed_when: false
+
+    - name: Report kernel status
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'Kernel ' + newest_kernel.stdout + ' STAGED (running ' + ansible_kernel
+             + '). Activate in a planned window: -e reboot=true'
+             if newest_kernel.stdout != ansible_kernel
+             else 'Running kernel ' + ansible_kernel + ' is current — no reboot pending.' }}
+
+    # ------------------------------------------------------------------------
+    # Reboot window
+    # ------------------------------------------------------------------------
+    - name: Reboot window (kernel activation)
+      when: do_reboot
+      block:
+        - name: Pre-flight — wait for all Longhorn volumes healthy
+          delegate_to: localhost
+          become: false
+          ansible.builtin.shell: >
+            kubectl get volumes.longhorn.io -n longhorn-system -o json
+            | jq '[.items[] | select(.status.robustness == "degraded" or .status.robustness == "faulted")] | length'
+          register: lh_pre
+          until: lh_pre.stdout | trim == "0"
+          retries: 60
+          delay: 10
+          changed_when: false
+
+        # 2026-07-25 amplification guard: replica replenishment after a node
+        # outage can silently concentrate BOTH replicas of a volume onto the
+        # x86 pair — this host then takes the whole volume down with it
+        # (11/13 volumes faulted that day). Audit placement, not just health.
+        - name: Pre-flight — replica-placement audit
+          delegate_to: localhost
+          become: false
+          ansible.builtin.shell: >
+            kubectl get replicas.longhorn.io -n longhorn-system -o json
+            | jq -r --argjson pve '{{ pve_k3s_nodes | to_json }}'
+              '[.items | group_by(.spec.volumeName)[]
+                | select(all(.[]; .spec.nodeID as $n | $pve | index($n) != null))
+                | .[0].spec.volumeName] | join(",")'
+          register: concentrated
+          changed_when: false
+
+        - name: Abort — volumes would lose ALL replicas during the window
+          ansible.builtin.fail:
+            msg: >-
+              All replicas on {{ pve_k3s_nodes | join('/') }} for:
+              {{ concentrated.stdout }}. Re-spread first, or accept the fault
+              with -e placement_override=true.
+          when:
+            - concentrated.stdout | trim | length > 0
+            - not placement_ok_override
+
+        # Only live volumes: BackupVolume CRs for long-deleted volumes linger
+        # in the backup store and would flag noise on every window.
+        - name: Pre-flight — check R2 backup freshness (warn only)
+          delegate_to: localhost
+          become: false
+          ansible.builtin.shell: >
+            live=$(kubectl get volumes.longhorn.io -n longhorn-system -o json
+            | jq -c '[.items[].metadata.name]');
+            kubectl get backupvolumes.longhorn.io -n longhorn-system -o json
+            | jq -r --argjson live "$live"
+              '[.items[] | select(.spec.volumeName as $v | $live | index($v))
+                | select(.status.lastBackupAt != null and
+                  (.status.lastBackupAt | fromdateiso8601) < (now - 172800))
+                | .spec.volumeName] | join(",")'
+          register: stale_backups
+          changed_when: false
+          failed_when: false
+
+        - name: WARN — volumes without an R2 backup in the last 48h
+          ansible.builtin.debug:
+            msg: "Stale backups (consider a manual backup before proceeding): {{ stale_backups.stdout }}"
+          when: stale_backups.stdout | trim | length > 0
+
+        # onboot is NOT a Proxmox default — it was unset on all three critical
+        # VMs when the 2026-07-25 pre-flight caught it. Enforce, don't assert.
+        - name: Enforce onboot=1 on critical VMs
+          ansible.builtin.command: qm set {{ item }} --onboot 1
+          loop: "{{ pve_critical_vmids }}"
+          changed_when: false
+
+        - name: Record running VMs
+          ansible.builtin.shell: qm list | awk 'NR>1 && $3=="running" {print $1}'
+          register: running_vms
+          changed_when: false
+
+        # Drain BEFORE shutdown: evicts pods and detaches Longhorn volumes
+        # while the engines are still alive (same rationale as playbook 80).
+        # Longhorn's PDB blocks instance-manager eviction while it hosts the
+        # last healthy replica of an attached volume, so drain exits non-zero
+        # with only IM/DaemonSet pods left — that's expected; verified next.
+        - name: Cordon + drain pve-hosted K3s nodes
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - drain
+              - "{{ item }}"
+              - --ignore-daemonsets
+              - --delete-emptydir-data
+              - --timeout=600s
+          loop: "{{ pve_k3s_nodes }}"
+          register: drained
+          changed_when: true
+          failed_when: false
+
+        - name: Verify only DaemonSet/Longhorn pods remain on drained nodes
+          delegate_to: localhost
+          become: false
+          ansible.builtin.shell: >
+            kubectl get pods -A --field-selector spec.nodeName={{ item }} -o json
+            | jq '[.items[]
+              | select(.metadata.namespace != "kube-system" and .metadata.namespace != "longhorn-system")
+              | select(([.metadata.ownerReferences[]?.kind] | index("DaemonSet")) | not)
+              | select(.status.phase == "Running" or .status.phase == "Pending")] | length'
+          loop: "{{ pve_k3s_nodes }}"
+          register: node_pods
+          until: node_pods.stdout | trim == "0"
+          retries: 30
+          delay: 10
+          changed_when: false
+
+        - name: Graceful shutdown of all running VMs
+          ansible.builtin.command: qm shutdown {{ item }} --timeout 300
+          loop: "{{ running_vms.stdout_lines }}"
+          changed_when: true
+          failed_when: false
+
+        - name: Wait until no VMs are running
+          ansible.builtin.shell: qm list | awk 'NR>1 && $3=="running"' | wc -l
+          register: still_running
+          until: still_running.stdout | trim == "0"
+          retries: 36
+          delay: 10
+          changed_when: false
+
+        - name: Reboot Proxmox host (kernel activation)
+          ansible.builtin.reboot:
+            msg: "Planned window reboot (81-upgrade-proxmox)"
+            pre_reboot_delay: 5
+            post_reboot_delay: 60
+            reboot_timeout: 1200
+
+        - name: Wait for critical VMs to autostart
+          ansible.builtin.shell: |
+            for id in {{ pve_critical_vmids | join(' ') }}; do
+              qm status $id | grep -q running || exit 1
+            done
+          register: vms_up
+          until: vms_up.rc == 0
+          retries: 60
+          delay: 10
+          changed_when: false
+
+        - name: List running VMs post-reboot
+          ansible.builtin.shell: qm list | awk 'NR>1 && $3=="running" {print $1}'
+          register: running_vms_post
+          changed_when: false
+
+        - name: Report VMs running before the window that did not come back
+          ansible.builtin.debug:
+            msg: >-
+              Not autostarted (onboot unset — start manually if wanted):
+              {{ running_vms.stdout_lines | difference(running_vms_post.stdout_lines) }}
+          when: running_vms.stdout_lines | difference(running_vms_post.stdout_lines) | length > 0
+
+        - name: Wait for K3s nodes Ready
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - wait
+              - node
+              - "{{ item }}"
+              - --for=condition=Ready
+              - --timeout=600s
+          loop: "{{ pve_k3s_nodes }}"
+          register: node_ready
+          until: node_ready.rc == 0
+          retries: 3
+          changed_when: false
+
+        # Recovery order matters (user-spotted on 2026-07-25): a cordoned node
+        # can't respawn Longhorn instance-managers, and without IMs faulted
+        # volumes can't salvage. Uncordon FIRST, then gate on volume health.
+        - name: Uncordon nodes immediately (unblocks Longhorn IM respawn)
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - uncordon
+              - "{{ item }}"
+          loop: "{{ pve_k3s_nodes }}"
+          changed_when: true
+
+        - name: Wait for all Longhorn volumes healthy (salvage + rebuild gate)
+          delegate_to: localhost
+          become: false
+          ansible.builtin.shell: >
+            kubectl get volumes.longhorn.io -n longhorn-system -o json
+            | jq '[.items[] | select(.status.robustness == "degraded" or .status.robustness == "faulted")] | length'
+          register: lh_post
+          until: lh_post.stdout | trim == "0"
+          # 60 min: cross-site delta resyncs legitimately take this long.
+          # If stuck: stale IM CR purge — see header comment.
+          retries: 360
+          delay: 10
+          changed_when: false
+
+        - name: Verify wazuh guest agent responds
+          ansible.builtin.command: qm guest cmd 112 ping
+          register: wazuh_ping
+          until: wazuh_ping.rc == 0
+          retries: 30
+          delay: 10
+          changed_when: false

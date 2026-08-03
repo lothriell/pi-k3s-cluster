@@ -42,6 +42,89 @@
   failed_when: false
   tags: [tailscale]
 
+# ----------------------------------------------------------------------------
+# NetworkManager interactions with Tailscale (NM-managed nodes only).
+#
+# On NM-managed nodes (the CachyOS/Arch agent minisforum-c) NetworkManager
+# causes two distinct Tailscale problems. Both fixed here, gated to hosts where
+# NM is the active manager so it's a no-op on the systemd-networkd/netplan
+# Ubuntu nodes. Applied + verified live on minisforum-c 2026-07-04/05.
+#
+# 1. MagicDNS: NM writes a static /etc/resolv.conf (nameserver 127.0.0.53) but
+#    does NOT defer DNS to systemd-resolved, so Tailscale can't install split-DNS
+#    and flags "systemd-resolved and NetworkManager are wired together
+#    incorrectly; MagicDNS will probably not work". On a network change NM can
+#    also clobber the resolved config. Fix (tailscale.com/s/resolved-nm): set
+#    NM's dns backend to systemd-resolved + symlink resolv.conf to the stub.
+#
+# 2. Connectivity-check churn: NM's periodic connectivity check (default URI
+#    http://ping.archlinux.org/nm-check.txt) probes EVERY interface including
+#    tailscale0, binding to the tailnet IP and dialing a public IP that
+#    tailscaled's netstack can't route -> endless
+#    "open-conn-track: timeout ... no associated peer node" log churn (~48
+#    lines/hr, 24/7). Marking tailscale0 `unmanaged` does NOT stop it (the
+#    connectivity prober ignores managed-state). Fix: disable NM's connectivity
+#    check — a headless/server node doesn't need captive-portal detection. Also
+#    mark tailscale0 unmanaged so NM never touches the Tailscale TUN.
+# ----------------------------------------------------------------------------
+- name: Detect whether NetworkManager manages this node
+  ansible.builtin.command: systemctl is-active NetworkManager
+  register: nm_active
+  changed_when: false
+  failed_when: false
+  tags: [tailscale, magicdns]
+
+- name: Fix NetworkManager interactions with Tailscale (NM-managed nodes)
+  when: nm_active.stdout == "active"
+  block:
+    - name: NM defers DNS resolution to systemd-resolved
+      ansible.builtin.copy:
+        dest: /etc/NetworkManager/conf.d/10-tailscale-resolved.conf
+        content: |
+          [main]
+          dns=systemd-resolved
+        owner: root
+        group: root
+        mode: "0644"
+      register: nm_dns_conf
+
+    - name: Point /etc/resolv.conf at the systemd-resolved stub
+      ansible.builtin.file:
+        src: /run/systemd/resolve/stub-resolv.conf
+        dest: /etc/resolv.conf
+        state: link
+        force: true
+      register: resolv_link
+
+    - name: NM leaves the tailscale0 TUN unmanaged
+      ansible.builtin.copy:
+        dest: /etc/NetworkManager/conf.d/20-tailscale-unmanaged.conf
+        content: |
+          [keyfile]
+          unmanaged-devices=interface-name:tailscale0
+        owner: root
+        group: root
+        mode: "0644"
+      register: nm_unmanaged
+
+    - name: Disable NM connectivity check (stops tailscale0 netstack churn)
+      ansible.builtin.copy:
+        dest: /etc/NetworkManager/conf.d/30-disable-connectivity-check.conf
+        content: |
+          [connectivity]
+          enabled=false
+          interval=0
+        owner: root
+        group: root
+        mode: "0644"
+      register: nm_connectivity
+
+    - name: Reload NetworkManager to apply the changes
+      ansible.builtin.command: systemctl reload NetworkManager
+      when: nm_dns_conf.changed or resolv_link.changed or nm_unmanaged.changed or nm_connectivity.changed
+      changed_when: true
+  tags: [tailscale, magicdns]
+
 # Cluster nodes must NOT accept tailnet routes. If they do, LAN traffic gets
 # routed through the tailnet and breaks Flannel, MetalLB ARP, and inter-node
 # networking. We pass --accept-routes=false explicitly below and assert the

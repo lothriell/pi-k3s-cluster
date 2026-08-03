@@ -1,0 +1,48 @@
+---
+# tailscale-monitor: pages via ntfy when always-on tailnet nodes go offline.
+#
+# Runs on athena (same box as ntfy + the monitoring watchdog) because its
+# athena -> phone delivery path does not depend on the cluster. Motivating
+# incident: Artemis dropped off the tailnet for 50 days (UniFi port VLAN
+# change, 2026-05-22 -> 2026-07-11) and nothing noticed until an SSH sweep.
+#
+# The checker also pages if the LOCAL tailscaled is dead ("tailscale status"
+# fails) — in that state peer visibility is gone, which is itself an outage.
+#
+# Watched peers: always-on infrastructure only. Laptops/desktops that sleep
+# legitimately (arch-t-01, cachy-t-01, macbook) are deliberately excluded.
+# Names match tailnet HostName case-insensitively.
+tailscale_monitor_peers:
+  - rpi-k3s-1
+  - rpi-k3s-2
+  - rpi-k3s-3
+  - rpi-k3s-4
+  - k3s-x86-1
+  - k3s-x86-2
+  - minisforum-c
+  - macminis
+  - wazuh-server
+  - artemis
+
+# Page only after a peer has been offline this long. Keep comfortably above
+# a single reboot cycle so the rolling-upgrade playbook (80-upgrade-packages)
+# doesn't page for every node it reboots.
+tailscale_monitor_offline_seconds: 900   # 15 min
+
+# Re-page cadence while a peer stays offline (so a lasting outage can't go
+# silent after one alert), and once on recovery.
+tailscale_monitor_renotify_seconds: 14400  # 4 h
+
+tailscale_monitor_check_interval_sec: 300  # timer cadence
+
+tailscale_monitor_state_dir: /var/lib/tailscale-monitor
+tailscale_monitor_state_file: "{{ tailscale_monitor_state_dir }}/peers.state.json"
+
+# The checker also writes metrics.prom to the state dir; a tiny HTTP service
+# serves it on this port for the in-cluster Prometheus (Grafana visibility).
+# Scrape job: values-prometheus.yml.j2 `tailscale-monitor`, which targets
+# athena's LAN IP — NOT the tailnet IP, so metrics survive tailscaled dying.
+tailscale_monitor_exporter_port: 9925
+
+# Local ntfy server port on athena (mirrors monitoring-watchdog's default).
+ntfy_port: 8080

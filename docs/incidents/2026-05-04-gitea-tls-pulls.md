@@ -4,8 +4,8 @@
 **Severity:** High
 **Opened:** 2026-05-04 ~14:00 CEST (during `eve-tracker-test` v5.21.0 deploy)
 **Resolved:** 2026-05-04 ~17:30 CEST
-**Discovered by:** sann + Claude (eve-tracking-jobs session)
-**Resolved by:** sann + Claude (cert-manager session) — commit `4cf6fae`
+**Discovered by:** <user> + Claude (eve-tracking-jobs session)
+**Resolved by:** <user> + Claude (cert-manager session) — commit `4cf6fae`
 **Impact:** Any K8s deployment that triggered a fresh image pull from `gitea.<local-domain>` failed with `ImagePullBackOff`. Pods scheduled before the regression kept running on cached images, so the cluster *looked* healthy until something restarted. eve-tracker-test was hard-down (502); prod eve-tracker was running but fragile.
 
 ## Symptom

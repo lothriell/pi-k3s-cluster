@@ -15,6 +15,12 @@
 etcd-arg:
   - "max-request-bytes=4194304"
 
+# Expose etcd server metrics on 0.0.0.0:2381 (default is 127.0.0.1 only) so
+# Prometheus can scrape fsync/apply latency and DB size — Pi eMMC is marginal
+# for etcd and disk pressure must be visible before it breaks leases
+# (2026-07-23 kube-vip incident, 2026-07-26 snapshot-suicide finding).
+etcd-expose-metrics: true
+
 # --- kubelet tuning ---
 # Pi nodes have 32 GB eMMC. Default image-gc thresholds (85%/80%) trigger
 # too late; ArgoCD Image Updater churn fills /var/lib/rancher/k3s/agent/
@@ -33,6 +39,12 @@ etcd-s3-secret-key: "{{ r2_secret_access_key }}"
 etcd-s3-endpoint: "{{ r2_endpoint_host }}"
 etcd-s3-bucket: "{{ r2_backup_bucket }}"
 etcd-s3-folder: "k3s-etcd-snapshots"
-etcd-snapshot-schedule-cron: "0 */6 * * *"
+# Staggered per server (:00/:20/:40). With all three snapshotting at the same
+# instant, the combined snapshot-stream + WAL-fsync I/O on eMMC stalled etcd
+# applies >10 s; the server holding the k3s-cloud-controller-manager lease
+# then failed its renew and k3s exited by design ("leaderelection lost"),
+# orphaning the .part snapshot and skipping the S3 upload (2026-07-26 06:00,
+# rpi-k3s-3). NOTE: k3s interprets this cron in node-local time.
+etcd-snapshot-schedule-cron: "{{ groups['k3s_server'].index(inventory_hostname) * 20 }} */6 * * *"
 etcd-snapshot-retention: 12
 {% endif %}

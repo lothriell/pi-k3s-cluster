@@ -35,6 +35,10 @@ metadata:
   namespace: open-webui
 spec:
   replicas: 1
+  # RWO Longhorn PVC: RollingUpdate deadlocks on the volume — Recreate, like
+  # every other single-replica stateful app here (gitea, grafana, vaultwarden).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: open-webui
@@ -58,7 +62,7 @@ spec:
       # Accepts 1 × KSV-0014 finding on open-webui.
       containers:
         - name: open-webui
-          image: ghcr.io/open-webui/open-webui:v0.8.12
+          image: ghcr.io/open-webui/open-webui:v0.11.0
           ports:
             - containerPort: 8080
           env:

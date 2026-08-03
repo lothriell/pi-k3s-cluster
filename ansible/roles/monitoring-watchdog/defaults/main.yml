@@ -1,0 +1,26 @@
+---
+# monitoring-watchdog: external dead-man's-switch on athena.
+#
+# Cluster Alertmanager re-sends an always-firing "Watchdog" alert to the
+# receiver below every ~1 min. The checker timer pages via ntfy if those
+# heartbeats stop (= Prometheus/Alertmanager is down and the in-cluster alert
+# pipeline can no longer page on its own). athena -> phone delivery does NOT
+# depend on the cluster, so this fires even in a full cluster outage.
+#
+# watchdog_athena_host / watchdog_receiver_port / watchdog_stale_seconds are
+# defined in group_vars/all/main.yml because the cluster-side Alertmanager
+# webhook URL (rendered by playbook 04 into values-prometheus.yml.j2) needs
+# the host + port too. Defaults here are fallbacks if those are unset.
+watchdog_receiver_port: 8099
+watchdog_stale_seconds: 300        # page if no heartbeat for 5 min (~5 missed beats)
+watchdog_check_interval_sec: 60    # checker timer cadence
+watchdog_renotify_seconds: 3600    # re-page every hour while monitoring stays down
+
+watchdog_state_dir: /var/lib/monitoring-watchdog
+watchdog_heartbeat_file: "{{ watchdog_state_dir }}/heartbeat"
+watchdog_state_file: "{{ watchdog_state_dir }}/down.state"
+
+# Local ntfy server port on athena (mirrors pihole-monitor's default — the
+# checker publishes the down/recovery page to localhost). Override here if the
+# ntfy container is mapped to a different host port.
+ntfy_port: 8080

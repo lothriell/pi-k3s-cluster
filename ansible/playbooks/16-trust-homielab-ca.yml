@@ -221,11 +221,23 @@
       ansible.builtin.debug:
         msg: "{{ inventory_hostname }} → Windows user: {{ winuser.stdout }}"
 
-    - name: Copy CA cert into Windows-side filesystem
+    # Plain cp, NOT ansible.builtin.copy: copy writes the file then chmods
+    # it, and WSL's drvfs (mounted without `metadata`) rejects attribute
+    # changes with EPERM — the file lands but the task fails (hit 2026-07-12
+    # and again 2026-07-27). NTFS ACLs govern the file anyway; mode-setting
+    # on /mnt/c is meaningless.
+    - name: Stage CA cert on the WSL side
       ansible.builtin.copy:
         src: "{{ cert_path }}"
-        dest: "/mnt/c/Users/{{ winuser.stdout }}/homielab-ca.crt"
+        dest: /tmp/homielab-ca.crt
         mode: "0644"
+
+    - name: Copy CA cert into Windows-side filesystem (drvfs — no chmod)
+      ansible.builtin.shell: |
+        cmp -s /tmp/homielab-ca.crt "/mnt/c/Users/{{ winuser.stdout }}/homielab-ca.crt" && echo unchanged && exit 0
+        cat /tmp/homielab-ca.crt > "/mnt/c/Users/{{ winuser.stdout }}/homielab-ca.crt" && echo copied
+      register: win_cert_copy
+      changed_when: "'copied' in win_cert_copy.stdout"
 
     - name: Check current CurrentUser\Root trust state
       ansible.builtin.command:

@@ -14,7 +14,7 @@
 # Signups are disabled — create your account via the admin panel, then
 # invite yourself / trusted users from there.
 image:
-  tag: "1.34.3-alpine"
+  tag: "1.37.0-alpine"
 
 # Let the Vaultwarden alpine image default UID own /data via fsGroup.
 # The alpine image uses uid/gid 1000 by default but the chart does not set

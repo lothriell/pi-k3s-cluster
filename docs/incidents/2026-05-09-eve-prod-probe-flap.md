@@ -99,9 +99,9 @@ Recommended: **Option 1 (probe timeout bump) right now** as a hotfix while we ev
 
 ## App-side state (post-mitigation)
 
-- Prod (`eve-prod.example.com`) is on **v5.35.3**, healthy, serving traffic. Pod `69f4ddb5c9-gwcl6` cleared boot Jita aggregation (T+5-6min), market_history first sync (T+18min), contract scrape kickoff (T+25min), and steady-state hub refresh cycle (T+30min, concurrent with contract scrape) — all 0 restarts, 0 new Unhealthy events.
-- Test (`eve-test.example.com`) is on **v5.35.3**.
-- Dev (`100.x.x.x:9000`) is on **v5.35.3**.
+- Prod (`eve.<public_domain>`) is on **v5.35.3**, healthy, serving traffic. Pod `69f4ddb5c9-gwcl6` cleared boot Jita aggregation (T+5-6min), market_history first sync (T+18min), contract scrape kickoff (T+25min), and steady-state hub refresh cycle (T+30min, concurrent with contract scrape) — all 0 restarts, 0 new Unhealthy events.
+- Test (`test-eve.<public_domain>`) is on **v5.35.3**.
+- Dev (`<dev-tailscale-ip>:9000`) is on **v5.35.3**.
 - Bundle deployed: v5.30→v5.35.3 (Production Opportunities matrix + market_history + dedup, My Blueprints, BPO Collector, sidebar+dashboard UX, BPC cost in advanced margins, Build Planner profiles, reaction ME10 fix, T2 verdict split, tech-tier filter chips, plus three boot-stability fixes from this incident).
 
 ## Files touched
@@ -122,7 +122,7 @@ Cluster confirmed clean: 14/14 hosts upgraded today (fleet upgrade ran 80-upgrad
 1. **Hotfix now (option 1 from above):** in the `eve-tracker-k8s` repo, bump backend liveness `timeoutSeconds` from 5 → 10. Bump readiness `timeoutSeconds` to 10 too — both were flapping per the events log.
    - Edit in `base/deployment.yml` (or wherever the backend probe block lives). If only prod is affected, do it in `overlays/prod/` patch instead — but symmetry across overlays is usually less surprising than per-env divergence.
    - Push via Gitea SSH NodePort 30022 (per `reference_manifest_repo_push.md` in eve memory).
-   - ArgoCD will roll within ~30s of the push. Confirm: `kubectl get pods -n eve-tracker -w` until new pod is Ready 1/1, then `curl -s https://eve-prod.example.com/api/version` shows v5.35.1 with restart count back to 0 on the new pod.
+   - ArgoCD will roll within ~30s of the push. Confirm: `kubectl get pods -n eve-tracker -w` until new pod is Ready 1/1, then `curl -s https://eve.<public_domain>/api/version` shows v5.35.1 with restart count back to 0 on the new pod.
    - This matches the established cluster-side pattern in `feedback_nodejs_probe_timeouts.md` (bump to 5s was right for the lighter case; prod's 9-hub × 324K-order boot needs 10s).
 
 2. **Watch the next two refresh boundaries** (~18:30 / 19:00 UTC) before considering this resolved. Restart count should stay at 1 forever. If it climbs, hotfix wasn't sufficient → escalate to option 3 (chunked aggregation in cacheRefresh).

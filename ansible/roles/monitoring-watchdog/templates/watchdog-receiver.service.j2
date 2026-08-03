@@ -1,0 +1,17 @@
+[Unit]
+Description=Monitoring watchdog heartbeat receiver (cluster Alertmanager -> touch file)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Touch on start so an athena reboot resets the staleness clock (combined with
+# the timer's OnBootSec grace) instead of firing a false "monitoring down".
+ExecStartPre=/usr/bin/install -d -m 0755 {{ watchdog_state_dir }}
+ExecStartPre=/usr/bin/touch {{ watchdog_heartbeat_file }}
+ExecStart=/usr/local/bin/monitoring-watchdog-receiver
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

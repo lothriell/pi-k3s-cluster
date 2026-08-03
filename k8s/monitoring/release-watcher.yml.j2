@@ -1,0 +1,212 @@
+# =============================================================================
+# release-watcher — weekly digest of pending upstream updates → ntfy
+# =============================================================================
+# Compares LIVE cluster state against upstream latests:
+#   1. Every Helm release's chart version vs its chart repo (generic)
+#   2. Forgejo's OCI chart (special-case)
+#   3. Raw-manifest images (cloudflared, open-webui, kube-vip,
+#      alertmanager-ntfy) vs GitHub latest release
+#   4. K3s node version vs the k3s stable channel
+# Publishes ONE digest message to the k8s-alerts ntfy topic when anything is
+# behind (silent when fully current), twice daily. Live-state comparison deliberately —
+# it also covers pins living in gitignored values files that no repo-watcher
+# (Renovate on the public mirror, task #12) could ever see.
+#
+# Schedule NOTE: kube-controller-manager interprets cron in NODE-LOCAL time
+# (CEST), not UTC — "0 9 * * 1" fires Monday 09:00 local. (Known TZ trap.)
+#
+# RBAC tradeoff: reading Helm releases requires cluster-wide secret read
+# (sh.helm.release.v1 secrets). Accepted for this monitoring tool; the SA
+# exists only for this CronJob.
+# =============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: release-watcher
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: release-watcher
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]          # helm release records
+  - apiGroups: [""]
+    resources: ["pods", "nodes", "namespaces"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "daemonsets", "statefulsets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: release-watcher
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: release-watcher
+subjects:
+  - kind: ServiceAccount
+    name: release-watcher
+    namespace: monitoring
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: release-watcher-ntfy
+  namespace: monitoring
+type: Opaque
+stringData:
+  NTFY_URL: "{{ ntfy_base_url }}"
+  NTFY_TOPIC: "{{ ntfy_k8s_alerts_topic }}"
+  NTFY_USER: "{{ ntfy_alertmanager_user }}"
+  NTFY_PASS: "{{ ntfy_alertmanager_password }}"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: release-watcher-script
+  namespace: monitoring
+data:
+  # chart-release -> helm repo URL (releases not listed: skipped with a note;
+  # traefik/traefik-crd ride K3s upgrades by design)
+  repos.map: |
+    alloy https://grafana.github.io/helm-charts grafana
+    loki https://grafana.github.io/helm-charts grafana
+    grafana https://grafana.github.io/helm-charts grafana
+    argocd https://argoproj.github.io/argo-helm argo-cd
+    argocd-image-updater https://argoproj.github.io/argo-helm argocd-image-updater
+    authentik https://charts.goauthentik.io authentik
+    cert-manager https://charts.jetstack.io cert-manager
+    gitea https://dl.gitea.com/charts/ gitea
+    headlamp https://kubernetes-sigs.github.io/headlamp/ headlamp
+    longhorn https://charts.longhorn.io longhorn
+    metallb https://metallb.github.io/metallb metallb
+    prometheus https://prometheus-community.github.io/helm-charts prometheus
+    smartctl-exporter https://prometheus-community.github.io/helm-charts prometheus-smartctl-exporter
+    trivy-operator https://aquasecurity.github.io/helm-charts/ trivy-operator
+    vaultwarden https://guerzon.github.io/vaultwarden vaultwarden
+  # workload (ns/kind/name/container-match) -> github repo for latest release
+  images.map: |
+    cloudflare deployment cloudflared cloudflared cloudflare/cloudflared
+    open-webui deployment open-webui open-webui open-webui/open-webui
+    kube-system daemonset kube-vip-ds kube-vip kube-vip/kube-vip
+    monitoring deployment alertmanager-ntfy alertmanager-ntfy alexbakker/alertmanager-ntfy
+  watch.sh: |
+    #!/bin/sh
+    # Weekly release digest. Every stdout line is kept in the report.
+    set -u
+    REPORT=/tmp/report.txt; : > $REPORT
+    note() { echo "$1" >> $REPORT; }
+
+    # --- 1. helm chart releases -------------------------------------------
+    added=""
+    while read -r rel url repo_alias; do
+      [ -z "$rel" ] && continue
+      case " $added " in *" $repo_alias "*) ;; *)
+        helm repo add "rw-$repo_alias" "$url" >/dev/null 2>&1
+        added="$added $repo_alias"
+      esac
+    done < /config/repos.map
+    helm repo update >/dev/null 2>&1
+    helm list -A -o json > /tmp/releases.json
+    while read -r rel url repo_alias; do
+      [ -z "$rel" ] && continue
+      deployed=$(jq -r ".[] | select(.name==\"$rel\") | .chart" /tmp/releases.json)
+      [ -z "$deployed" ] && continue
+      chart_name=$(jq -r ".[] | select(.name==\"$rel\") | .chart" /tmp/releases.json | sed 's/-v\{0,1\}[0-9][0-9.]*$//')
+      deployed_ver=${deployed##${chart_name}-}
+      latest=$(helm search repo "rw-$repo_alias/$chart_name" -o json 2>/dev/null | jq -r '.[0].version // empty')
+      [ -z "$latest" ] && { note "?? $rel: could not resolve latest ($chart_name)"; continue; }
+      if [ "$deployed_ver" != "$latest" ]; then
+        app_latest=$(helm search repo "rw-$repo_alias/$chart_name" -o json 2>/dev/null | jq -r '.[0].app_version // ""')
+        note "⬆ $rel: chart $deployed_ver → $latest (app $app_latest)"
+      fi
+    done < /config/repos.map
+
+    # --- 2. forgejo OCI chart ----------------------------------------------
+    dep_fj=$(jq -r '.[] | select(.name=="forgejo") | .chart' /tmp/releases.json | sed 's/^forgejo-//')
+    lat_fj=$(helm show chart oci://code.forgejo.org/forgejo-helm/forgejo 2>/dev/null | awk '/^version:/{print $2}')
+    lat_fj_app=$(helm show chart oci://code.forgejo.org/forgejo-helm/forgejo 2>/dev/null | awk '/^appVersion:/{print $2}')
+    if [ -n "$lat_fj" ] && [ "$dep_fj" != "$lat_fj" ]; then
+      note "⬆ forgejo: chart $dep_fj → $lat_fj (app $lat_fj_app)"
+    fi
+
+    # --- 3. raw-manifest images vs github releases --------------------------
+    while read -r ns kind name cmatch ghrepo; do
+      [ -z "$ns" ] && continue
+      img=$(kubectl -n "$ns" get "$kind" "$name" -o json 2>/dev/null \
+            | jq -r ".spec.template.spec.containers[] | select(.name|test(\"$cmatch\")) | .image" | head -1)
+      [ -z "$img" ] && continue
+      tag=${img##*:}
+      latest=$(curl -sf --max-time 20 "https://api.github.com/repos/$ghrepo/releases/latest" | jq -r '.tag_name // empty')
+      # some projects (e.g. alertmanager-ntfy) tag without GitHub Releases
+      [ -z "$latest" ] && latest=$(curl -sf --max-time 20 "https://api.github.com/repos/$ghrepo/tags?per_page=1" | jq -r '.[0].name // empty')
+      [ -z "$latest" ] && { note "?? $name: github rate-limited or no release/tags"; continue; }
+      t1=$(echo "$tag" | sed 's/^v//'); t2=$(echo "$latest" | sed 's/^v//')
+      [ "$t1" != "$t2" ] && note "⬆ $name ($ns): $tag → $latest"
+    done < /config/images.map
+
+    # --- 4. k3s ---------------------------------------------------------------
+    k3s_now=$(kubectl get nodes -o jsonpath='{.items[0].status.nodeInfo.kubeletVersion}')
+    k3s_latest=$(curl -sf --max-time 20 "https://update.k3s.io/v1-release/channels/stable" -o /dev/null -w '%{redirect_url}' | sed 's|.*/||')
+    if [ -n "$k3s_latest" ] && [ "$k3s_now" != "$k3s_latest" ]; then
+      note "⬆ k3s: $k3s_now → $k3s_latest (serial upgrade, see CLAUDE.md pitfalls)"
+    fi
+
+    # --- send digest ---------------------------------------------------------
+    if [ -s $REPORT ]; then
+      count=$(wc -l < $REPORT)
+      curl -sf --max-time 20 -u "$NTFY_USER:$NTFY_PASS" \
+        -H "Title: Release watcher: $count update(s) available" \
+        -H "Tags: package" -H "Priority: default" \
+        --data-binary @$REPORT "$NTFY_URL/$NTFY_TOPIC" >/dev/null \
+        && echo "digest sent ($count items)" || { echo "NTFY SEND FAILED"; cat $REPORT; exit 1; }
+      cat $REPORT
+    else
+      echo "fleet fully current — no digest sent"
+    fi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: release-watcher
+  namespace: monitoring
+spec:
+  schedule: "0 8,20 * * *"     # 08:00 + 20:00 NODE-LOCAL (CEST) — TZ trap doc'd above; pings only when updates exist
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 900
+      backoffLimit: 1
+      template:
+        spec:
+          serviceAccountName: release-watcher
+          restartPolicy: Never
+          containers:
+            - name: watcher
+              image: alpine/k8s:1.34.1
+              command: ["/bin/sh", "/config/watch.sh"]
+              envFrom:
+                - secretRef:
+                    name: release-watcher-ntfy
+              env:
+                - name: HELM_CACHE_HOME
+                  value: /tmp/helm-cache
+                - name: HELM_CONFIG_HOME
+                  value: /tmp/helm-config
+              volumeMounts:
+                - name: script
+                  mountPath: /config
+              resources:
+                requests: { cpu: 50m, memory: 128Mi }
+                limits: { memory: 512Mi }
+          volumes:
+            - name: script
+              configMap:
+                name: release-watcher-script

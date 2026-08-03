@@ -1,0 +1,13 @@
+#!/bin/bash
+# Asserts vmbr0 uplink health on the Proxmox host. MAC-based: immune to the
+# kernel-upgrade NIC renames that broke the bridge on 2026-07-25.
+# e1000e "Detected Hardware Unit Hang" mitigation: offloads off (tso/gso/gro).
+# Managed by Ansible (81-upgrade-proxmox.yml) — local edits will be overwritten.
+MAC="{{ pve_uplink_mac }}"
+IF=$(ip -o link | awk -v m="$MAC" 'tolower($0) ~ m && $2 !~ /vmbr|fwbr|tap|veth/ {gsub(":","",$2); print $2; exit}')
+[ -z "$IF" ] && exit 0
+ethtool -K "$IF" tso off gso off gro off 2>/dev/null
+ip link set "$IF" up 2>/dev/null
+[ "$(cat /sys/class/net/$IF/master/uevent 2>/dev/null | grep -c vmbr0)" = "0" ] && ip link set "$IF" master vmbr0 2>/dev/null
+bridge vlan add vid 2-4094 dev "$IF" 2>/dev/null
+exit 0

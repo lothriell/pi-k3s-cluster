@@ -1,0 +1,86 @@
+---
+# monitoring-watchdog: external dead-man's-switch on athena.
+# Receiver (HTTP, touches a heartbeat file) + checker (timer, pages ntfy if the
+# heartbeat goes stale). See defaults/main.yml for the rationale.
+
+- name: Create watchdog state directory
+  ansible.builtin.file:
+    path: "{{ watchdog_state_dir }}"
+    state: directory
+    mode: "0755"
+  become: true
+
+- name: Deploy heartbeat receiver script
+  ansible.builtin.template:
+    src: watchdog-receiver.py.j2
+    dest: /usr/local/bin/monitoring-watchdog-receiver
+    mode: "0755"
+  become: true
+  notify: restart monitoring-watchdog-receiver
+
+- name: Deploy staleness check script
+  ansible.builtin.template:
+    src: watchdog-check.sh.j2
+    dest: /usr/local/bin/monitoring-watchdog-check
+    mode: "0755"
+  become: true
+
+- name: Deploy receiver systemd service
+  ansible.builtin.template:
+    src: watchdog-receiver.service.j2
+    dest: /etc/systemd/system/monitoring-watchdog-receiver.service
+    mode: "0644"
+  become: true
+  notify: restart monitoring-watchdog-receiver
+
+- name: Deploy checker systemd service
+  ansible.builtin.template:
+    src: watchdog-check.service.j2
+    dest: /etc/systemd/system/monitoring-watchdog-check.service
+    mode: "0644"
+  become: true
+
+- name: Deploy checker systemd timer
+  ansible.builtin.template:
+    src: watchdog-check.timer.j2
+    dest: /etc/systemd/system/monitoring-watchdog-check.timer
+    mode: "0644"
+  become: true
+  notify: restart monitoring-watchdog-check-timer
+
+- name: Enable and start heartbeat receiver
+  ansible.builtin.systemd:
+    name: monitoring-watchdog-receiver
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+
+- name: Enable and start checker timer
+  ansible.builtin.systemd:
+    name: monitoring-watchdog-check.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+
+- name: Verify receiver answers locally
+  ansible.builtin.uri:
+    url: "http://localhost:{{ watchdog_receiver_port }}/heartbeat"
+    method: POST
+    status_code: 200
+  register: watchdog_receiver_check
+  retries: 5
+  delay: 2
+  until: watchdog_receiver_check.status == 200
+
+- name: Display status
+  ansible.builtin.debug:
+    msg: |
+      Monitoring watchdog deployed on {{ inventory_hostname }}:
+        - Receiver:  http://{{ watchdog_athena_host | default(ansible_host) }}:{{ watchdog_receiver_port }}/heartbeat
+        - Heartbeat: {{ watchdog_heartbeat_file }}
+        - Stale after: {{ watchdog_stale_seconds }}s -> pages ntfy topic '{{ ntfy_k8s_alerts_topic }}'
+        - Cluster side: Watchdog alert + heartbeat route in values-prometheus.yml.j2
+          (apply with: ansible-playbook 04-deploy-monitoring.yml --tags prometheus)
+        - Status: systemctl status monitoring-watchdog-receiver monitoring-watchdog-check.timer

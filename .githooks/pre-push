@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+#
+# pre-push guard — refuse to push any .publicignore path to the PUBLIC GitHub mirror.
+# Belt-and-suspenders behind scripts/publish-public.sh: even an accidental
+# `git push github main` cannot leak a private path to the public repo.
+#
+# Enable once per machine:  git config core.hooksPath .githooks
+#
+set -euo pipefail
+remote_name="${1:-}"; remote_url="${2:-}"
+
+# Only guard the public mirror (github.com). Private origin (Forgejo) is unrestricted.
+case "$remote_url" in
+  *github.com*) : ;;
+  *) exit 0 ;;
+esac
+
+root="$(git rev-parse --show-toplevel)"
+[ -f "$root/.publicignore" ] || exit 0
+# bash 3.2 (macOS) has no `mapfile` — read the strip-list with a portable loop.
+PRIV=()
+while IFS= read -r line; do
+  [ -n "$line" ] && PRIV+=("$line")
+done < <(grep -vE '^[[:space:]]*(#|$)' "$root/.publicignore")
+[ "${#PRIV[@]}" -gt 0 ] || exit 0
+
+zero="0000000000000000000000000000000000000000"
+fail=0
+# stdin: <local ref> <local sha> <remote ref> <remote sha>
+while read -r lref lsha rref rsha; do
+  [ "$lsha" = "$zero" ] && continue   # branch deletion — nothing to scan
+  for p in "${PRIV[@]}"; do
+    if git ls-tree -r --name-only "$lsha" -- "$p" 2>/dev/null | grep -q .; then
+      echo "✗ pre-push: private path '$p' is present in ${lref#refs/heads/} — refusing to push it to the public mirror ($remote_url)"
+      fail=1
+    fi
+  done
+done
+
+if [ "$fail" = 1 ]; then
+  echo "  → the public mirror is hand-curated (separate history). Never push private main"
+  echo "    to github; publish via a 'Catch up public mirror' commit that strips these paths"
+  echo "    and scrubs real IPs/domains from file content (see CLAUDE.md)."
+  exit 1
+fi
+exit 0

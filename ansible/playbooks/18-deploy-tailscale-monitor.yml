@@ -1,0 +1,23 @@
+---
+# Playbook 18: Deploy the tailnet peer-offline monitor on athena.
+#
+# Pages via the LOCAL ntfy (athena -> phone does not depend on the cluster)
+# when an always-on tailnet node goes offline for 15+ min, re-pages every 4h
+# while it stays down, and once on recovery. Also pages if athena's own
+# tailscaled dies (peer visibility gone = monitoring blind).
+#
+# Motivating incident: Artemis was offline on the tailnet for 50 days
+# (2026-05-22 UniFi port VLAN change) and nothing alerted.
+#
+# Watched peer list: tailscale_monitor_peers in the role defaults; override
+# in group_vars if the fleet changes.
+#
+# Usage:
+#   ansible-playbook ansible/playbooks/18-deploy-tailscale-monitor.yml
+#   make tailscale-monitor
+
+- name: Deploy tailnet peer-offline monitor on athena
+  hosts: athena
+  become: false
+  roles:
+    - role: ../roles/tailscale-monitor

@@ -1,0 +1,22 @@
+# Paths committed to the PRIVATE origin (Forgejo) but that must NEVER appear in the
+# public GitHub mirror (lothriell/pi-k3s-cluster).
+#
+# The public mirror is a hand-curated, separate-history mirror (see CLAUDE.md — the
+# "Catch up public mirror" workflow, which also scrubs real IPs/domains from file
+# CONTENT). This file is the authoritative WHOLE-PATH strip-list for that curation,
+# and is enforced by .githooks/pre-push (refuses to push these paths to a github.com
+# remote). It does NOT handle content-level redaction — that stays part of the manual
+# curation.
+#
+# Only NON-SECRET private material belongs here (planning docs / runbooks with real
+# IPs & hostnames). True secrets (keys, vault, tokens, secret.yml) stay in .gitignore
+# and never enter git at all — private or public.
+#
+# One path or glob per line. Lines starting with # and blank lines are ignored.
+
+pipeline/
+docs/improvement-plan.md
+docs/ops-commands.md
+docs/18-architecture.md
+docs/13-deploy-eve-tracker-dev.md
+docs/eve-tracker-deployment.md

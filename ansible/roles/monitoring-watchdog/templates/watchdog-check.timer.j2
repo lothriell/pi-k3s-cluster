@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the monitoring watchdog staleness check every {{ watchdog_check_interval_sec }}s
+
+[Timer]
+# Grace after boot so the receiver has started and the cluster has had time to
+# send the first heartbeat before we start judging staleness.
+OnBootSec=2min
+OnUnitActiveSec={{ watchdog_check_interval_sec }}s
+AccuracySec=10s
+Unit=monitoring-watchdog-check.service
+
+[Install]
+WantedBy=timers.target

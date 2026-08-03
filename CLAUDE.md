@@ -14,37 +14,8 @@ K3s Kubernetes cluster with mixed-architecture nodes, fully automated with Ansib
 
 ## Common Commands
 
-```bash
-# Full cluster lifecycle
-make all                    # Build everything from scratch
-make nuke                   # Destroy cluster (interactive confirmation)
-
-# Individual stages (run in order)
-make bootstrap              # Create ansible user on new nodes (first time, uses -K for sudo password)
-make shell                  # Deploy zsh/oh-my-posh/eza to all nodes
-make prepare                # System prep (packages, swap, kernel modules, registry config)
-make k3s                    # Install K3s server + agents
-make post-install           # Helm repos + namespaces
-make metallb                # MetalLB load balancer
-make tailscale              # Tailscale VPN (subnet router on server node)
-make longhorn               # Longhorn distributed storage
-make monitoring             # Prometheus + Grafana
-make gitea                  # Gitea git server (+ container registry)
-make argocd                 # ArgoCD GitOps (+ Image Updater)
-make cloudflare             # Cloudflare tunnel
-make cert-manager           # TLS certificates
-make headlamp               # Headlamp Kubernetes web UI
-
-# Operations
-make status                 # kubectl get nodes + pods
-make ping                   # Ansible connectivity test
-make ssh-1 through ssh-4    # SSH into specific nodes
-
-# Run specific playbook with tags
-ansible-playbook ansible/playbooks/01-prepare-nodes.yml --tags kernel
-# Limit to specific nodes
-ansible-playbook ansible/playbooks/00-bootstrap-user.yml --limit rpi-k3s-1 -K -u <your-user>
-```
+`make help` lists every target with a description — the Makefile is the source of
+truth for the build chain (`make all`), individual stages, and operations targets.
 
 ## Architecture
 
@@ -61,9 +32,10 @@ Home Site (home subnet)                Remote Site (remote subnet)
 └──────────────────────────┘                └──────────────────────┘
 
 Other managed nodes (via Tailscale):
-  gpu-1 (GPU server)       — Ollama LLM serving (Docker, not K8s)
   athena, artemis          — SFF PCs (Wazuh agents, Pi-hole on athena)
-    (minisforum-c is now a K3s agent, see above)
+    (minisforum-c is a K3s agent AND the GPU/LLM box: RTX 3090, Ollama via
+     Docker. The former separate "gpu-1" inventory identity was removed
+     2026-07-24 — one machine, one IP.)
   arch-t-01, cachy-t-01    — Desktops (Arch/CachyOS)
 ```
 
@@ -76,39 +48,11 @@ Other managed nodes (via Tailscale):
 **Playbooks 03-08** run on `localhost` using kubectl/helm against the cluster (except 08-tailscale which runs on nodes).
 **Playbook 09** (Ollama) runs on `gpu_servers` group as personal user (Docker requires it).
 
-**Desktop bootstrap:** Arch/CachyOS desktops use RSA key for initial bootstrap:
-```bash
-ANSIBLE_PRIVATE_KEY_FILE=~/.ssh/id_rsa ansible-playbook ansible/playbooks/00-bootstrap-user.yml -e target_hosts=desktops -K -u <your-user>
-```
-After bootstrap, `ansible` user uses `id_ed25519` like all other nodes.
-
-**macOS bootstrap** (macmini and any other Mac host in `macos_nodes`): uses Directory Service (`dscl`) because macOS has no `useradd`. Run once with your personal account:
-```bash
-make bootstrap-macos           # runs 00-bootstrap-macos-user.yml --ask-become-pass
-```
-UID 600, primary group staff (20), shell `/bin/zsh`, home `/Users/ansible`, added to `com.apple.access_ssh` for sshd access, passwordless sudo via `/etc/sudoers.d/ansible`. Idempotent — re-runs detect existing state and skip.
-
-**macOS shell bootstrap** (sync the workstation shell to any Mac in `macos_nodes`):
-```bash
-make shell-macos               # runs 00-setup-shell-macos.yml
-```
-Installs Homebrew if missing, then `eza` + `oh-my-posh` via brew. Per-user (`personal_user` by default): installs Oh My Zsh, zsh-autosuggestions, drops `dotfiles/zshrc` → `~/.zshrc`, `dotfiles/oh-my-posh/atomic.omp.json` → `~/.config/oh-my-posh/themes/`, and `dotfiles/ghostty/config` → `~/.config/ghostty/config`. Renders `~/.zprofile` with `brew shellenv` so `/opt/homebrew/bin` is on the interactive PATH. Pre-existing `~/.zshrc` is backed up to `~/.zshrc.pre-bootstrap-<timestamp>`.
-
-**Manual-node bootstrap** (standalone Ubuntu VMs not in `k3s_cluster` — Wazuh in `security_stack`, future SFF pattern, etc.): reuses the Linux `00-bootstrap-user.yml` with a `target_hosts` override:
-```bash
-make bootstrap-manual-node HOSTS=security_stack
-# equivalent to:
-# ansible-playbook 00-bootstrap-user.yml --ask-become-pass -e target_hosts=security_stack
-```
-Prerequisite: cloud-init (or the OS installer) has already seeded the personal user with the MacBook pubkey. For an already-deployed VM where all creds are lost, use the Proxmox NoVNC GRUB-edit recovery procedure documented in `project_wazuh_access` memory, THEN run this bootstrap.
+**Desktop / macOS / manual-node bootstrap:** step-by-step procedures for bootstrapping Arch/CachyOS desktops (RSA key), macOS nodes (`make bootstrap-macos`, `make shell-macos`), and standalone Ubuntu VMs (`make bootstrap-manual-node`) live in the `node-bootstrap` skill (`.claude/skills/node-bootstrap/SKILL.md`).
 
 ### Variable Flow
 
 Inventory (`ansible/inventory/hosts.yml`) defines global vars (k3s_version, server IP, metallb range) that flow to all playbooks and roles. The K3s server role sets `k3s_node_token` as a fact, which agents consume via `hostvars[groups['k3s_server'][0]]['k3s_node_token']`.
-
-### Helm Values Pattern
-
-All Helm-deployed services follow: playbook in `ansible/playbooks/` references values in `k8s/<service>/values-<service>.yml` via path `{{ playbook_dir }}/../../k8s/<service>/values-<service>.yml`.
 
 ### Kubeconfig
 
@@ -160,6 +104,8 @@ All 6 K3s cluster nodes run Tailscale's built-in SSH server (`RunSSH=True`), ena
 ### Longhorn Storage
 Longhorn is the default StorageClass (2 replicas). `local-path` is still available but not default. 32GB eMMC per node — storageMinimalAvailablePercentage set to 25% to reserve space for OS upgrades.
 
+**No replicas on etcd nodes:** the three control-plane Pis have `nodes.longhorn.io` `allowScheduling=false` — replica/backup I/O on their eMMC stalls etcd and drops kube-vip leader leases (2026-07-23 incident, task #64). `make longhorn-etcd-guard` (chained onto `make longhorn`) enforces this on every rebuild; volume restores otherwise scatter replicas back onto etcd disks.
+
 ### Longhorn Backup Labeling Needs PVCs To Exist
 The `critical-backup` RecurringJob processes only volumes labeled `recurring-job-group.longhorn.io/critical=enabled`. Labels are applied by `11-configure-backups.yml` Play 2 looking up each PVC in `critical_pvcs:`. **If a PVC doesn't exist when the playbook runs, it gets silently skipped** (the lookup returns empty, the label task is skipped via `when:`). On `make all` the chain runs `backup` BEFORE services come up, so the second-pass `make backup-relabel` at the end of `all` is what actually applies labels to PVCs that materialised during service deploy. **After any one-off stateful service deploy** (`make vaultwarden`, `make forgejo`, etc.), run `make backup-relabel` so the new PVC enrols into nightly R2 backups. The playbook surfaces a `MISSING critical PVC` debug line for any unlabeled entry — watch for these in playbook output.
 
@@ -167,7 +113,10 @@ The `critical-backup` RecurringJob processes only volumes labeled `recurring-job
 Longhorn metrics must use `kubernetes_sd_configs` with endpoint role (not `static_configs` with service VIP). A service VIP load-balances to one random pod per scrape, losing metrics from other nodes.
 
 ### K3s Agent Token Loss on Upgrade
-The K3s install script overwrites `/etc/systemd/system/k3s-agent.service.env` on every run, wiping `K3S_TOKEN`. Fix: write `server` and `token` to `/etc/rancher/k3s/config.yaml` which the install script does NOT overwrite. K3s upgrades must step through each minor version (no skipping). v1.32 auto-upgrades Traefik v2→v3.
+The K3s install script overwrites `/etc/systemd/system/k3s-agent.service.env` on every run, wiping `K3S_TOKEN`. Fix: write `server` and `token` to `/etc/rancher/k3s/config.yaml` which the install script does NOT overwrite. Since 2026-07-26 the k3s-agent role's `config.yaml.j2` **owns** those lines (token slurped from the first server) — hand-edits to the live file die on the next template run (a `--tags config` roll once wiped hand-added join config on all 4 agents at once: `docs/incidents/2026-07-26-agent-join-config-wipe.md`). K3s upgrades must step through each minor version (no skipping). v1.32 auto-upgrades Traefik v2→v3.
+
+### etcd Snapshot I/O Can Kill k3s (Pi eMMC)
+`k3s etcd-snapshot save` (cron or manual) streams the full etcd DB onto the same eMMC etcd fsyncs to. On the Pi servers this can stall applies past the 5 s lease renew and k3s **exits by design** ("leaderelection lost") mid-snapshot — the CLI reports "EOF", the S3 upload is silently skipped, and a `.part` file is orphaned (delete it AND its ETCDSnapshotFile CR). Snapshot crons are therefore staggered per server (:00/:20/:40, node-local time) in the k3s-server config template; never run manual saves on multiple servers simultaneously. etcd metrics are exposed on :2381 (`etcd-expose-metrics`) with a Prometheus alert group (slow-apply, fsync p99, leader churn, DB size/fragmentation) that pages before the pressure breaks leases.
 
 ### Gitea Admin Creation Fails on Helm Upgrade
 The Gitea Helm chart's `gitea.admin.*` values trigger `gitea admin user create` in an init container. If the user already exists in the SQLite DB (from a previous install), it crashes. Fix: only pass `--set gitea.admin.*` on fresh installs, not upgrades. The playbook (05-deploy-gitea.yml) checks `helm status` first.
@@ -183,9 +132,10 @@ Node-exporter is scraped by a dedicated `node-exporter` job in `extraScrapeConfi
 
 ## AI Stack
 
-### Ollama (GPU server, external to K8s)
-- Runs as Docker container on a dedicated GPU server (RTX 3090, 24GB VRAM)
-- Playbook: `ansible/playbooks/09-deploy-ollama.yml` (targets `gpu_servers` group)
+### Ollama (on minisforum-c, external to K8s)
+- Runs as Docker container on minisforum-c (RTX 3090, 24GB VRAM) — the same
+  machine that is a K3s agent; Ollama is Docker-side, not a K8s workload
+- Playbook: `ansible/playbooks/09-deploy-ollama.yml` (targets `gpu_servers` group — which contains minisforum-c)
 - Role: `ansible/roles/ollama/` (Docker + NVIDIA runtime)
 - Proxied into K8s via `ollama-external` Service/Endpoints in `k8s/ingress/local-ingress.yml`
 - Accessible at `ollama.<local_domain>` through Traefik
@@ -203,57 +153,11 @@ Node-exporter is scraped by a dedicated `node-exporter` job in `extraScrapeConfi
 
 ## Pi-hole DNS Monitoring
 
-### Architecture
-Pi-hole logs are monitored at two levels:
-- **Log retention (Promtail → Loki):** ALL DNS queries from ALL IPs shipped to Loki on K8s. 3-month retention. Searchable in Grafana via Loki datasource.
-- **Real-time alerts (Python script → ntfy):** Pattern-matched alerts with custom display labels. Sub-second latency.
-
-### Components (deployed on athena)
-- **ntfy:** Self-hosted push notification server (Docker). Auth enabled (deny-all default). Uses `upstream-base-url: https://ntfy.sh` for iOS push delivery. Exposed via Cloudflare tunnel at `ntfy.<cloudflare_domain>`.
-- **Promtail:** Tails pihole.log, ships to Loki on K8s via NodePort 31100 (Docker).
-- **pihole-dns-monitor:** Python script + systemd service. Matches DNS queries against alert rules and sends notifications via ntfy (localhost, no auth needed).
-- **Loki:** Deployed on K8s in monitoring namespace (SingleBinary mode, 10Gi PVC, 3-month retention). NodePort 31100 for external Promtail access. Grafana Loki datasource pre-configured.
-
-### ntfy Access
-- ntfy topic and credentials are in `group_vars/all/vault.yml` (Ansible Vault encrypted)
-- Phone app: subscribe to the topic at `https://ntfy.<cloudflare_domain>` with credentials from `vault.yml`
-- Monitor script publishes locally (localhost:8080, anonymous write allowed on the topic)
-- Athena has old Docker (no compose plugin) — ntfy and Promtail run via `docker run`, not compose
-
-### Alert Rules
-Rules live in `secrets/pihole-alert-rules.conf` (gitignored). Format:
-```
-domain_pattern | ip_or_* | display_label
-*.sme.sk | 10.0.0.42 | duck domain        # specific IP
-*.facebook.com | * | social media          # any IP
-```
-
-Day-to-day editing: SSH to athena, edit `/etc/pihole-monitor/alert-rules.conf`, then `sudo systemctl reload pihole-dns-monitor`.
-
-### Deployment
-```bash
-ansible-playbook ansible/playbooks/10-deploy-pihole-monitor.yml
-```
-
-### Files
-- Playbook: `ansible/playbooks/10-deploy-pihole-monitor.yml`
-- Role: `ansible/roles/pihole-monitor/`
-- Alert rules: `secrets/pihole-alert-rules.conf` (gitignored, copied to athena on deploy)
-- Loki datasource: `k8s/monitoring/values-grafana.yml`
+Two-level monitoring: Promtail→Loki log retention (14 days, Grafana-searchable) + a Python script on athena pushing real-time pattern-matched alerts via ntfy. Architecture, alert-rule format/editing, and deployment live in the `pihole-monitor` skill (`.claude/skills/pihole-monitor/SKILL.md`).
 
 ## Network Layout
 
-All IPs are configured in `ansible/inventory/hosts.yml` and `group_vars/all/main.yml`. Non-secret config lives in `main.yml`; credentials live in the vault-encrypted `vault.yml` alongside it. See the `.example` files for templates.
-
-| Resource | Description |
-|----------|-------------|
-| Pi nodes (ARM64) | 4 static IPs on home site cluster subnet |
-| x86 VMs (AMD64) | 2 static IPs on remote site cluster subnet |
-| MetalLB pool | Range of IPs for LoadBalancer services |
-| K3s API | Server node IP, port 6443 |
-| Tailscale subnet | Cluster subnet advertised by server node |
-| Pod CIDR | 10.42.0.0/16 (K3s default) |
-| Service CIDR | 10.43.0.0/16 (K3s default) |
+All IPs are configured in `ansible/inventory/hosts.yml` and `group_vars/all/main.yml`. Non-secret config lives in `main.yml`; credentials live in the vault-encrypted `vault.yml` alongside it. See the `.example` files for templates. Pod CIDR 10.42.0.0/16 and Service CIDR 10.43.0.0/16 (K3s defaults).
 
 ## Security Stack
 
@@ -271,12 +175,7 @@ All IPs are configured in `ansible/inventory/hosts.yml` and `group_vars/all/main
 
 ## Headlamp (K8s Web UI)
 
-- Lightweight Kubernetes dashboard (official successor to the retired Kubernetes Dashboard)
-- Namespace: `headlamp`
-- Helm chart: `headlamp/headlamp`
-- Values: `k8s/headlamp/values-headlamp.yml`
-- Playbook: `ansible/playbooks/14-deploy-headlamp.yml`
-- Accessible at `headlamp.<local_domain>` through Traefik
+- Lightweight Kubernetes dashboard (official successor to the retired Kubernetes Dashboard); deployed via playbook 14, accessible at `headlamp.<local_domain>` through Traefik
 - No authentication by default (relies on LAN/Tailscale access restriction)
 - Uses a ServiceAccount token created by the Helm chart for cluster API access
 
@@ -293,16 +192,10 @@ Template: `group_vars/all/vault.yml.example` has placeholder values for `gitea_a
 
 ## Operational references
 
-- **`docs/ops-commands.md`** — day-to-day commands cheatsheet (Ansible Vault, backups, alerts, ntfy, cluster health). First stop when you need to do a thing and forgot how.
-- **`docs/improvement-plan.md`** — living checklist of cluster hardening work (status for each task, pointers to files to touch).
 - **`incident.md`** (repo root) + **`docs/incidents/`** — open-incident scratchpad at the root, resolved post-mortems archived under `docs/incidents/YYYY-MM-DD-<slug>.md`. Convention + template in `docs/incidents/README.md`. Cluster-side work: write to `incident.md`. Parallel projects (e.g. eve-tracking-jobs) use `incident_<project>.md` so two sessions don't collide on one file. On resolve, `git mv` to the dated archive and reset the root file to its stub.
 
 ## File Conventions
 
-- Playbooks are numbered and run in order (00-09)
-- K8s manifests use `values-<service>.yml` for Helm, Kustomize overlays for apps
-- Placeholder values marked with `TODO CHANGEME`
-- Dotfiles for Pi shell environment live in `dotfiles/`
 - `ansible.cfg` is at project root (not in `ansible/`) so it works from any subdirectory
 - **Local config:** `ansible/inventory/group_vars/all/main.yml` (gitignored) holds IPs and non-secret vars. `all/vault.yml` (Ansible Vault encrypted, gitignored) holds secrets. Copy from the matching `.example` files to set up, then `ansible-vault encrypt vault.yml`. The vault password lives at `~/.ansible/vault_pass` and is referenced by `ansible.cfg`.
 - **Secrets:** EVE SSO credentials, Image Updater config, and private docs are all gitignored. See `.gitignore` for the full list.

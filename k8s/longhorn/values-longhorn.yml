@@ -21,15 +21,27 @@ defaultSettings:
   # Data path on eMMC
   defaultDataPath: /var/lib/longhorn
 
-# Resource limits — keep it light on Pi nodes
+  # Let fstrim reclaim space held by the snapshot chain: marks older
+  # snapshots removed so unmapped blocks actually shrink actualSize.
+  # Without it, actualSize = lifetime high-water mark (v1.11 engines also
+  # silently dropped ALL discards, so weekly fstrim was a no-op forever —
+  # 2026-07-27 sweep reclaimed 15.7 GiB per replica; task #71).
+  removeSnapshotsDuringFilesystemTrim: true
+
+# Resource limits — keep it light on Pi nodes, but the manager orchestrates ALL
+# volumes and spikes during heavy reconcile. 256Mi was too tight: longhorn-manager
+# on k3s-x86-1 was OOMKilled at the 2026-06-04 incident onset (01:40 UTC), which
+# coincided with the nightly Longhorn snapshot job — a likely trigger of the whole
+# attach-storm cascade. Others idled at ~80% of 256Mi. Bumped to 512Mi (trivial on
+# 16GB+ nodes).
 longhornManager:
   resources:
     requests:
       cpu: 50m
-      memory: 128Mi
+      memory: 256Mi
     limits:
       cpu: 250m
-      memory: 256Mi
+      memory: 512Mi
 
 longhornDriver:
   resources:

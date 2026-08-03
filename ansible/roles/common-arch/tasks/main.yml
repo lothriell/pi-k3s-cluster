@@ -95,6 +95,50 @@
     mode: "0644"
   tags: [services, kernel]
 
+# --- sp5100_tco watchdog + dm_crypt (2026-07-24 live fixes, task #65) -------
+# CachyOS blacklists the AMD watchdog in /usr/lib/modprobe.d/blacklist.conf.
+# kmod gives /etc precedence for equal basenames, so shipping a same-named
+# file here shadows the stock one: iTCO_wdt stays blacklisted, sp5100_tco is
+# deliberately allowed — the hardware watchdog is the reset-of-last-resort
+# when a shutdown wedges in D-state (Longhorn IM vs CSI unmount hangs; see
+# feedback_minisforum_shutdown_hang / playbook 80 drain-before-reboot).
+- name: Shadow CachyOS module blacklist (allow sp5100_tco, keep iTCO_wdt)
+  ansible.builtin.copy:
+    dest: /etc/modprobe.d/blacklist.conf
+    content: |
+      # Managed by Ansible (common-arch, task #65). Shadows the same-named
+      # /usr/lib/modprobe.d/blacklist.conf, which blacklists BOTH iTCO_wdt
+      # and sp5100_tco. sp5100_tco is deliberately NOT blacklisted here: the
+      # AMD watchdog provides the hardware reset path for D-state shutdown
+      # hangs on this box.
+      blacklist iTCO_wdt
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [kernel]
+
+- name: Load sp5100_tco watchdog and dm_crypt now
+  ansible.builtin.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - sp5100_tco
+    - dm_crypt
+  tags: [kernel]
+
+- name: Persist sp5100_tco and dm_crypt across reboots
+  ansible.builtin.copy:
+    dest: "/etc/modules-load.d/{{ item }}.conf"
+    content: |
+      {{ item }}
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - sp5100_tco
+    - dm_crypt
+  tags: [kernel]
+
 - name: Reset iscsid failed state (in case of prior start-limit-hit)
   ansible.builtin.command: systemctl reset-failed iscsid.service
   changed_when: false
@@ -273,3 +317,11 @@
     daemon_reload: true
   when: "'k3s_cluster' in group_names"
   tags: [system, prune]
+
+# --- Journald cap + unit-health metrics (tasks #58/#59) ---------------------
+# Cross-role include: the tasks + script live in roles/common to keep one
+# copy; they are OS-agnostic (systemd only).
+- name: Include journald cap + unit-health metrics tasks (shared from common)
+  ansible.builtin.include_tasks:
+    file: ../../common/tasks/node-health.yml
+  tags: [always]

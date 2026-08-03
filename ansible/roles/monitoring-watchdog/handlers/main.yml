@@ -1,0 +1,14 @@
+---
+- name: restart monitoring-watchdog-receiver
+  ansible.builtin.systemd:
+    name: monitoring-watchdog-receiver
+    state: restarted
+    daemon_reload: true
+  become: true
+
+- name: restart monitoring-watchdog-check-timer
+  ansible.builtin.systemd:
+    name: monitoring-watchdog-check.timer
+    state: restarted
+    daemon_reload: true
+  become: true

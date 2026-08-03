@@ -1,11 +1,21 @@
 ---
 # Common node preparation tasks for Raspberry Pi CM5 running Ubuntu 24.04 ARM64
 
-- name: Disable unattended-upgrades (we manage updates via Ansible)
+- name: Disable unattended-upgrades + the apt-daily timers (we manage updates via Ansible)
+  # Disabling only unattended-upgrades.service is NOT enough: the apt-daily and
+  # apt-daily-upgrade TIMERS still fire apt-daily-upgrade.service -> unattended-upgrade
+  # on their own schedule. Mask the timers too, or surprise upgrades keep running
+  # (observed on k3s-x86-2: a timer-driven upgrade ran 2026-05-29 despite the
+  # service being disabled). Masking also blocks re-enable by package scripts.
   ansible.builtin.systemd:
-    name: unattended-upgrades
+    name: "{{ item }}"
     enabled: false
     state: stopped
+    masked: true
+  loop:
+    - unattended-upgrades.service
+    - apt-daily.timer
+    - apt-daily-upgrade.timer
   failed_when: false
   tags: [packages]
 
@@ -114,6 +124,45 @@
 - name: Apply sysctl parameters without reboot
   ansible.builtin.command: sysctl --system
   changed_when: false
+  tags: [kernel]
+
+# multipathd claims Longhorn's sd devices via dm maps → mount fails EBUSY
+# while the device looks free on the host (2026-07-24: loki + trivy stuck
+# ContainerCreating ~5 h on k3s-x86-1 after an apt upgrade re-enabled it).
+# Longhorn nodes never need multipath; mask it so rebuilds and package
+# upgrades can't resurrect it. Harmless where the unit doesn't exist (Pis) —
+# mask just plants a /dev/null symlink. Task #65; memory
+# feedback_multipathd_longhorn_ebusy.
+- name: Flush any existing multipath device maps
+  ansible.builtin.command: multipath -F
+  changed_when: false
+  failed_when: false
+  tags: [kernel, services]
+
+- name: Mask multipathd so it can never claim Longhorn devices
+  ansible.builtin.command: systemctl mask --now multipathd.socket multipathd.service
+  args:
+    creates: /etc/systemd/system/multipathd.service
+  tags: [kernel, services]
+
+# dm_crypt was loaded by hand on the x86 VMs during the 2026-07-25 recovery
+# (guest-exec on VM 110, the persist files landed later) — codified here so a
+# rebuild keeps it. Cheap to carry even with no encrypted volumes yet; needed
+# the moment a Longhorn encrypted StorageClass appears. Task #65.
+- name: Load dm_crypt now
+  ansible.builtin.modprobe:
+    name: dm_crypt
+    state: present
+  tags: [kernel]
+
+- name: Persist dm_crypt across reboots
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/dm_crypt.conf
+    content: |
+      dm_crypt
+    owner: root
+    group: root
+    mode: "0644"
   tags: [kernel]
 
 - name: Ensure /etc/chrony/sources.d exists (some chrony builds don't create it)
@@ -274,3 +323,9 @@
     daemon_reload: true
   when: "'k3s_cluster' in group_names"
   tags: [system, prune]
+
+# --- Journald cap + unit-health metrics (tasks #58/#59) ---------------------
+- name: Include journald cap + unit-health metrics tasks
+  ansible.builtin.include_tasks:
+    file: node-health.yml
+  tags: [always]

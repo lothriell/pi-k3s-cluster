@@ -1,0 +1,38 @@
+---
+# Playbook: distribute fleet ssh aliases to the personal user on all managed
+# hosts, so `ssh rpi1` / `ssh zero` / `ssh wazuh` work identically from any
+# box in the fleet — same scheme as the Mac's ~/.ssh/config (plain = LAN,
+# "-ts" = tailnet fallback), minus the Mac-only ProxyJump rules: from inside
+# the fabric every LAN subnet is directly routable.
+#
+# The alias block lives between ansible-managed markers in ~/.ssh/config —
+# hand-added entries outside the block survive.
+#
+# Usage: make ssh-aliases
+#        ansible-playbook ansible/playbooks/00-setup-ssh-aliases.yml
+
+- name: Distribute fleet ssh aliases
+  hosts: k3s_cluster:sff_nodes:desktops:windows_wsl_nodes:display_nodes:macos_nodes:security_stack
+  become: true
+  gather_facts: true
+  vars:
+    alias_user: "{{ personal_user }}"
+    alias_home: "{{ '/Users/' + personal_user if ansible_system == 'Darwin' else '/home/' + personal_user }}"
+  tasks:
+    - name: Ensure ~/.ssh exists
+      ansible.builtin.file:
+        path: "{{ alias_home }}/.ssh"
+        state: directory
+        owner: "{{ alias_user }}"
+        group: "{{ 'staff' if ansible_system == 'Darwin' else alias_user }}"
+        mode: "0700"
+
+    - name: Deploy fleet aliases block into ~/.ssh/config
+      ansible.builtin.blockinfile:
+        path: "{{ alias_home }}/.ssh/config"
+        create: true
+        owner: "{{ alias_user }}"
+        group: "{{ 'staff' if ansible_system == 'Darwin' else alias_user }}"
+        mode: "0600"
+        marker: "# {mark} fleet ssh aliases (ansible-managed, 00-setup-ssh-aliases)"
+        block: "{{ lookup('ansible.builtin.template', 'templates/ssh-fleet-aliases.j2') }}"

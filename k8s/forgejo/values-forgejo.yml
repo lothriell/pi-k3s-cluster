@@ -73,8 +73,12 @@ nodeSelector:
 persistence:
   enabled: true
   size: 10Gi
-  # x86-pinned: Pi eMMC is too small for a 10Gi git repo store.
-  storageClass: longhorn-storage
+  # Matches the LIVE bound PVC (created as `longhorn` before longhorn-storage
+  # existed) — storageClassName is immutable, so helm upgrades fail with SSA
+  # "spec is immutable" if this differs (hit 2026-07-24 on the 14→15 bump).
+  # Replica placement is enforced by the etcd-node scheduling exclusion +
+  # x86 pinning of the actual Longhorn volume, not by this class name.
+  storageClass: longhorn
   accessModes:
     - ReadWriteOnce
 

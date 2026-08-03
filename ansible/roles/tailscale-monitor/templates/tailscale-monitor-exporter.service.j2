@@ -1,0 +1,13 @@
+[Unit]
+Description=Serve tailscale-monitor metrics.prom for Prometheus scrape
+After=network-online.target
+
+[Service]
+# Stdlib static file server — Prometheus scrapes /metrics.prom. Serving the
+# state dir is safe: it only holds metrics.prom and the peer state JSON.
+ExecStart=/usr/bin/python3 -m http.server {{ tailscale_monitor_exporter_port }} --directory {{ tailscale_monitor_state_dir }} --bind 0.0.0.0
+Restart=on-failure
+DynamicUser=yes
+
+[Install]
+WantedBy=multi-user.target

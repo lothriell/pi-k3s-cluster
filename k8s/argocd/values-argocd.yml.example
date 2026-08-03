@@ -91,7 +91,10 @@ controller:
       memory: 384Mi
     limits:
       cpu: 500m
-      memory: 1Gi
+      # 1Gi OOMKilled 2026-08-01/02: the controller's cluster-wide cache
+      # re-lists spiked to ~1000Mi on ~150 MB of Trivy SBOM CRs. The
+      # resource.exclusions below remove the driver; this is headroom.
+      memory: 1536Mi
 
 # ---------------------------------------------------------------------------
 # Repo Server -- clones Git repositories and generates Kubernetes manifests.
@@ -187,6 +190,30 @@ configs:
       clientSecret: $argocd-oidc:client_secret
       requestedScopes: ["openid", "profile", "email", "groups"]
       requestedIDTokenClaims: {"groups": {"essential": true}}
+
+    # ---- Cluster-cache exclusions (OOM fix 2026-08-03) ---------------------
+    # The app controller list/watches EVERY resource in the cluster for the
+    # resource tree, independent of how many Applications exist. Fat or
+    # churny CR groups it will never manage get excluded here. NOTE: setting
+    # resource.exclusions REPLACES the chart's stock list, so the stock
+    # entries must be reproduced above the local additions (copy them from
+    # the live argocd-cm or the chart's values.yaml when upgrading).
+    resource.exclusions: |
+      ### --- chart stock entries (Endpoints/EndpointSlice, Lease, Authz/
+      ### Authn reviews, CSRs, cert-manager CertificateRequest, Cilium,
+      ### Kyverno) go here verbatim ---
+      ### Trivy reports: ~150 MB of SBOM/vuln CRs; periodic cache re-lists
+      ### spiked the controller to its 1Gi limit (OOMKills 2026-08-01/02).
+      - apiGroups:
+        - aquasecurity.github.io
+        kinds:
+        - '*'
+      ### Longhorn CRs: high-churn (snapshots, engines, IMs), Helm-managed,
+      ### never under an Argo app.
+      - apiGroups:
+        - longhorn.io
+        kinds:
+        - '*'
 
   # ---- RBAC mapping for Authentik groups → ArgoCD roles ------------------
   # Anyone in the `ArgoCD Admins` Authentik group becomes role:admin.

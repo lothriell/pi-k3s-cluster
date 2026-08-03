@@ -1,0 +1,67 @@
+---
+# tailscale-monitor: pages via ntfy when watched tailnet peers go offline.
+# Runs on athena next to ntfy + the monitoring watchdog. See defaults/main.yml.
+
+- name: Assert tailscale CLI is present (athena must be on the tailnet)
+  ansible.builtin.command: tailscale version
+  changed_when: false
+
+- name: Create state directory
+  ansible.builtin.file:
+    path: "{{ tailscale_monitor_state_dir }}"
+    state: directory
+    mode: "0755"
+  become: true
+
+- name: Deploy peer check script
+  ansible.builtin.template:
+    src: tailscale-peer-check.py.j2
+    dest: /usr/local/bin/tailscale-peer-check
+    mode: "0750"
+    owner: root
+    group: root
+  become: true
+
+- name: Deploy checker systemd service
+  ansible.builtin.template:
+    src: tailscale-peer-check.service.j2
+    dest: /etc/systemd/system/tailscale-peer-check.service
+    mode: "0644"
+  become: true
+
+- name: Deploy checker systemd timer
+  ansible.builtin.template:
+    src: tailscale-peer-check.timer.j2
+    dest: /etc/systemd/system/tailscale-peer-check.timer
+    mode: "0644"
+  become: true
+  notify: restart tailscale-peer-check-timer
+
+- name: Deploy metrics exporter systemd service
+  ansible.builtin.template:
+    src: tailscale-monitor-exporter.service.j2
+    dest: /etc/systemd/system/tailscale-monitor-exporter.service
+    mode: "0644"
+  become: true
+  notify: restart tailscale-monitor-exporter
+
+- name: Enable and start metrics exporter
+  ansible.builtin.systemd:
+    name: tailscale-monitor-exporter
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+
+- name: Enable and start checker timer
+  ansible.builtin.systemd:
+    name: tailscale-peer-check.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+
+- name: Run one check now to validate config end-to-end
+  ansible.builtin.command: /usr/local/bin/tailscale-peer-check
+  become: true
+  changed_when: false
