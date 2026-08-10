@@ -14,7 +14,7 @@
 
   vars:
     wazuh_manager_ip: "{{ wazuh_manager_ip }}"
-    wazuh_version: "4.14.4"
+    wazuh_version: "4.14.7"
 
   tasks:
     - name: Check if Wazuh agent is already installed
