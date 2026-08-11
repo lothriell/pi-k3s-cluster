@@ -1,0 +1,11 @@
+# Managed by Ansible (role wazuh-dojo-export)
+[Unit]
+Description=Daily Wazuh vulnerability export to DefectDojo
+
+[Timer]
+OnCalendar={{ wazuh_dojo_export_on_calendar }}
+RandomizedDelaySec={{ wazuh_dojo_export_randomized_delay }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

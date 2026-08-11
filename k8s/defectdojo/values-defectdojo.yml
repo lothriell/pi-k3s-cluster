@@ -1,0 +1,150 @@
+# =============================================================================
+# DefectDojo — vulnerability management / finding aggregation (security stack)
+# =============================================================================
+# Helm chart: defectdojo/defectdojo (https://github.com/DefectDojo/django-DefectDojo)
+# Deployed by: ansible/playbooks/21-deploy-defectdojo.yml (make defectdojo)
+# Accessible at: defectdojo.<local_domain> via Traefik (local-ingress.yml.j2)
+#
+# Hostname policy: `host` / `siteUrl` contain the real local domain, so they are
+# passed by the playbook via --set (kept out of this committed file — same
+# public-mirror sanitization concern as everywhere else).
+#
+# Secrets policy (authentik pattern — nothing sensitive in helm history):
+#   All secrets live in vault.yml; the playbook creates three K8s Secrets
+#   BEFORE the chart installs (create*Secret all stay false here):
+#     defectdojo                       → DD_ADMIN_PASSWORD, DD_SECRET_KEY,
+#                                        DD_CREDENTIAL_AES_256_KEY,
+#                                        METRICS_HTTP_AUTH_PASSWORD
+#     defectdojo-postgresql-specific   → postgresql-postgres-password (admin),
+#                                        postgresql-password (app user)
+#     defectdojo-valkey-specific       → valkey-password
+#
+# Images: DefectDojo 3.x publishes multi-arch (amd64+arm64), but everything is
+# pinned to x86 nodes anyway — postgres + media live on longhorn-storage
+# (x86-tagged replicas per feedback_longhorn_storage_class_default) and the
+# django image is ~2GB (not something for 32GB Pi eMMC).
+# =============================================================================
+
+# Chart's own secret templating disabled — playbook owns the Secrets.
+createSecret: false
+createPostgresqlSecret: false
+createValkeySecret: false
+
+# host + siteUrl set via --set in the playbook (real domain).
+# In-cluster API clients (future Trivy→Dojo import jobs) talk to the service
+# DNS name, which must be in DD_ALLOWED_HOSTS.
+alternativeHosts:
+  - defectdojo-django.defectdojo.svc.cluster.local
+
+# Tags default to the chart appVersion; IfNotPresent keeps the ~2GB django
+# image from re-pulling on every pod churn (x86-2 sits across the VPN).
+imagePullPolicy: IfNotPresent
+
+django:
+  replicas: 1
+
+  # Ingress handled centrally by k8s/ingress/local-ingress.yml.j2 (Traefik +
+  # cert-manager homielab-internal). Chart ingress off.
+  ingress:
+    enabled: false
+
+  nodeSelector:
+    kubernetes.io/arch: amd64
+
+  uwsgi:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        # Chart default 512Mi is tight for Django + report parsing spikes
+        # (same class of trap as authentik's 900Mi OOM on migrate).
+        memory: 1Gi
+
+  nginx:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 256Mi
+
+  # Media = uploaded scan files / finding attachments. Only the django pod
+  # (nginx + uwsgi containers) mounts it — celery does NOT — so RWO is safe
+  # with replicas=1 and Longhorn needs no RWX share-manager.
+  mediaPersistentVolume:
+    enabled: true
+    name: media
+    type: pvc
+    persistentVolumeClaim:
+      create: true
+      size: 5Gi
+      accessModes:
+        - ReadWriteOnce
+      storageClassName: longhorn-storage
+
+celery:
+  beat:
+    nodeSelector:
+      kubernetes.io/arch: amd64
+  worker:
+    replicas: 1
+    nodeSelector:
+      kubernetes.io/arch: amd64
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        # Import/dedup of large scan reports happens here — chart default
+        # 512Mi is the first thing to OOM on a big Trivy import.
+        memory: 1Gi
+
+initializer:
+  run: true
+  nodeSelector:
+    kubernetes.io/arch: amd64
+
+# -- Bundled Postgres (DefectDojo-vendored bitnami/postgresql sub-chart) ------
+
+postgresql:
+  enabled: true
+  auth:
+    username: defectdojo
+    database: defectdojo
+    existingSecret: defectdojo-postgresql-specific
+    # secretKeys defaults: postgresql-postgres-password / postgresql-password
+    # — the playbook's Secret uses exactly these key names.
+  primary:
+    persistence:
+      enabled: true
+      storageClass: longhorn-storage  # x86-pinned replicas
+      size: 8Gi
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+      limits:
+        memory: 512Mi
+    nodeSelector:
+      kubernetes.io/arch: amd64
+
+# -- Valkey (celery broker/cache; cloudpirates sub-chart) ---------------------
+
+valkey:
+  enabled: true
+  auth:
+    existingSecret: defectdojo-valkey-specific
+    existingSecretPasswordKey: valkey-password
+  # Broker only — queue contents are disposable; skip the Longhorn volume.
+  persistence:
+    enabled: false
+  nodeSelector:
+    kubernetes.io/arch: amd64
+
+# -- Monitoring: off for now (no nginx-exporter sidecar; Prometheus scrape
+# can be added later via extraScrapeConfigs if wanted).
+
+# -- Trivy Operator import (follow-up): DefectDojo API v2 /import-scan with
+# scan_type "Trivy Operator Scan" — candidate CronJob or
+# trivy-dojo-report-operator. Not part of this deploy.

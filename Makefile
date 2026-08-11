@@ -194,6 +194,14 @@ vaultwarden: ## Deploy Vaultwarden (self-hosted Bitwarden) LAN-only at vault.<lo
 authentik: ## Deploy Authentik (LAN-only OIDC for Grafana + ArgoCD) at authentik.<local_domain>
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/15-deploy-authentik.yml
 
+.PHONY: defectdojo
+defectdojo: ## Deploy DefectDojo (vulnerability management) at defectdojo.<local_domain>
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/21-deploy-defectdojo.yml
+
+.PHONY: wazuh-dojo-export
+wazuh-dojo-export: ## Deploy daily Wazuh→DefectDojo vulnerability export (timer on the Wazuh VM)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/22-deploy-wazuh-dojo-export.yml
+
 .PHONY: network-policies
 network-policies: ## Apply all namespace NetworkPolicies (requires target namespaces to exist)
 	$(KUBECTL) apply -f k8s/network-policies/

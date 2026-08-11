@@ -1,0 +1,57 @@
+# =============================================================================
+# trivy-dojo-report-operator — Trivy Operator → DefectDojo bridge
+# =============================================================================
+# Helm chart: trivy-dojo-report-operator (telekom-mms), deployed into
+# trivy-system by ansible/playbooks/21-deploy-defectdojo.yml (make defectdojo).
+#
+# Watches VulnerabilityReport CRs cluster-wide and POSTs each to DefectDojo's
+# /api/v2/import-scan/ as it appears/changes. Image is multi-arch (amd64+arm64)
+# so no nodeSelector needed.
+#
+# Secrets policy: createSecret=false — the playbook pre-creates
+#   trivy-dojo-report-operator-defect-dojo-api-credentials  (keys: apiKey, url)
+# from vault (defectdojo_api_token), so the token never lands in helm history
+# or this file. The url key is cluster-internal (no real domain):
+#   http://defectdojo-django.defectdojo.svc.cluster.local
+# which is in DD_ALLOWED_HOSTS via alternativeHosts in values-defectdojo.yml.
+#
+# Dojo naming scheme (eval strings are python expressions run against the
+# report CR — see "A note on eval" in the operator README):
+#   Product Type  pi-k3s-cluster                        (static)
+#   Product       <k8s namespace of the workload>       (eval)
+#   Engagement    trivy-operator                        (static)
+#   Test title    <image repository>                    (eval — stable per
+#                 image, so re-scans/upgrades keep landing in the same test;
+#                 deduplicationOnEngagement handles the rest)
+# =============================================================================
+
+defectDojoApiCredentials:
+  createSecret: false
+
+operator:
+  replicas: 1
+  trivyDojoReportOperator:
+    env:
+      reports: vulnerabilityreports
+      defectDojoActive: "true"
+      defectDojoVerified: "false"
+      defectDojoAutoCreateContext: "true"
+      defectDojoDeduplicationOnEngagement: "true"
+      defectDojoDoNotReactivate: "true"
+      defectDojoCloseOldFindings: "false"
+      defectDojoCloseOldFindingsProductScope: "false"
+      defectDojoMinimumSeverity: Info
+      defectDojoEnvName: Production
+      defectDojoProductTypeName: pi-k3s-cluster
+      defectDojoEvalProductName: "true"
+      defectDojoProductName: meta["namespace"]
+      defectDojoEngagementName: trivy-operator
+      defectDojoEvalTestTitle: "true"
+      defectDojoTestTitle: body["report"]["artifact"]["repository"]
+      logLevel: INFO
+    resources:
+      requests:
+        cpu: 25m
+        memory: 128Mi
+      limits:
+        memory: 256Mi

@@ -318,6 +318,36 @@
   when: "'k3s_cluster' in group_names"
   tags: [system, prune]
 
+# --- os-release masquerade: present CachyOS as Arch (2026-08-11) ------------
+# Wazuh's vulnerability scanner maps OS→feed by the os-release ID; it has an
+# Arch feed (security.archlinux.org) but does not recognize derivative IDs
+# like "cachyos", so the host got zero vulnerability states. Presenting
+# ID=arch/NAME="Arch Linux" makes the scanner use the Arch feed — accurate
+# enough since CachyOS tracks Arch packages closely. /etc/os-release is a
+# regular file here (shadows /usr/lib/os-release, which stays CachyOS);
+# pacman may restore it on a cachyos-release update — this task re-asserts
+# on every prepare run. Our own automation is unaffected: everything keys on
+# ansible_os_family "Archlinux", which both IDs resolve to.
+- name: Masquerade os-release as Arch (Wazuh vuln-feed mapping)
+  ansible.builtin.copy:
+    dest: /etc/os-release
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      NAME="Arch Linux"
+      PRETTY_NAME="Arch Linux"
+      ID=arch
+      ID_LIKE=arch
+      BUILD_ID=rolling
+      HOME_URL="https://cachyos.org/"
+      DOCUMENTATION_URL="https://wiki.cachyos.org/"
+      SUPPORT_URL="https://discuss.cachyos.org/"
+      BUG_REPORT_URL="https://github.com/cachyos"
+      LOGO=cachyos
+  when: ansible_distribution == "CachyOS" or ansible_distribution == "Archlinux"
+  tags: [system, wazuh]
+
 # --- Journald cap + unit-health metrics (tasks #58/#59) ---------------------
 # Cross-role include: the tasks + script live in roles/common to keep one
 # copy; they are OS-agnostic (systemd only).

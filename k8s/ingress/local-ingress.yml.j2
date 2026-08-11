@@ -393,3 +393,32 @@ spec:
                 name: authentik-server
                 port:
                   number: 80
+
+---
+# DefectDojo — vulnerability management (LAN/Tailscale only).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: defectdojo-local
+  namespace: defectdojo
+  annotations:
+    cert-manager.io/cluster-issuer: homielab-internal
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - defectdojo.{{ local_domain }}
+      secretName: defectdojo-local-tls
+  rules:
+    - host: defectdojo.{{ local_domain }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: defectdojo-django
+                port:
+                  number: 80

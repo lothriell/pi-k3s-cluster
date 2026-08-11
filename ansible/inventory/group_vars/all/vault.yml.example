@@ -58,3 +58,19 @@ authentik_bootstrap_password: "changeme-strong-password-rotate-after-install"
 authentik_bootstrap_token: "changeme-60-hex-chars"
 authentik_oidc_client_secret_grafana: "changeme-40-alphanumeric-chars"
 authentik_oidc_client_secret_argocd: "changeme-40-alphanumeric-chars"
+
+# DefectDojo (vulnerability management — playbook 21)
+# Generate alnum strings with `LC_ALL=C tr -dc A-Za-z0-9 </dev/urandom | head -c <N>`
+# admin_password:    initial admin login, honoured only on first init; rotate via UI after
+# secret_key:        128 alnum (Django SECRET_KEY)
+# aes_key:           128 alnum — NEVER rotate after first boot (encrypts stored tool creds in DB)
+# postgres_password: 32 alnum, used for both bitnami superuser + app user keys
+defectdojo_admin_password: "changeme-22-alphanumeric-chars"
+defectdojo_secret_key: "changeme-128-alphanumeric-chars"
+defectdojo_aes_key: "changeme-128-alphanumeric-chars-never-rotate"
+defectdojo_metrics_password: "changeme-32-alphanumeric-chars"
+defectdojo_postgres_password: "changeme-32-alphanumeric-chars"
+defectdojo_valkey_password: "changeme-32-alphanumeric-chars"
+# api_token: DefectDojo API v2 token for the trivy-dojo-report-operator; mint via
+# POST /api/v2/api-token-auth/ with the admin credentials (or UI → API v2 Key)
+defectdojo_api_token: "changeme-40-char-defectdojo-api-token"

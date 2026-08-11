@@ -1,0 +1,36 @@
+---
+# =============================================================================
+# Wazuh → DefectDojo vulnerability export (security stack)
+# =============================================================================
+# Deploys a daily systemd timer ON the Wazuh VM that pushes the fleet's
+# vulnerability-detection state into DefectDojo. Runs on the VM because
+# wazuh-indexer (the only place Wazuh 4.8+ keeps vulnerability state) binds
+# to localhost. Details in roles/wazuh-dojo-export/defaults/main.yml.
+#
+# Usage: make wazuh-dojo-export
+# Result in Dojo: product type "wazuh-fleet" → one product per agent hostname.
+# =============================================================================
+
+- name: Deploy Wazuh → DefectDojo export
+  hosts: security_stack
+  gather_facts: false
+  become: false
+
+  roles:
+    - role: ../roles/wazuh-dojo-export
+
+  post_tasks:
+    - name: Run first export now
+      ansible.builtin.command: systemctl start wazuh-dojo-export.service
+      become: true
+      changed_when: true
+
+    - name: Show export result
+      ansible.builtin.command: journalctl -u wazuh-dojo-export.service -n 15 --no-pager
+      become: true
+      register: export_log
+      changed_when: false
+
+    - name: Display export log
+      ansible.builtin.debug:
+        var: export_log.stdout_lines

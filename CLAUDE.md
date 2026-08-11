@@ -173,6 +173,17 @@ All IPs are configured in `ansible/inventory/hosts.yml` and `group_vars/all/main
 - Agents installed on all cluster nodes + Proxmox host
 - Dashboard accessible via HTTPS on Servers VLAN
 
+### DefectDojo (vulnerability management)
+- Namespace: `defectdojo`; official Helm chart, playbook 21 (`make defectdojo`)
+- Web UI/API at `defectdojo.<local_domain>` (Traefik + internal CA); login `admin` / vault `defectdojo_admin_password`
+- Stack: django (nginx+uwsgi pod) + celery worker/beat + initializer job + bundled Postgres + Valkey (broker, no persistence)
+- All workloads pinned amd64; Postgres (8Gi) + media (5Gi, RWO — only the django pod mounts media) on `longhorn-storage`, enrolled in `critical_pvcs`
+- Secrets pre-created by the playbook from vault (authentik pattern); `host`/`siteUrl` passed via `--set` to keep the real domain out of the committed values file
+- `defectdojo_aes_key` must NEVER rotate after first boot (encrypts stored tool credentials in the DB)
+- **Trivy feed is LIVE:** trivy-dojo-report-operator (in `trivy-system`, same playbook, tag `trivy-dojo`) streams every VulnerabilityReport into Dojo — products per namespace under product type `pi-k3s-cluster`, test title = image repo. API token in vault `defectdojo_api_token`; netpol allows trivy-system → django :8080
+- **Wazuh feed is LIVE:** `make wazuh-dojo-export` (playbook 22, role `wazuh-dojo-export`) — daily timer ON the Wazuh VM (indexer binds localhost-only, so the export can't run in-cluster); queries `wazuh-states-vulnerabilities-*` via the indexer admin client cert and POSTs raw hits JSON to Dojo (v4.8 parser auto-detects). Products per hostname under product type `wazuh-fleet`; `close_old_findings` auto-closes patched CVEs
+- **Grafana visibility:** "DefectDojo — Triage State" row on the Trivy Operator dashboard queries the Dojo API live (Infinity datasource, token in gitignored values-grafana.yml)
+
 ## Headlamp (K8s Web UI)
 
 - Lightweight Kubernetes dashboard (official successor to the retired Kubernetes Dashboard); deployed via playbook 14, accessible at `headlamp.<local_domain>` through Traefik

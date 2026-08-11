@@ -176,6 +176,8 @@
       - { namespace: vaultwarden, name: vaultwarden-data-vaultwarden-0 }
       - { namespace: vaultwarden, name: vaultwarden-attachments-vaultwarden-0 }
       - { namespace: authentik,   name: data-authentik-postgresql-0 }
+      - { namespace: defectdojo,  name: data-defectdojo-postgresql-0 }
+      - { namespace: defectdojo,  name: defectdojo-django-media }
 
   tasks:
     - name: Create longhorn-system R2 credential secret

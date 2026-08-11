@@ -1,0 +1,232 @@
+---
+# =============================================================================
+# DefectDojo — vulnerability management (security stack)
+# =============================================================================
+# Deploys DefectDojo via the official Helm chart into the `defectdojo`
+# namespace. Creates three Secrets from Ansible Vault BEFORE the chart
+# installs (authentik pattern — no secrets in helm values/history):
+#   defectdojo                      main app secret (DD_* env keys)
+#   defectdojo-postgresql-specific  bundled postgres auth (bitnami contract)
+#   defectdojo-valkey-specific      celery broker auth
+#
+# host/siteUrl carry the real local domain → passed here via --set, not
+# committed in the values file.
+#
+# Usage:  make defectdojo
+# Access: https://defectdojo.<local_domain>  (Traefik, cert-manager TLS)
+# Login:  admin / vault.yml::defectdojo_admin_password
+# After first deploy: run `make backup-relabel` so the postgres + media PVCs
+# enrol into nightly R2 backups (critical_pvcs already lists them).
+# =============================================================================
+
+- name: Deploy DefectDojo
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  become: false
+
+  vars:
+    defectdojo_chart_version: "1.9.44"   # app 3.2.0
+    defectdojo_values: "{{ playbook_dir }}/../../k8s/defectdojo/values-defectdojo.yml"
+    trivy_dojo_operator_chart_version: "0.11.0"
+    trivy_dojo_operator_values: "{{ playbook_dir }}/../../k8s/defectdojo/values-trivy-dojo-operator.yml"
+
+  tasks:
+    - name: Ensure defectdojo namespace exists
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: defectdojo
+      tags: [defectdojo]
+
+    # --- Secrets ----------------------------------------------------------
+    # Recreated on every run (state=present updates in place if vault values
+    # change). Must exist before `helm upgrade --wait` — pods mount them at
+    # startup.
+
+    - name: Create defectdojo main secret (DD_* env keys)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: defectdojo
+            namespace: defectdojo
+          type: Opaque
+          stringData:
+            # Honoured by the initializer only while the admin user doesn't
+            # exist yet — rotate via the UI later, the value here goes inert.
+            DD_ADMIN_PASSWORD: "{{ defectdojo_admin_password }}"
+            DD_SECRET_KEY: "{{ defectdojo_secret_key }}"
+            # NEVER rotate the AES key after first boot — it encrypts stored
+            # tool credentials in the DB; changing it orphans them.
+            DD_CREDENTIAL_AES_256_KEY: "{{ defectdojo_aes_key }}"
+            METRICS_HTTP_AUTH_PASSWORD: "{{ defectdojo_metrics_password }}"
+      tags: [defectdojo]
+
+    - name: Create defectdojo-postgresql-specific (bitnami existingSecret contract)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: defectdojo-postgresql-specific
+            namespace: defectdojo
+          type: Opaque
+          stringData:
+            # Key names fixed by postgresql.auth.secretKeys in the values
+            # file (chart defaults). Both required — bitnami init reads the
+            # admin key even in standalone mode.
+            postgresql-postgres-password: "{{ defectdojo_postgres_password }}"
+            postgresql-password: "{{ defectdojo_postgres_password }}"
+      tags: [defectdojo]
+
+    - name: Create defectdojo-valkey-specific (celery broker auth)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: defectdojo-valkey-specific
+            namespace: defectdojo
+          type: Opaque
+          stringData:
+            valkey-password: "{{ defectdojo_valkey_password }}"
+      tags: [defectdojo]
+
+    # --- Helm install -----------------------------------------------------
+
+    - name: Add DefectDojo Helm repo
+      ansible.builtin.command: >
+        helm repo add defectdojo
+        https://raw.githubusercontent.com/DefectDojo/django-DefectDojo/helm-charts
+      register: helm_repo_add
+      changed_when: "'has been added' in helm_repo_add.stdout"
+      failed_when:
+        - helm_repo_add.rc != 0
+        - "'already exists' not in helm_repo_add.stderr"
+      tags: [defectdojo]
+
+    # Unpinned-chart staleness trap (memory: 2026-08-01 prometheus 29.20.0
+    # re-deploy) — always refresh this repo's index before install.
+    - name: Update Helm repos
+      ansible.builtin.command: helm repo update defectdojo
+      changed_when: false
+      tags: [defectdojo]
+
+    - name: Deploy DefectDojo
+      ansible.builtin.command: >
+        helm upgrade --install defectdojo defectdojo/defectdojo
+        --version {{ defectdojo_chart_version }}
+        --namespace defectdojo
+        -f {{ defectdojo_values }}
+        --set host=defectdojo.{{ local_domain }}
+        --set siteUrl=https://defectdojo.{{ local_domain }}
+        --wait --timeout 15m
+      register: helm_deploy
+      changed_when: "'has been upgraded' in helm_deploy.stdout or 'has been installed' in helm_deploy.stdout"
+      tags: [defectdojo]
+
+    # First install: the initializer job runs DB migrations + creates the
+    # admin user — django only goes Ready after that finishes.
+    - name: Wait for DefectDojo django pod to be Ready
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Ready pods
+        -l defectdojo.org/component=django
+        -n defectdojo --timeout=300s
+      changed_when: false
+      tags: [defectdojo, verify]
+
+    - name: Show DefectDojo pod status
+      ansible.builtin.command: kubectl get pods -n defectdojo -o wide
+      register: defectdojo_pods
+      changed_when: false
+      tags: [defectdojo, verify]
+
+    - name: Display DefectDojo pods
+      ansible.builtin.debug:
+        var: defectdojo_pods.stdout_lines
+      tags: [defectdojo, verify]
+
+    - name: Report access URL + next steps
+      ansible.builtin.debug:
+        msg: |
+          DefectDojo deployed. Access at:  https://defectdojo.{{ local_domain }}
+          Login: admin / vault.yml::defectdojo_admin_password
+
+          Post-deploy checklist:
+            1. make backup-relabel   (enrol postgres + media PVCs into R2 backups)
+            2. Ingress applied? If defectdojo.{{ local_domain }} 404s:
+               ansible-playbook ansible/playbooks/03-post-install.yml --tags ingress
+            3. NetworkPolicies: make network-policies
+      tags: [defectdojo]
+
+    # =========================================================================
+    # trivy-dojo-report-operator — pushes Trivy VulnerabilityReports into
+    # DefectDojo continuously. Lives in trivy-system (part of the trivy stack);
+    # the defectdojo netpol allows trivy-system → django :8080.
+    # vault.yml::defectdojo_api_token minted from the admin account via
+    # /api/v2/api-token-auth/ (2026-08-11).
+    # =========================================================================
+
+    - name: Create DefectDojo API credentials secret for report operator
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            # Name contract: <release fullname>-defect-dojo-api-credentials
+            name: trivy-dojo-report-operator-defect-dojo-api-credentials
+            namespace: trivy-system
+          type: Opaque
+          stringData:
+            apiKey: "{{ defectdojo_api_token }}"
+            url: "http://defectdojo-django.defectdojo.svc.cluster.local"
+      tags: [defectdojo, trivy-dojo]
+
+    - name: Add trivy-dojo-report-operator Helm repo
+      ansible.builtin.command: >
+        helm repo add trivy-dojo-report-operator
+        https://telekom-mms.github.io/trivy-dojo-report-operator/
+      register: helm_repo_add_tdro
+      changed_when: "'has been added' in helm_repo_add_tdro.stdout"
+      failed_when:
+        - helm_repo_add_tdro.rc != 0
+        - "'already exists' not in helm_repo_add_tdro.stderr"
+      tags: [defectdojo, trivy-dojo]
+
+    - name: Update trivy-dojo-report-operator Helm repo
+      ansible.builtin.command: helm repo update trivy-dojo-report-operator
+      changed_when: false
+      tags: [defectdojo, trivy-dojo]
+
+    - name: Deploy trivy-dojo-report-operator
+      ansible.builtin.command: >
+        helm upgrade --install trivy-dojo-report-operator
+        trivy-dojo-report-operator/trivy-dojo-report-operator
+        --version {{ trivy_dojo_operator_chart_version }}
+        --namespace trivy-system
+        -f {{ trivy_dojo_operator_values }}
+        --wait --timeout 5m
+      register: helm_deploy_tdro
+      changed_when: "'has been upgraded' in helm_deploy_tdro.stdout or 'has been installed' in helm_deploy_tdro.stdout"
+      tags: [defectdojo, trivy-dojo]
+
+    - name: Show report-operator pod status
+      ansible.builtin.command: >
+        kubectl get pods -n trivy-system -l app.kubernetes.io/name=trivy-dojo-report-operator -o wide
+      register: tdro_pods
+      changed_when: false
+      tags: [defectdojo, trivy-dojo, verify]
+
+    - name: Display report-operator pods
+      ansible.builtin.debug:
+        var: tdro_pods.stdout_lines
+      tags: [defectdojo, trivy-dojo, verify]

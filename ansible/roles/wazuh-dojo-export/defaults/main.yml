@@ -1,0 +1,35 @@
+---
+# wazuh-dojo-export: daily export of Wazuh vulnerability-detection state into
+# DefectDojo, running ON the Wazuh VM.
+#
+# Why on the VM: Wazuh 4.8+ keeps vulnerability state in the indexer
+# (wazuh-states-vulnerabilities-*), and wazuh-indexer binds 9200 to localhost
+# only. The script queries it locally with the indexer ADMIN CLIENT CERT
+# (no passwords involved) and POSTs the RAW OpenSearch response to DefectDojo —
+# Dojo's Wazuh parser detects the v4.8 "hits" format natively, so no
+# transformation is needed.
+#
+# Dojo mapping (mirrors the Trivy scheme, but for hosts):
+#   Product Type  wazuh-fleet
+#   Product       <agent name>          (one per host)
+#   Engagement    vulnerability-detection
+#   Test          Wazuh
+# reimport-scan + close_old_findings=true → findings auto-close in Dojo once
+# the package is patched on the host and Wazuh drops the state entry.
+
+wazuh_dojo_export_conf: /etc/wazuh-dojo-export.conf
+wazuh_dojo_export_ca: /etc/wazuh-dojo-export-ca.crt
+wazuh_dojo_export_script: /usr/local/bin/wazuh-dojo-export
+
+# Daily, after Wazuh's own vulnerability scans settle; randomized to avoid
+# thundering-herd patterns with other timers.
+wazuh_dojo_export_on_calendar: "*-*-* 06:30:00"
+wazuh_dojo_export_randomized_delay: "15m"
+
+wazuh_dojo_indexer_url: "https://localhost:9200"
+wazuh_dojo_indexer_cert: /etc/wazuh-indexer/certs/admin.pem
+wazuh_dojo_indexer_key: /etc/wazuh-indexer/certs/admin-key.pem
+
+# DefectDojo endpoint — resolves via /etc/hosts on the VM (fleet rollout
+# 2026-08-10) and is verified reachable from the Wazuh VLAN.
+wazuh_dojo_url: "https://defectdojo.{{ local_domain }}"

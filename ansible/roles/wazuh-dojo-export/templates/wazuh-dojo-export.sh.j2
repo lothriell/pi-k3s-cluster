@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# wazuh-dojo-export — push Wazuh vulnerability-detection state to DefectDojo.
+# Managed by Ansible (role wazuh-dojo-export); do not edit on the host.
+set -euo pipefail
+
+CONF="{{ wazuh_dojo_export_conf }}"
+# shellcheck source=/dev/null
+source "$CONF"   # provides DOJO_TOKEN
+
+INDEXER="{{ wazuh_dojo_indexer_url }}"
+CERT="{{ wazuh_dojo_indexer_cert }}"
+KEY="{{ wazuh_dojo_indexer_key }}"
+DOJO="{{ wazuh_dojo_url }}"
+CA="{{ wazuh_dojo_export_ca }}"
+WORKDIR=$(mktemp -d)
+trap 'rm -rf "$WORKDIR"' EXIT
+
+iq() {  # indexer query
+  curl -sk --cert "$CERT" --key "$KEY" -H 'Content-Type: application/json' "$@"
+}
+
+# Discover agents that currently have vulnerability state
+mapfile -t AGENTS < <(iq "$INDEXER/wazuh-states-vulnerabilities-*/_search" -d \
+  '{"size":0,"aggs":{"a":{"terms":{"field":"agent.name","size":100}}}}' \
+  | python3 -c 'import json,sys; [print(b["key"]) for b in json.load(sys.stdin)["aggregations"]["a"]["buckets"]]')
+
+if [ "{% raw %}${#AGENTS[@]}{% endraw %}" -eq 0 ]; then
+  echo "no agents with vulnerability state — nothing to export"
+  exit 0
+fi
+
+rc=0
+for agent in "${AGENTS[@]}"; do
+  out="$WORKDIR/${agent}.json"
+  iq "$INDEXER/wazuh-states-vulnerabilities-*/_search" -d \
+    "{\"size\":10000,\"query\":{\"term\":{\"agent.name\":\"${agent}\"}}}" > "$out"
+
+  count=$(python3 -c "import json;print(json.load(open('$out'))['hits']['total']['value'])")
+
+  http=$(curl -s -o "$WORKDIR/resp.json" -w '%{http_code}' --cacert "$CA" \
+    -X POST "$DOJO/api/v2/reimport-scan/" \
+    -H "Authorization: Token $DOJO_TOKEN" \
+    -F "scan_type=Wazuh" \
+    -F "product_type_name=wazuh-fleet" \
+    -F "product_name=${agent}" \
+    -F "engagement_name=vulnerability-detection" \
+    -F "test_title=wazuh-vulnerability-detection" \
+    -F "auto_create_context=true" \
+    -F "close_old_findings=true" \
+    -F "do_not_reactivate=false" \
+    -F "minimum_severity=Info" \
+    -F "active=true" \
+    -F "verified=false" \
+    -F "file=@${out};type=application/json")
+
+  if [ "$http" = "201" ]; then
+    echo "agent=${agent} states=${count} import=OK"
+  else
+    echo "agent=${agent} states=${count} import=FAILED http=${http} $(head -c 300 "$WORKDIR/resp.json")" >&2
+    rc=1
+  fi
+done
+exit $rc

@@ -1,0 +1,91 @@
+# NetworkPolicy: defectdojo (vulnerability management)
+# Ports below are POD ports (containerPort), not Service ports —
+# kube-router enforces against the destination pod IP, see memory
+# `feedback_networkpolicy_ports.md`.
+#
+# django pod (nginx + uwsgi in one pod; uwsgi:8081 is same-pod → no rule):
+#   8080  HTTP   (Traefik; future in-cluster API clients)
+# postgres pod:
+#   5432  TCP    (django + celery + initializer → DB)
+# valkey pod:
+#   6379  TCP    (django + celery → broker)
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: defectdojo-django-allowed-ingress
+  namespace: defectdojo
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: defectdojo
+      defectdojo.org/component: django
+  policyTypes: [Ingress]
+  ingress:
+    # Traefik in kube-system → DefectDojo UI/API.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 8080
+          protocol: TCP
+    # trivy-dojo-report-operator (trivy-system) → /api/v2/import-scan/.
+    # Talks to the service DNS name directly, not through Traefik.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: trivy-system
+      ports:
+        - port: 8080
+          protocol: TCP
+    # Grafana (monitoring) → Dojo API for the Infinity-datasource panels on
+    # the Trivy Operator dashboard.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8080
+          protocol: TCP
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: defectdojo-postgres-allowed-ingress
+  namespace: defectdojo
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+  policyTypes: [Ingress]
+  ingress:
+    # django + celery + initializer (all carry the defectdojo name label) → DB
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: defectdojo
+      ports:
+        - port: 5432
+          protocol: TCP
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: defectdojo-valkey-allowed-ingress
+  namespace: defectdojo
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: valkey
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: defectdojo
+      ports:
+        - port: 6379
+          protocol: TCP

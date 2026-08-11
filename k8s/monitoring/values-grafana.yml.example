@@ -216,3 +216,24 @@ grafana.ini:
     role_attribute_path: "contains(groups[*], 'Grafana Admins') && 'GrafanaAdmin' || contains(groups[*], 'Grafana Editors') && 'Editor' || 'Viewer'"
     allow_assign_grafana_admin: true
     use_pkce: true
+
+# DefectDojo datasource (Infinity plugin) — required for the "DefectDojo —
+# Triage State" row on the Trivy Operator dashboard. Add under
+# datasources.datasources.yaml.datasources, and keep the plugins: list:
+#
+# plugins:
+#   - yesoreyeram-infinity-datasource
+#
+#      - access: proxy
+#        editable: true
+#        name: DefectDojo
+#        uid: defectdojo
+#        type: yesoreyeram-infinity-datasource
+#        jsonData:
+#          auth_method: apiKey
+#          apiKeyKey: Authorization
+#          apiKeyType: header
+#          allowedHosts:
+#            - http://defectdojo-django.defectdojo.svc.cluster.local
+#        secureJsonData:
+#          apiKeyValue: Token <vault defectdojo_api_token>

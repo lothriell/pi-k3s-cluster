@@ -1,0 +1,10 @@
+# Managed by Ansible (role wazuh-dojo-export)
+[Unit]
+Description=Export Wazuh vulnerability state to DefectDojo
+Wants=network-online.target
+After=network-online.target wazuh-indexer.service
+
+[Service]
+Type=oneshot
+ExecStart={{ wazuh_dojo_export_script }}
+User=root

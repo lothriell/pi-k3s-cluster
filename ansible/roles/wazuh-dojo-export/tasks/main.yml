@@ -1,0 +1,54 @@
+---
+# wazuh-dojo-export: see defaults/main.yml for the architecture rationale.
+
+- name: Deploy DefectDojo API token config (root-only)
+  ansible.builtin.copy:
+    dest: "{{ wazuh_dojo_export_conf }}"
+    content: |
+      # Managed by Ansible (role wazuh-dojo-export)
+      DOJO_TOKEN='{{ defectdojo_api_token }}'
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+  no_log: true
+
+- name: Deploy homielab internal CA (Dojo TLS verification)
+  ansible.builtin.copy:
+    dest: "{{ wazuh_dojo_export_ca }}"
+    content: "{{ homielab_ca_cert }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+- name: Deploy export script
+  ansible.builtin.template:
+    src: wazuh-dojo-export.sh.j2
+    dest: "{{ wazuh_dojo_export_script }}"
+    owner: root
+    group: root
+    mode: "0700"
+  become: true
+
+- name: Deploy systemd service
+  ansible.builtin.template:
+    src: wazuh-dojo-export.service.j2
+    dest: /etc/systemd/system/wazuh-dojo-export.service
+    mode: "0644"
+  become: true
+
+- name: Deploy systemd timer
+  ansible.builtin.template:
+    src: wazuh-dojo-export.timer.j2
+    dest: /etc/systemd/system/wazuh-dojo-export.timer
+    mode: "0644"
+  become: true
+
+- name: Enable and start timer
+  ansible.builtin.systemd:
+    name: wazuh-dojo-export.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
