@@ -32,3 +32,7 @@ fi
 if command -v oh-my-posh >/dev/null 2>&1 && oh-my-posh version >/dev/null 2>&1; then
   eval "$(oh-my-posh init zsh --config ~/.config/oh-my-posh/themes/atomic.omp.json)"
 fi
+
+# Claude Code sync helpers (cc-start / cc-end / cc-wrapup-install) — only on machines that
+# carry the ~/dotfiles clone; silently skipped elsewhere (cluster nodes, SFF boxes).
+[ -f "$HOME/dotfiles/shell/claude-sync.sh" ] && source "$HOME/dotfiles/shell/claude-sync.sh"
