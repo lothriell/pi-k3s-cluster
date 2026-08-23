@@ -353,6 +353,34 @@ extraScrapeConfigs: |
         labels:
           instance: athena
 
+  # blackbox-eve (task #74): end-to-end probes of the PUBLIC eve URLs through
+  # Cloudflare. Each target becomes one probe_* series (instance = URL, env label
+  # drives alert severity: prod pages, test only warns). 30s interval so the
+  # EveProdProbeFailed rule (for: 2m) needs ~4 consecutive failures before paging.
+  - job_name: blackbox-eve
+    scrape_interval: 30s
+    scrape_timeout: 15s
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - https://eve.{{ cloudflare_domain }}/api/version
+          - https://eve.{{ cloudflare_domain }}/
+        labels:
+          env: prod
+      - targets:
+          - https://test-eve.{{ cloudflare_domain }}/api/version
+        labels:
+          env: test
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: prometheus-blackbox-exporter.monitoring.svc.cluster.local:9115
+
   # smartctl-exporter DaemonSet on the 3 storage-tagged amd64 nodes
   # (k3s-x86-1, k3s-x86-2, minisforum-c). The chart's Service annotation
   # path didn't propagate, so use endpoints SD on the headless service
@@ -689,6 +717,62 @@ serverFiles:
             annotations:
               summary: "eve-tracker PVC {{ '{{' }} $labels.namespace {{ '}}' }}/{{ '{{' }} $labels.persistentvolumeclaim {{ '}}' }} >80% full"
               description: "eve-tracker SQLite volume is over 80% used. Expand the 1Gi PVC (Longhorn online resize) before writes fail."
+      # task #74 — eve outage visibility. Cluster-wide PodCrashLooping (for: 15m)
+      # never fired during the 6-min v5.152.0 boot-crash window, and nothing probes
+      # the public URL. These rules are scoped to the eve namespaces and tuned
+      # to page within ~3 min of a real prod outage.
+      - name: eve
+        rules:
+          - alert: EveProdProbeFailed
+            expr: probe_success{job="blackbox-eve", env="prod"} == 0
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "eve PROD unreachable: {{ '{{' }} $labels.instance {{ '}}' }}"
+              description: "Blackbox probe through Cloudflare has failed for 2 minutes (HTTP non-2xx, timeout, or TLS error). Check eve-tracker pods, cloudflared, and the tunnel."
+          - alert: EveTestProbeFailed
+            expr: probe_success{job="blackbox-eve", env="test"} == 0
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "eve TEST unreachable: {{ '{{' }} $labels.instance {{ '}}' }}"
+              description: "Blackbox probe has failed for 5 minutes (test env — no page)."
+          - alert: EveProdProbeSlow
+            expr: probe_duration_seconds{job="blackbox-eve", env="prod"} > 5
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "eve PROD slow: {{ '{{' }} $labels.instance {{ '}}' }} > 5s for 10m"
+              description: "End-to-end probe latency {{ '{{' }} $value | humanizeDuration {{ '}}' }}. Backend saturation, SQLite contention, or tunnel path degradation."
+          - alert: EveProdPodCrashLooping
+            # Fast, eve-scoped: 2+ restarts inside 10 minutes pages after 1 more
+            # minute — a boot-crash loop cannot hide inside the 15m window any more.
+            expr: increase(kube_pod_container_status_restarts_total{namespace="eve-tracker"}[10m]) >= 2
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "eve PROD pod {{ '{{' }} $labels.pod {{ '}}' }} crash-looping"
+              description: "{{ '{{' }} $value {{ '}}' }} restarts in 10 minutes ({{ '{{' }} $labels.container {{ '}}' }}). Image Updater deploys unattended — check the newest image / pod logs."
+          - alert: EveTestPodCrashLooping
+            expr: increase(kube_pod_container_status_restarts_total{namespace="eve-tracker-test"}[10m]) >= 2
+            for: 1m
+            labels:
+              severity: warning
+            annotations:
+              summary: "eve TEST pod {{ '{{' }} $labels.pod {{ '}}' }} crash-looping"
+              description: "{{ '{{' }} $value {{ '}}' }} restarts in 10 minutes (test env — no page)."
+          - alert: EveProdDeploymentUnavailable
+            expr: kube_deployment_status_replicas_available{namespace="eve-tracker"} < kube_deployment_spec_replicas{namespace="eve-tracker"}
+            for: 3m
+            labels:
+              severity: critical
+            annotations:
+              summary: "eve PROD {{ '{{' }} $labels.deployment {{ '}}' }} has no available replicas"
+              description: "Available < desired for 3 minutes — the app is down or stuck rolling (ContainerCreating, CrashLoop, image pull)."
       - name: watchdog
         rules:
           # Dead-man's-switch. Always firing by design — its job is to be

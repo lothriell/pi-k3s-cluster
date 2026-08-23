@@ -65,6 +65,21 @@
         mode: "0600"
       tags: [prometheus]
 
+    # -- Blackbox exporter (task #74) -------------------------------------------
+    # External HTTP probes of the public eve URLs; scraped by the `blackbox-eve`
+    # job rendered into the Prometheus values above. Release name == chart name
+    # so the Service is `prometheus-blackbox-exporter:9115`.
+    - name: Deploy Blackbox exporter via Helm
+      ansible.builtin.command: >
+        helm upgrade --install prometheus-blackbox-exporter
+        prometheus-community/prometheus-blackbox-exporter
+        --namespace monitoring
+        --values {{ playbook_dir }}/../../k8s/monitoring/values-blackbox-exporter.yml
+        --wait --timeout 5m
+      register: blackbox_deploy
+      changed_when: "'STATUS: deployed' in blackbox_deploy.stdout"
+      tags: [prometheus, blackbox]
+
     - name: Deploy Prometheus via Helm
       ansible.builtin.command: >
         helm upgrade --install prometheus

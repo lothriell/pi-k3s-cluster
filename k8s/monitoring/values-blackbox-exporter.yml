@@ -1,0 +1,40 @@
+# =============================================================================
+# Blackbox exporter — external HTTP probes (task #74: eve prod outage visibility)
+# =============================================================================
+# Chart: prometheus-community/prometheus-blackbox-exporter (release name
+# `prometheus-blackbox-exporter` so the Service is literally that, port 9115).
+# Deployed by: ansible/playbooks/04-deploy-monitoring.yml (tags: blackbox, prometheus)
+# Probed from: the `blackbox-eve` job in values-prometheus.yml.j2 — targets are the
+# PUBLIC eve URLs (eve.<cloudflare_domain>), so a probe exercises the whole path:
+# cluster egress → internet → Cloudflare → tunnel → pod. The v5.152.0 (2026-08-01)
+# and power-outage (2026-08-17) degradations paged nothing; this is the fix.
+# No secrets in this file.
+
+replicas: 1
+
+config:
+  modules:
+    http_2xx:
+      prober: http
+      timeout: 10s
+      http:
+        valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+        valid_status_codes: []        # default: 2xx
+        follow_redirects: true
+        preferred_ip_protocol: "ip4"
+        fail_if_ssl: false
+        fail_if_not_ssl: true         # every eve URL is https behind Cloudflare
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 64Mi
+
+# Keep the probe pod off the etcd Pis (small but busy) — any amd64 node is fine.
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+serviceMonitor:
+  enabled: false   # cluster uses extraScrapeConfigs, not the operator
