@@ -38,6 +38,37 @@
     volumes:
       - "{{ ollama_data_volume }}:/root/.ollama"
 
+# Docker 29 boot race: on cold boot the container comes up published but the
+# DOCKER-chain filter ACCEPT for its port is missing -> localhost works while
+# every remote path (ollama-external, Traefik) times out silently. Restarting
+# the container re-programs the rules. Guard unit checks + fixes at each boot.
+# (Seen on the 2026-08-12 Docker 28->29 upgrade AND every cold boot since;
+# live-restore is off, so it's not that. memory: feedback_docker_upgrade_ollama_port)
+- name: Install ollama-portfix boot guard (restart container if port rule missing)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/ollama-portfix.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Restart ollama container if Docker forgot its iptables port rule (Docker 29 boot race)
+      After=docker.service network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStartPre=/usr/bin/timeout 60 /bin/sh -c 'until docker info >/dev/null 2>&1; do sleep 2; done'
+      ExecStart=/bin/sh -c 'sleep 10; if ! iptables -L DOCKER -n | grep -q {{ ollama_port }}; then docker restart {{ ollama_container_name }}; fi'
+
+      [Install]
+      WantedBy=multi-user.target
+  register: portfix_unit
+
+- name: Enable ollama-portfix guard
+  ansible.builtin.systemd:
+    name: ollama-portfix.service
+    enabled: true
+    daemon_reload: "{{ portfix_unit.changed }}"
+
 - name: Wait for Ollama API to be ready
   ansible.builtin.uri:
     url: "http://localhost:{{ ollama_port }}/api/tags"

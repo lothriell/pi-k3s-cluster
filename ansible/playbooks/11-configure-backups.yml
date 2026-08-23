@@ -172,6 +172,11 @@
       - { namespace: gitea, name: gitea-shared-storage }
       - { namespace: forgejo, name: gitea-shared-storage }
       - { namespace: monitoring, name: grafana }
+      # Loki log store (added 2026-08-17): the 14 days of logs leading up to a
+      # disaster are exactly what post-mortems need — cluster regeneration
+      # can't replay them. Prometheus TSDB stays unenrolled (churn-heavy,
+      # low forensic value).
+      - { namespace: monitoring, name: storage-loki-0 }
       - { namespace: open-webui, name: open-webui-data }
       - { namespace: vaultwarden, name: vaultwarden-data-vaultwarden-0 }
       - { namespace: vaultwarden, name: vaultwarden-attachments-vaultwarden-0 }
@@ -198,7 +203,7 @@
       ansible.builtin.command: >
         kubectl -n longhorn-system patch backuptargets.longhorn.io/default
         --type=merge
-        -p {{ ({"spec": {"backupTargetURL": "s3://" + r2_backup_bucket + "@auto/longhorn/", "credentialSecret": "longhorn-r2-credentials", "pollInterval": "5m0s"}} | to_json) | quote }}
+        -p {{ ({"spec": {"backupTargetURL": "s3://" + r2_backup_bucket + "@auto/longhorn/", "credentialSecret": "longhorn-r2-credentials", "pollInterval": "1h0m0s"}} | to_json) | quote }}
       changed_when: false
       tags: [backups, longhorn]
 

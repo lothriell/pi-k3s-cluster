@@ -83,7 +83,7 @@ spec:
       containers:
         - name: cloudflared
           # The official Cloudflare image supports linux/arm64
-          image: cloudflare/cloudflared:2026.7.3
+          image: cloudflare/cloudflared:2026.8.2
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

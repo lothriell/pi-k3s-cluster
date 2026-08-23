@@ -18,6 +18,12 @@ defaultSettings:
   # Default 2 replicas
   defaultReplicaCount: 2
 
+  # R2 cost control (2026-08-14): 16MiB backup blocks -> ~8x fewer objects in
+  # the backupstore, cutting Class A LIST/PUT ops (the $9/mo driver). Applies
+  # to backup volumes created after the change; existing ones keep 2MiB until
+  # their backupstore entry is recreated.
+  defaultBackupBlockSize: 16
+
   # Data path on eMMC
   defaultDataPath: /var/lib/longhorn
 

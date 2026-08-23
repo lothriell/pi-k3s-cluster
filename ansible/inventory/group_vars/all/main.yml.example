@@ -62,6 +62,7 @@ timezone: "UTC"
 # Desktop/laptop Tailscale IPs
 tailscale_arch_t_01: 100.x.x.x
 tailscale_cachy_t_01: 100.x.x.x
+tailscale_loki: 100.x.x.x
 tailscale_macmini: 100.x.x.x
 tailscale_wazuh_server: 100.x.x.x
 tailscale_thorwsl: 100.64.0.15
@@ -80,6 +81,7 @@ macmini_lan_ip: 10.0.0.12
 pve_lan_ip: 10.0.0.10
 desktop_arch_t_lan_ip: 10.0.0.50
 desktop_cachy_t_lan_ip: 10.0.0.51
+desktop_loki_lan_ip: 10.0.0.94         # Dell laptop (Omarchy/Arch), home LAN
 
 # Cloudflare tunnel domain
 cloudflare_domain: example.com

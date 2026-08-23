@@ -21,7 +21,7 @@
   become: false
 
   vars:
-    authentik_chart_version: "2026.2.2"
+    authentik_chart_version: "2026.8.0"
     authentik_values: "{{ playbook_dir }}/../../k8s/authentik/values-authentik.yml"
 
   tasks:
@@ -91,12 +91,17 @@
       changed_when: false
       tags: [authentik]
 
+    # web.base_url → AUTHENTIK_WEB__BASE_URL: bootstrap value for the "Base URL" system
+    # setting (unused until 2026.11, mandatory from then). Passed via --set so the real
+    # domain stays out of the committed values file. Once the system setting holds a
+    # value authentik stops consulting the env var (admin UI wins).
     - name: Deploy Authentik
       ansible.builtin.command: >
         helm upgrade --install authentik authentik/authentik
         --version {{ authentik_chart_version }}
         --namespace authentik
         -f {{ authentik_values }}
+        --set authentik.web.base_url=https://authentik.{{ local_domain }}
         --wait --timeout 10m
       register: helm_deploy
       changed_when: "'has been upgraded' in helm_deploy.stdout or 'has been installed' in helm_deploy.stdout"

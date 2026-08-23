@@ -74,10 +74,14 @@
       changed_when: "'STATUS: deployed' in argocd_deploy.stdout"
       tags: [argocd]
 
+    # --field-selector: the chart's redis-secret-init hook Job pod completes and is
+    # GC'd mid-wait; a bare --all then hangs on the vanished pod until timeout
+    # while every real pod is already Ready (2026-08-22, same fix as playbook 04).
     - name: Wait for ArgoCD pods to be ready
       ansible.builtin.command: >
         kubectl wait --for=condition=Ready pods
         --all --namespace argocd
+        --field-selector=status.phase=Running
         --timeout=300s
       changed_when: false
       tags: [argocd]

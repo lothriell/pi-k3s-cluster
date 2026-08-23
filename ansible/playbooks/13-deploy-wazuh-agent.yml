@@ -13,7 +13,6 @@
   gather_facts: true
 
   vars:
-    wazuh_manager_ip: "{{ wazuh_manager_ip }}"
     wazuh_version: "4.14.4"
 
   tasks:
