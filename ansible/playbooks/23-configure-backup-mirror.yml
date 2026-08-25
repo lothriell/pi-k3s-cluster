@@ -1,0 +1,117 @@
+---
+# =============================================================================
+# Playbook 23: Second backup destination — R2 → Backblaze B2 mirror (DR-2)
+# =============================================================================
+# Creates the `backup-mirror` namespace, a credentials Secret (R2 read + B2
+# write keys from vault), the daily rclone CronJob that mirrors the whole R2
+# backup bucket to B2, and a second Longhorn BackupTarget (`b2`) pointing at
+# the mirror so a B2-only restore is a Longhorn UI action.
+#
+# Design, retention math and the manual B2 steps (bucket with Object Lock,
+# restricted key): pipeline/active/dr-2-second-backup-destination.md
+#
+# Usage:
+#   make backup-mirror                       # (re)apply everything
+#   make backup-mirror-run                   # also kick a one-off sync job now
+#   ansible-playbook ansible/playbooks/23-configure-backup-mirror.yml -e run_now=true
+#
+# Vars (group_vars): r2_backup_bucket, r2_endpoint_url, b2_mirror_bucket,
+#   b2_s3_endpoint, b2_region; vault: r2_access_key_id, r2_secret_access_key,
+#   b2_key_id, b2_application_key.
+# =============================================================================
+
+- name: Configure R2 → B2 backup mirror
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    run_now: false
+    manifest_dir: "{{ playbook_dir }}/../../k8s/backup-mirror"
+    rendered_cronjob: /tmp/backup-mirror-cronjob.yml
+  tasks:
+    - name: Refuse to run with placeholder B2 credentials
+      ansible.builtin.assert:
+        that:
+          - b2_key_id is defined and b2_key_id | length > 0 and 'your-' not in b2_key_id
+          - b2_application_key is defined and b2_application_key | length > 0 and 'your-' not in b2_application_key
+          - b2_mirror_bucket is defined and 'your-' not in b2_mirror_bucket
+          - b2_s3_endpoint is defined and 'your-' not in b2_s3_endpoint
+        fail_msg: >-
+          B2 credentials/bucket are still placeholders — create the bucket + key in the
+          Backblaze UI (see pipeline/active/dr-2-second-backup-destination.md) and fill
+          vault.yml (b2_key_id, b2_application_key) + main.yml (b2_mirror_bucket,
+          b2_s3_endpoint, b2_region).
+
+    - name: Render CronJob manifest (bucket names from group_vars)
+      ansible.builtin.template:
+        src: "{{ manifest_dir }}/cronjob.yml.j2"
+        dest: "{{ rendered_cronjob }}"
+        mode: "0600"
+
+    - name: Apply namespace + CronJob
+      ansible.builtin.command: kubectl apply -f {{ rendered_cronjob }}
+      register: apply_cj
+      changed_when: "'configured' in apply_cj.stdout or 'created' in apply_cj.stdout"
+
+    - name: Create/refresh rclone credentials Secret
+      ansible.builtin.shell: |
+        kubectl -n backup-mirror create secret generic backup-mirror-credentials \
+          --from-literal=RCLONE_CONFIG_R2_ACCESS_KEY_ID='{{ r2_access_key_id }}' \
+          --from-literal=RCLONE_CONFIG_R2_SECRET_ACCESS_KEY='{{ r2_secret_access_key }}' \
+          --from-literal=RCLONE_CONFIG_R2_ENDPOINT='{{ r2_endpoint_url }}' \
+          --from-literal=RCLONE_CONFIG_B2_ACCOUNT='{{ b2_key_id }}' \
+          --from-literal=RCLONE_CONFIG_B2_KEY='{{ b2_application_key }}' \
+          --dry-run=client -o yaml | kubectl apply -f -
+      register: secret_apply
+      changed_when: "'configured' in secret_apply.stdout or 'created' in secret_apply.stdout"
+      no_log: true
+
+    - name: Apply NetworkPolicy
+      ansible.builtin.command: kubectl apply -f {{ playbook_dir }}/../../k8s/network-policies/backup-mirror.yml
+      register: apply_np
+      changed_when: "'configured' in apply_np.stdout or 'created' in apply_np.stdout"
+
+    # -- Longhorn restore-only view of the mirror ------------------------------
+    - name: Create/refresh Longhorn B2 credential secret
+      ansible.builtin.shell: |
+        kubectl -n longhorn-system create secret generic longhorn-b2-credentials \
+          --from-literal=AWS_ACCESS_KEY_ID='{{ b2_key_id }}' \
+          --from-literal=AWS_SECRET_ACCESS_KEY='{{ b2_application_key }}' \
+          --from-literal=AWS_ENDPOINTS='https://{{ b2_s3_endpoint }}' \
+          --dry-run=client -o yaml | kubectl apply -f -
+      register: lh_secret
+      changed_when: "'configured' in lh_secret.stdout or 'created' in lh_secret.stdout"
+      no_log: true
+
+    - name: Create/refresh Longhorn BackupTarget `b2` (mirror, used for restores)
+      ansible.builtin.shell: |
+        cat <<'YAML' | kubectl apply -f -
+        apiVersion: longhorn.io/v1beta2
+        kind: BackupTarget
+        metadata:
+          name: b2
+          namespace: longhorn-system
+        spec:
+          backupTargetURL: "s3://{{ b2_mirror_bucket }}@{{ b2_region }}/longhorn/"
+          credentialSecret: longhorn-b2-credentials
+          pollInterval: 6h0m0s
+        YAML
+      register: lh_bt
+      changed_when: "'configured' in lh_bt.stdout or 'created' in lh_bt.stdout"
+
+    # -- Optional immediate sync ----------------------------------------------
+    - name: Kick a one-off sync job now
+      ansible.builtin.shell: |
+        kubectl -n backup-mirror delete job manual-sync --ignore-not-found
+        kubectl -n backup-mirror create job --from=cronjob/r2-to-b2-mirror manual-sync
+      when: run_now | bool
+      changed_when: true
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: |
+          backup-mirror configured: CronJob r2-to-b2-mirror (05:15 node-local) → b2:{{ b2_mirror_bucket }}
+          Longhorn BackupTarget b2 → s3://{{ b2_mirror_bucket }}@{{ b2_region }}/longhorn/
+          {% if run_now | bool %}One-off job started: kubectl -n backup-mirror logs -f job/manual-sync{% endif %}
+          Verify: kubectl -n backup-mirror get cronjob,job; Longhorn UI → Backup → target b2

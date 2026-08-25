@@ -1,0 +1,121 @@
+# =============================================================================
+# backup-mirror: R2 → B2 replication of the whole `{{ r2_backup_bucket }}` bucket (DR-2)
+# =============================================================================
+# Rendered by ansible/playbooks/23-configure-backup-mirror.yml (bucket names /
+# endpoints come from group_vars; keys from the `backup-mirror-credentials`
+# Secret the playbook creates from vault). Design + retention math:
+#   pipeline/active/dr-2-second-backup-destination.md
+#
+# Why rclone sync and not a second Longhorn BackupTarget: Longhorn 1.12 binds a
+# volume to ONE target and RecurringJobs can't pick a target — so the second
+# copy is a byte-identical mirror of the backupstore, which Longhorn can still
+# read (BackupTarget `b2`, restore-only). etcd snapshots ride along unchanged.
+#
+# Immutability lives on B2 (Object Lock, governance 14d + lifecycle 14d):
+# `sync` deletions are *hides* on the native b2 backend, locked versions can't
+# be destroyed, so a wiped/poisoned R2 only hides objects on B2 for 14 days.
+#
+# Schedule: 05:15 node-local (K3s CronJob TZ trap — kube-controller-manager
+# uses the node's TZ, CEST here) → after the 03:00 Longhorn recurring backup
+# and the 04:00/04:20/04:40 etcd snapshot crons have finished uploading.
+# =============================================================================
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: backup-mirror
+  labels:
+    name: backup-mirror
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: r2-to-b2-mirror
+  namespace: backup-mirror
+  labels:
+    app: backup-mirror
+spec:
+  schedule: "15 5 * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 43200          # 12h — first full sync may be long; daily deltas are minutes
+      ttlSecondsAfterFinished: 604800       # keep 7d so kube-state-metrics can see completion times
+      template:
+        metadata:
+          labels:
+            app: backup-mirror
+        spec:
+          restartPolicy: Never
+          nodeSelector:
+            kubernetes.io/arch: amd64       # keep the multi-GB stream off the Pi eMMC/NIC
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: rclone
+              image: rclone/rclone:1.75
+              imagePullPolicy: IfNotPresent
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              envFrom:
+                - secretRef:
+                    name: backup-mirror-credentials   # RCLONE_CONFIG_R2_* / RCLONE_CONFIG_B2_* keys + endpoints
+              env:
+                - name: RCLONE_CONFIG_R2_TYPE
+                  value: s3
+                - name: RCLONE_CONFIG_R2_PROVIDER
+                  value: Cloudflare
+                - name: RCLONE_CONFIG_R2_NO_CHECK_BUCKET
+                  value: "true"
+                - name: RCLONE_CONFIG_B2_TYPE
+                  value: b2
+                - name: RCLONE_CONFIG_B2_HARD_DELETE
+                  value: "false"                       # deletions = hides (Object Lock-compatible, recoverable)
+                - name: RCLONE_CONFIG_B2_VERSIONS
+                  value: "false"
+                - name: SRC
+                  value: "r2:{{ r2_backup_bucket }}"
+                - name: DST
+                  value: "b2:{{ b2_mirror_bucket }}"
+              command: ["/bin/sh", "-ec"]
+              args:
+                - |
+                  echo "backup-mirror: $SRC -> $DST  ($(date -u +%FT%TZ))"
+                  rclone sync "$SRC" "$DST" \
+                    --fast-list --transfers 8 --checkers 16 \
+                    --size-only \
+                    --retries 5 --low-level-retries 20 \
+                    --stats 5m --stats-one-line --stats-log-level NOTICE \
+                    --log-level NOTICE
+                  echo "backup-mirror: sync OK ($(date -u +%FT%TZ)); sizes:"
+                  rclone size --fast-list "$SRC" | sed 's/^/  src /'
+                  rclone size --fast-list "$DST" | sed 's/^/  dst /'
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: "2"
+                  memory: 1Gi
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+                - name: rclone-config
+                  mountPath: /config/rclone          # rclone wants a writable config dir even when env-only
+          volumes:
+            - name: tmp
+              emptyDir: {}
+            - name: rclone-config
+              emptyDir: {}

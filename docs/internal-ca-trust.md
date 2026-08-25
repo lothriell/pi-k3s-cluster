@@ -96,6 +96,34 @@ Machine** → **Place all certificates in the following store** → Browse
 Verify in browser: visit `https://argocd.<local-domain>`. Lock icon, no
 warning. Firefox uses its own trust store — see "Firefox" below.
 
+### Linux desktops (Arch / CachyOS / Omarchy, Debian / Ubuntu)
+
+Fully headless via Ansible — every host in the `desktops` inventory group is
+handled by playbook 16 (`make trust-ca-push`), which drops the PEM into the
+distro's trust-anchor dir and rebuilds the bundle:
+
+| Family | Anchor path | Rebuild |
+|---|---|---|
+| Arch (p11-kit) | `/etc/ca-certificates/trust-source/anchors/homielab-ca.crt` | `update-ca-trust` |
+| Debian | `/usr/local/share/ca-certificates/homielab-ca.crt` | `update-ca-certificates` |
+
+The play verifies with a real handshake (`curl` without `-k` against
+`https://grafana.<local_domain>/`, expecting an HTTP status). A `curl rc=6`
+there is DNS, not trust — e.g. cachy-t-01 (remote-site VM) where the ens18
+DHCP search domain `<local_domain>` shadows the tailnet split-DNS route; confirm
+trust independently with `curl --resolve grafana.<domain>:443:<traefik-vip>`
+or `trust list | grep -A2 homielab` (Arch).
+
+Manual equivalent (Arch family):
+
+```bash
+sudo cp homielab-ca.crt /etc/ca-certificates/trust-source/anchors/
+sudo update-ca-trust
+```
+
+Firefox still uses its own NSS store — see the Firefox section below, or set
+`security.enterprise_roots.enabled = true` to have it read the system store.
+
 ### iPadOS / iPhone
 
 iOS splits "install profile" from "trust as root":

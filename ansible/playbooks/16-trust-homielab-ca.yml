@@ -14,9 +14,15 @@
 #                   to com.apple.trust-settings.admin (`security
 #                   authorizationdb write … allow` returns -60005), even via
 #                   sudo. MDM is the only fully-automated alternative.
-#   - <future>      Linux desktops via update-ca-certificates and
-#                   Windows via ansible.windows.win_certificate_store —
-#                   both can be fully headless. See docs/internal-ca-trust.md.
+#   - desktops:     Linux desktops, fully headless (added 2026-08-23, #76.2):
+#                   Arch family (arch-t-01, cachy-t-01, loki/Omarchy) →
+#                   /etc/ca-certificates/trust-source/anchors/ + update-ca-trust;
+#                   Debian family → /usr/local/share/ca-certificates/ +
+#                   update-ca-certificates. Verified with a real TLS handshake
+#                   (curl) against grafana.<local_domain>. Firefox uses its own
+#                   NSS store unless it is configured to read the system store
+#                   (security.enterprise_roots.enabled) — not handled here.
+#   - windows_wsl_nodes: CurrentUser\Root via WSL interop (see below).
 #
 # Idempotent: re-running ships the same files; trust install is a no-op
 # if the user has already approved the profile.
@@ -189,6 +195,76 @@
       ansible.builtin.debug:
         msg: "{{ inventory_hostname }}: homielab CA is trusted ✓ ({{ trust_check.stdout }} scope)"
       when: trust_check.stdout in ['admin', 'user']
+
+# =============================================================================
+# Linux desktops (Arch family + Debian family). Headless: drop the PEM into the
+# distro's trust-anchor directory and rebuild the system bundle. The curl check
+# is the real verification — a trusted CA is the only thing that turns
+# "SSL certificate problem" into an HTTP status.
+# =============================================================================
+
+- name: Distribute CA + install into the system trust store on Linux desktops
+  hosts: desktops
+  gather_facts: true
+  become: true
+  vars:
+    cert_path: /tmp/homielab-ca.crt
+    # Arch family: p11-kit trust anchors (CachyOS / Omarchy share this layout)
+    arch_anchor: /etc/ca-certificates/trust-source/anchors/homielab-ca.crt
+    # Debian family: update-ca-certificates requires the .crt suffix here
+    debian_anchor: /usr/local/share/ca-certificates/homielab-ca.crt
+  tasks:
+    - name: Install CA into trust anchors (Arch family)
+      ansible.builtin.copy:
+        src: "{{ cert_path }}"
+        dest: "{{ arch_anchor }}"
+        owner: root
+        group: root
+        mode: "0644"
+      when: ansible_facts['os_family'] == 'Archlinux'
+      register: ca_arch
+
+    - name: Rebuild trust store (Arch family)
+      ansible.builtin.command: update-ca-trust
+      when: ansible_facts['os_family'] == 'Archlinux' and ca_arch.changed
+
+    - name: Install CA into trust anchors (Debian family)
+      ansible.builtin.copy:
+        src: "{{ cert_path }}"
+        dest: "{{ debian_anchor }}"
+        owner: root
+        group: root
+        mode: "0644"
+      when: ansible_facts['os_family'] == 'Debian'
+      register: ca_debian
+
+    - name: Rebuild trust store (Debian family)
+      ansible.builtin.command: update-ca-certificates
+      when: ansible_facts['os_family'] == 'Debian' and ca_debian.changed
+
+    - name: Unsupported OS family — report and skip
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: os_family={{ ansible_facts['os_family'] }} not handled by this play (add a branch)"
+      when: ansible_facts['os_family'] not in ['Archlinux', 'Debian']
+
+    # Verify trust with a real handshake; no -k. A non-TLS failure (DNS,
+    # unreachable while roaming) is reported but not treated as a trust problem.
+    - name: Verify CA trust via TLS handshake (curl, no -k)
+      ansible.builtin.shell: |
+        out=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 https://grafana.{{ local_domain }}/ 2>&1)
+        rc=$?
+        case "$rc" in
+          0)  echo "HTTP $out (cert validated)";;
+          60) echo "TRUST FAILURE: $out"; exit 1;;
+          *)  echo "unreachable (curl rc=$rc; CA trust still set)";;
+        esac
+      become: false
+      register: verify_linux
+      changed_when: false
+
+    - name: Report verify status
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} ({{ ansible_facts['distribution'] }}) → {{ verify_linux.stdout | trim }}"
 
 # =============================================================================
 # Windows hosts via WSL+SSH interop.

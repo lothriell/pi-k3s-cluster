@@ -29,6 +29,11 @@ ntfy_alertmanager_password: "changeme-use-a-real-password"
 r2_access_key_id: "your-r2-access-key-id"
 r2_secret_access_key: "your-r2-secret-access-key"
 
+# Backblaze B2 application key (DR-2 mirror) — restricted to b2_mirror_bucket,
+# WITHOUT bypassGovernance (Object Lock must be able to stop this key).
+b2_key_id: "your-b2-key-id"
+b2_application_key: "your-b2-application-key"
+
 # Gitea service admin (auto-created on fresh install)
 gitea_admin_user: "mygiteaadmin"
 gitea_admin_password: "changeme-use-a-real-password"

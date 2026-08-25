@@ -184,6 +184,18 @@
       - { namespace: defectdojo,  name: data-defectdojo-postgresql-0 }
       - { namespace: defectdojo,  name: defectdojo-django-media }
 
+    # Disposable volumes deliberately run a SINGLE replica: regenerable data
+    # where a second copy is pure disk cost. Driver: the prometheus-server
+    # replica's snapshot chain reached 72G on-disk (45Gi volume) and filled
+    # x86-1 to NodeDiskFull (2026-08-23, fixed 2026-08-25 — replica dropped,
+    # data now on minisforum-c only). The longhorn-storage StorageClass still
+    # provisions numberOfReplicas=2 (storageClassName is immutable on the live
+    # PVC, so a dedicated 1-replica class can't be adopted without recreating
+    # it), hence this volume-level guard re-applied on every run. Longhorn
+    # removes the excess replica itself when spec drops below current count.
+    single_replica_pvcs:
+      - { namespace: monitoring, name: prometheus-server }
+
   tasks:
     - name: Create longhorn-system R2 credential secret
       ansible.builtin.shell: |
@@ -330,6 +342,45 @@
         label: "{{ item.item.namespace }}/{{ item.item.name }}"
       tags: [backups, longhorn]
 
+    # See the single_replica_pvcs comment in vars: — same lookup pattern as the
+    # critical-PVC labeling above (PVC -> PV -> volumeHandle).
+    - name: Look up Longhorn volume names for single-replica PVCs
+      ansible.builtin.shell: |
+        set -e
+        pv=$(kubectl -n {{ item.namespace }} get pvc {{ item.name }} -o jsonpath='{.spec.volumeName}' 2>/dev/null || true)
+        if [ -z "$pv" ]; then exit 0; fi
+        kubectl get pv "$pv" -o jsonpath='{.spec.csi.volumeHandle}'
+      register: single_replica_lookup
+      loop: "{{ single_replica_pvcs }}"
+      changed_when: false
+      failed_when: false
+      tags: [backups, longhorn]
+
+    - name: Enforce numberOfReplicas=1 on disposable volumes
+      ansible.builtin.shell: |
+        set -e
+        cur=$(kubectl -n longhorn-system get volumes.longhorn.io {{ item.stdout }} -o jsonpath='{.spec.numberOfReplicas}')
+        if [ "$cur" != "1" ]; then
+          kubectl -n longhorn-system patch volumes.longhorn.io {{ item.stdout }} --type merge -p '{"spec":{"numberOfReplicas":1}}'
+          echo CHANGED
+        fi
+      register: single_replica_patch
+      loop: "{{ single_replica_lookup.results }}"
+      when: item.rc == 0 and item.stdout != ""
+      loop_control:
+        label: "{{ item.item.namespace }}/{{ item.item.name }} -> {{ item.stdout }}"
+      changed_when: "'CHANGED' in single_replica_patch.stdout | default('')"
+      tags: [backups, longhorn]
+
+    - name: Surface single-replica PVCs that could not be patched (silent-skip detector)
+      ansible.builtin.debug:
+        msg: "MISSING single-replica PVC: {{ item.item.namespace }}/{{ item.item.name }} — namespace or PVC does not exist yet, skipped"
+      loop: "{{ single_replica_lookup.results }}"
+      when: item.stdout == "" or (item.rc | default(0)) != 0
+      loop_control:
+        label: "{{ item.item.namespace }}/{{ item.item.name }}"
+      tags: [backups, longhorn]
+
     - name: Summary
       ansible.builtin.debug:
         msg: |
@@ -339,5 +390,6 @@
             - Longhorn recurring snapshots: daily @ 02:00 Europe/Bratislava (kube-controller TZ; see feedback_k3s_cronjob_timezone memory), retain 7 (local, in-cluster)
             - Longhorn recurring backups: daily @ 03:00 Europe/Bratislava, retain 30 (to R2, offsite)
             - Critical volumes: {{ critical_pvcs | map(attribute='namespace') | zip(critical_pvcs | map(attribute='name')) | map('join','/') | list }}
-            - Excluded from Longhorn backups: prometheus, loki, alertmanager (high churn, derived data)
+            - Excluded from Longhorn backups: prometheus, alertmanager (high churn, derived data; loki enrolled 2026-08-17)
+            - Single-replica disposables: {{ single_replica_pvcs | map(attribute='namespace') | zip(single_replica_pvcs | map(attribute='name')) | map('join','/') | list }}
       tags: [backups]

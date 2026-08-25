@@ -120,6 +120,14 @@ r2_backup_bucket: "k8sbkp"
 r2_endpoint_host: "{{ r2_account_id }}.r2.cloudflarestorage.com"
 r2_endpoint_url: "https://{{ r2_endpoint_host }}"
 
+# Backblaze B2 — second backup destination (DR-2). One bucket mirrors the whole
+# R2 bucket 1:1 (prefixes longhorn/ + k3s-etcd-snapshots/). Create it in the B2
+# UI WITH Object Lock enabled (cannot be added later); the endpoint/region are
+# shown on the bucket page. Keys live in vault.yml (b2_key_id, b2_application_key).
+b2_mirror_bucket: "homielab-k8sbkp-mirror"
+b2_region: "your-b2-region"                          # e.g. eu-central-003
+b2_s3_endpoint: "s3.{{ b2_region }}.backblazeb2.com"
+
 # Syncthing tailnet IPs (each instance binds its GUI to its own tailnet
 # address so the cluster Prometheus can scrape /metrics over Tailscale).
 # See memory project_syncthing.md for the auto-start strategy per host.

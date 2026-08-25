@@ -62,3 +62,6 @@ k8s/argocd/eve-tracker-test-app.yml
 k8s/monitoring/values-grafana.yml
 k8s/argocd/eve-tracker-test-image-updater.yml
 k8s/argocd/gitea-repo-secret.yml
+
+# DR runbook — real IPs/hostnames/procedures (DR-4)
+docs/dr-runbook.md

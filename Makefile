@@ -125,7 +125,7 @@ trust-ca-export: ## Export the homielab root CA cert to /tmp/homielab-ca.crt for
 	  | openssl x509 -noout -subject -issuer -dates 2>/dev/null || true
 
 .PHONY: trust-ca-push
-trust-ca-push: ## Push the homielab root CA to all macOS nodes (System Keychain) via Ansible
+trust-ca-push: ## Push the homielab root CA to macOS (profile), Linux desktops (system trust, headless) and Windows/WSL (CurrentUser store) via Ansible
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/16-trust-homielab-ca.yml
 
 .PHONY: ca-backup
@@ -214,7 +214,27 @@ wazuh-agent: ## Install Wazuh agent on target hosts (HOSTS=sff_nodes by default)
 backup: ## Configure etcd + Longhorn backups (local snapshots + R2 offsite)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/11-configure-backups.yml
 
+.PHONY: backup-mirror backup-mirror-run
+backup-mirror: ## DR-2: configure the R2 → Backblaze B2 mirror (CronJob + Longhorn BackupTarget b2); needs b2_* in vault/main
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/23-configure-backup-mirror.yml
+
+backup-mirror-run: ## DR-2: same as backup-mirror, then start a one-off sync job immediately
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/23-configure-backup-mirror.yml -e run_now=true
+
+.PHONY: claude-backup-install
+claude-backup-install: ## DR-2: install the daily launchd job that backs up ~/.claude to B2 on THIS Mac (needs rclone remote b2-claude)
+	@sed -e "s|__REPO__|$(CURDIR)|g" -e "s|__HOME__|$$HOME|g" scripts/launchd/com.homielab.claude-backup.plist > $$HOME/Library/LaunchAgents/com.homielab.claude-backup.plist
+	@launchctl unload $$HOME/Library/LaunchAgents/com.homielab.claude-backup.plist 2>/dev/null || true
+	@launchctl load -w $$HOME/Library/LaunchAgents/com.homielab.claude-backup.plist
+	@echo "installed; first run fires now (RunAtLoad) — tail -f ~/Library/Logs/claude-backup.log"
+
 .PHONY: backup-relabel
+tasks: ## Regenerate pipeline/tasks.md (session task board) from pipeline/todo.md + docs/improvement-plan.md
+	@python3 scripts/pipeline-tasks.py
+
+tasks-check: ## Fail if pipeline/tasks.md is stale vs its sources (run in /wrapup before commit)
+	@python3 scripts/pipeline-tasks.py --check
+
 backup-relabel: ## Re-apply backup labels after services come up (called at end of `make all`; also run after any one-off `make vaultwarden`/`make forgejo`/etc.)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/11-configure-backups.yml --tags longhorn
 

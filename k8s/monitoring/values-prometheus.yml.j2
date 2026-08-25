@@ -197,6 +197,10 @@ server:
     # only schedules replicas on x86 Proxmox VMs — the 32Gi Pi eMMCs can't
     # host a 30Gi replica. See feedback_longhorn_storage memory for the
     # strategy; the `storage` node tag is applied in 11-configure-backups.yml.
+    # NOTE: this volume deliberately runs numberOfReplicas=1 (disposable TSDB;
+    # its 72G snapshot chain filled x86-1 2026-08-23) — enforced volume-level
+    # by the single_replica_pvcs guard in 11-configure-backups.yml, since the
+    # SC provisions 2 and storageClassName is immutable on a live PVC.
     storageClass: "longhorn-storage"
 
   # -- Global scrape settings. 30s is a good balance between freshness and
@@ -631,6 +635,62 @@ serverFiles:
             annotations:
               summary: "{{ '{{' }} $value {{ '}}' }} new critical CVE(s) detected in cluster images"
               description: "Cluster-wide Trivy CRITICAL count rose vs 6h ago. Inspect: kubectl get vulnerabilityreports -A -o json | jq '[.items[] | select(.report.summary.criticalCount > 0)]'"
+      # Off-site backup pipeline health (DR-2 mirror; DR-4 adds Longhorn/etcd
+      # backup-age rules here). kube-state-metrics job metrics: completed Jobs
+      # stay visible for ttlSecondsAfterFinished (7d) on the mirror CronJob.
+      - name: backups
+        rules:
+          - alert: BackupMirrorJobFailed
+            expr: max by (job_name) (kube_job_status_failed{namespace="backup-mirror"}) > 0
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "R2 → B2 backup mirror job {{ '{{' }} $labels.job_name {{ '}}' }} failed"
+              description: "rclone sync of the R2 backup bucket to Backblaze B2 failed — kubectl -n backup-mirror logs job/{{ '{{' }} $labels.job_name {{ '}}' }}. Off-site second copy is stale until it succeeds."
+          # -- DR-4 backup watchdog -------------------------------------
+          # Routing note: only severity=critical pages via ntfy; warning is
+          # dashboard/Alertmanager-only. Staleness = pager, single failures
+          # self-heal on the next scheduled run.
+          - alert: LonghornVolumeBackupStale
+            # Nightly critical-backup runs 03:00; 48h = two missed runs.
+            # Scoped to volumes that HAVE a backup (> 0): the only ==0 volumes
+            # are deliberately disposable (prometheus-server, alertmanager,
+            # trivy cache — not in critical_pvcs). A NEW critical PVC that
+            # never got its first backup is caught by playbook 11's
+            # "MISSING critical PVC" output + make backup-relabel, not here.
+            expr: (time() - longhorn_volume_last_backup_at) > 48 * 3600 and longhorn_volume_last_backup_at > 0
+            for: 30m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Longhorn backup stale for {{ '{{' }} $labels.pvc_namespace {{ '}}' }}/{{ '{{' }} $labels.pvc {{ '}}' }}"
+              description: "No successful R2 backup for >48h (volume {{ '{{' }} $labels.volume {{ '}}' }}). Check the critical-backup RecurringJob and Longhorn UI → Backup."
+          - alert: EtcdSnapshotStale
+            # k3s exposes per-server S3 snapshot-save counters (status label!).
+            # Schedule is every 6h per server; <1 success in 26h = 4+ missed
+            # cycles — catches the silent S3-skip (supervisor died mid-save,
+            # 2026-07 lease-suicide incident) that local file checks miss.
+            expr: sum by (kubernetes_io_hostname) (increase(k3s_etcd_snapshot_save_s3_duration_seconds_count{status="success",job="kubernetes-nodes"}[26h])) < 1
+            for: 30m
+            labels:
+              severity: critical
+            annotations:
+              summary: "etcd S3 snapshots stale on {{ '{{' }} $labels.kubernetes_io_hostname {{ '}}' }}"
+              description: "No successful etcd snapshot upload to R2 in 26h from this server (6h schedule). Check k3s journal for etcd-snapshot errors / leaderelection loss; look for orphaned .part files + ETCDSnapshotFile CRs."
+          - alert: BackupMirrorStale
+            # No successful mirror completion in 36h (daily schedule at 05:15).
+            # Also fires when the CronJob has never run since Prometheus saw it.
+            expr: >-
+              (time() - max(kube_job_status_completion_time{namespace="backup-mirror"} and on(job_name) kube_job_status_succeeded{namespace="backup-mirror"} > 0)) > 36 * 3600
+              or
+              (absent(kube_job_status_succeeded{namespace="backup-mirror"} > 0) and on() (count(kube_cronjob_info{namespace="backup-mirror"}) > 0))
+            for: 30m
+            labels:
+              severity: critical
+            annotations:
+              summary: "R2 → B2 backup mirror has not succeeded in 36h"
+              description: "The second off-site backup copy on Backblaze B2 is stale. Check kubectl -n backup-mirror get cronjob,job and the last job's logs."
       - name: longhorn
         rules:
           - alert: LonghornVolumeDegraded
