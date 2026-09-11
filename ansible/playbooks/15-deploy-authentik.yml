@@ -21,7 +21,7 @@
   become: false
 
   vars:
-    authentik_chart_version: "2026.8.1"
+    authentik_chart_version: "2026.8.2"
     authentik_values: "{{ playbook_dir }}/../../k8s/authentik/values-authentik.yml"
 
   tasks:
