@@ -422,3 +422,33 @@ spec:
                 name: defectdojo-django
                 port:
                   number: 80
+
+---
+# NetBox — IPAM/DCIM eval (also tunnel-exposed at netbox.<cloudflare_domain>
+# behind CF Access; the tunnel talks straight to the Service, not this Ingress).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: netbox-local
+  namespace: netbox
+  annotations:
+    cert-manager.io/cluster-issuer: homielab-internal
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - netbox.{{ local_domain }}
+      secretName: netbox-local-tls
+  rules:
+    - host: netbox.{{ local_domain }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: netbox
+                port:
+                  number: 80

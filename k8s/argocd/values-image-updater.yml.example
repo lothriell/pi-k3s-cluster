@@ -21,8 +21,14 @@ resources:
     memory: 128Mi
 
 extraEnv:
-  # Username + Gitea API token, used by Image Updater to query the
-  # Gitea package registry via its HTTP API. Generate a token at
+  # GitHub username + classic PAT with read:packages, used by Image
+  # Updater to poll ghcr.io for new digests. Same token as vault
+  # `ghcr_token` (DR-3 registry decoupling).
+  # TODO CHANGEME
+  - name: GHCR_CREDS
+    value: "GITHUB_USERNAME:GHCR_PAT"
+  # Username + Gitea API token for the legacy in-cluster registry
+  # (deprecated for new pushes since DR-3). Generate a token at
   # `http://gitea.<local-domain>/-/user/settings/applications` with
   # `read:package` scope.
   # TODO CHANGEME
@@ -31,6 +37,15 @@ extraEnv:
 
 config:
   registries:
+    # ghcr.io — primary registry since DR-3: images survive cluster
+    # nuke, standard public TLS (no internal CA involvement).
+    - name: GitHub
+      prefix: ghcr.io
+      api_url: https://ghcr.io
+      default: true
+      credentials: env:GHCR_CREDS
+    # Gitea in-cluster registry — deprecated for new pushes, kept while
+    # old images remain referenced.
     - name: Gitea
       # TODO CHANGEME — must match the registry prefix used in your
       # ImageUpdater CRDs (see eve-tracker-image-updater.yml.example)
@@ -39,7 +54,6 @@ config:
       # the argocd namespace and resolves the service DNS directly —
       # no ingress / LoadBalancer needed.
       api_url: http://gitea-http.gitea.svc.cluster.local:3000
-      default: true
       insecure: true
       credentials: env:GITEA_CREDS
 

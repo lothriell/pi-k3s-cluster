@@ -91,9 +91,17 @@ prepare: ## Prepare nodes (packages, config, networking)
 k3s: ## Install K3s on server and agents
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/02-install-k3s.yml
 
+.PHONY: k3s-upgrade
+k3s-upgrade: ## Serial, health-gated in-place K3s upgrade of all 7 nodes: make k3s-upgrade K3S_TARGET=v1.36.4+k3s1 [CHECK=1]
+	@test -n "$(K3S_TARGET)" || { echo "usage: make k3s-upgrade K3S_TARGET=v1.36.x+k3s1 [CHECK=1]"; exit 2; }
+	./scripts/k3s-upgrade.sh $(K3S_TARGET) $(if $(CHECK),--check,)
+
 .PHONY: post-install
 post-install: ## Post-install tasks (kubeconfig, labels, etc.)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/03-post-install.yml
+
+coredns: ## Re-apply CoreDNS placement (2 replicas, zone=home) + local-domain zone (playbook 03 --tags coredns,ingress)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/03-post-install.yml --tags coredns,ingress
 
 # =============================================================================
 # Service Deployments
@@ -198,6 +206,10 @@ authentik: ## Deploy Authentik (LAN-only OIDC for Grafana + ArgoCD) at authentik
 defectdojo: ## Deploy DefectDojo (vulnerability management) at defectdojo.<local_domain>
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/21-deploy-defectdojo.yml
 
+.PHONY: netbox
+netbox: ## Deploy NetBox (IPAM/DCIM eval) at netbox.<local_domain>
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/24-deploy-netbox.yml
+
 .PHONY: wazuh-dojo-export
 wazuh-dojo-export: ## Deploy daily Wazuh→DefectDojo vulnerability export (timer on the Wazuh VM)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/22-deploy-wazuh-dojo-export.yml
@@ -292,6 +304,12 @@ status: ## Show cluster node and pod status (+ Longhorn disk-leak scan)
 	$(KUBECTL) get pods -A
 	@echo ""
 	@$(MAKE) --no-print-directory disk-leak-check
+	@echo ""
+	@$(MAKE) --no-print-directory alerts
+
+.PHONY: alerts
+alerts: ## Alerts digest: firing now + fired last 7d (RECURRING flagged) + Wazuh level>=10 (WINDOW=7d WAZUH_MIN_LEVEL=10)
+	@./scripts/alerts-digest.sh
 
 .PHONY: disk-leak-check
 disk-leak-check: ## Scan all nodes for wedged Longhorn replicas holding deleted files (df>>du phantom disk)

@@ -24,20 +24,13 @@ spec:
         - protocol: TCP
           port: 8080
     # Scan job pods → Trivy server on port 4954 (intra-namespace).
-    # podSelector {} requires kube-router to recognise the new scan pod
-    # in its per-namespace ipset before the connection is accepted —
-    # ~3s race that scan jobs lose every time. Adding an ipBlock for
-    # the cluster pod CIDR makes the rule iptables-CIDR-matched and
-    # bypasses the race. The trivy-server has no auth, so this is
-    # functionally equivalent to allowing any in-cluster pod to query
-    # it; in practice only scan jobs ever reach it because nothing
-    # else knows the API. Same workaround as the gitea netpol; same
-    # cleanup trigger (DR-3 — once images are scanned via remote
-    # ghcr.io, this race goes away naturally).
+    # (DR-3 2026-08-30: the pod-CIDR ipBlock added for the kube-router
+    # ipset race was removed with the ghcr.io move; if scan jobs start
+    # losing the ~3s ipset race again — connection refused to :4954,
+    # no new VulnerabilityReports — see feedback_kube_router_race and
+    # git history for the ipBlock form.)
     - from:
         - podSelector: {}
-        - ipBlock:
-            cidr: 10.42.0.0/16
       ports:
         - protocol: TCP
           port: 4954

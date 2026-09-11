@@ -20,7 +20,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: http://gitea-http.gitea.svc.cluster.local:3000/CHANGEME/eve-tracker-k8s.git
+    repoURL: http://gitea-http.gitea.svc.cluster.local:3000/CHANGEME/eve-tracking-jobs-deploy.git
     targetRevision: main
     path: overlays/test
     kustomize: {}

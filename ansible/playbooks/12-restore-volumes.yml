@@ -38,8 +38,17 @@
   vars:
     # Stateful PVCs that must survive cluster rebuilds.
     # Order doesn't matter — each entry is independent.
+    # KEEP IN SYNC with critical_pvcs in 11-configure-backups.yml — every
+    # nightly-backed-up PVC must be restorable here. Sizes/classes taken from
+    # the live cluster 2026-08-30 (DR-5 prep; the old list still had
+    # eve-tracker-dev and 1Gi eve volumes — 4 services missing entirely).
     restore_targets:
       - namespace: gitea
+        pvc: gitea-shared-storage
+        size: 10Gi
+        access_mode: ReadWriteOnce
+        storage_class: longhorn
+      - namespace: forgejo
         pvc: gitea-shared-storage
         size: 10Gi
         access_mode: ReadWriteOnce
@@ -49,14 +58,19 @@
         size: 5Gi
         access_mode: ReadWriteOnce
         storage_class: longhorn
+      - namespace: monitoring
+        pvc: storage-loki-0
+        size: 20Gi
+        access_mode: ReadWriteOnce
+        storage_class: longhorn-storage
       - namespace: eve-tracker
         pvc: eve-tracker-data
-        size: 1Gi
+        size: 4Gi
         access_mode: ReadWriteOnce
         storage_class: longhorn
-      - namespace: eve-tracker-dev
+      - namespace: eve-tracker-test
         pvc: eve-tracker-data
-        size: 1Gi
+        size: 8Gi
         access_mode: ReadWriteOnce
         storage_class: longhorn
       - namespace: open-webui
@@ -64,6 +78,31 @@
         size: 2Gi
         access_mode: ReadWriteOnce
         storage_class: longhorn
+      - namespace: vaultwarden
+        pvc: vaultwarden-data-vaultwarden-0
+        size: 4Gi
+        access_mode: ReadWriteOnce
+        storage_class: longhorn
+      - namespace: vaultwarden
+        pvc: vaultwarden-attachments-vaultwarden-0
+        size: 8Gi
+        access_mode: ReadWriteOnce
+        storage_class: longhorn
+      - namespace: authentik
+        pvc: data-authentik-postgresql-0
+        size: 8Gi
+        access_mode: ReadWriteOnce
+        storage_class: longhorn-storage
+      - namespace: defectdojo
+        pvc: data-defectdojo-postgresql-0
+        size: 8Gi
+        access_mode: ReadWriteOnce
+        storage_class: longhorn-storage
+      - namespace: defectdojo
+        pvc: defectdojo-django-media
+        size: 5Gi
+        access_mode: ReadWriteOnce
+        storage_class: longhorn-storage
 
     # How long to wait for Longhorn to sync BackupVolume CRs from R2 after
     # backup target config. The backup target pollInterval defaults to 5m.
@@ -128,15 +167,32 @@
       failed_when: false
       tags: [discover]
 
+    # TWO duplicate sources make naive matching dangerous (2026-08-30 DR-5
+    # dry-run finding — the 12-volume test-restore surfaced it):
+    #  1. Stale BackupVolumes: a volume that was itself restored (e.g. after
+    #     the 2026-04-15 rebuild) leaves the OLD volume's backups on R2 with
+    #     the SAME KubernetesStatus ns/pvc — eve-tracker matched an April
+    #     backup. Pick the entry with the NEWEST lastBackupAt.
+    #  2. The b2 BackupTarget (DR-2) syncs a second CR set for every volume —
+    #     filter to the default (R2) target.
+    # The dict combine() below is last-writer-wins, so dedup must happen HERE.
     - name: Walk BackupVolumes and extract (ns/pvc → bv_name, last_backup, size)
       ansible.builtin.shell: |
         kubectl -n longhorn-system get backupvolumes.longhorn.io -o json | \
           jq -r '
-            .items[]
-            | select(.status.labels.KubernetesStatus != null)
-            | (.status.labels.KubernetesStatus | fromjson) as $ks
-            | select($ks.namespace != null and $ks.pvcName != null)
-            | "\($ks.namespace)/\($ks.pvcName)|\(.metadata.name)|\(.status.lastBackupName)|\(.status.size // "0")"
+            [ .items[]
+              | select((.spec.backupTargetName // "default") == "default")
+              | select(.status.labels.KubernetesStatus != null)
+              | select(.status.lastBackupName != null and .status.lastBackupName != "")
+              | (.status.labels.KubernetesStatus | fromjson) as $ks
+              | select($ks.namespace != null and $ks.pvcName != null)
+              | { key: "\($ks.namespace)/\($ks.pvcName)",
+                  vol: .spec.volumeName,
+                  last: .status.lastBackupName,
+                  size: (.status.size // "0"),
+                  at: (.status.lastBackupAt // "") } ]
+            | group_by(.key) | map(max_by(.at)) | .[]
+            | "\(.key)|\(.vol)|\(.last)|\(.size)"
           '
       register: discovery_raw
       changed_when: false
@@ -345,6 +401,26 @@
         label: "{{ item.namespace }}"
       changed_when: false
       tags: [restore]
+
+    # DR-3 (2026-08-30): eve-tracker images live on ghcr.io (private) and the
+    # deployments reference an imagePullSecret named ghcr-registry. Without it
+    # a rebuilt cluster syncs the apps into ImagePullBackOff. Recreate it here
+    # from vault `ghcr_token` — this playbook already owns the eve namespaces
+    # during a rebuild, so the secret exists before ArgoCD ever syncs the apps.
+    - name: Create ghcr.io pull secret in eve namespaces (DR-3)
+      ansible.builtin.shell: |
+        kubectl create secret docker-registry ghcr-registry \
+          --namespace {{ item }} \
+          --docker-server=ghcr.io \
+          --docker-username=lothriell \
+          --docker-password='{{ ghcr_token }}' \
+          --dry-run=client -o yaml | kubectl apply -f -
+      loop:
+        - eve-tracker
+        - eve-tracker-test
+      no_log: true
+      changed_when: false
+      tags: [restore, ghcr]
 
     # NO `longhorn-restore` label on the PVC — see commit history (eve-tracker
     # OutOfSync, 2026-05-03). Even with `ignoreDifferences` configured for

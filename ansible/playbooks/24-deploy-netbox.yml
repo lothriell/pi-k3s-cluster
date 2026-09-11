@@ -1,0 +1,232 @@
+---
+# =============================================================================
+# NetBox — IPAM/DCIM (network source of truth) — LIGHTWEIGHT EVAL
+# =============================================================================
+# Deploys NetBox via the community Helm chart (OCI, ghcr.io) into the `netbox`
+# namespace. Creates four Secrets from Ansible Vault BEFORE the chart installs
+# (authentik pattern — no secrets in helm values/history):
+#   netbox-secrets     Django secret_key (+ inert email-password key)
+#   netbox-superuser   admin username/email/password/api_token
+#   netbox-postgresql  bundled postgres auth (bitnami contract)
+#   netbox-valkey      cache/queue auth
+#
+# allowedHosts / csrf.trustedOrigins carry the real domains → passed here via
+# --set, not committed in the values file.
+#
+# EVAL SCOPE: not enrolled in backups/netpols — see final debug for the
+# promotion checklist. External demo access via CF Tunnel + CF Access
+# (cloudflare_ingress_rules in main.yml → make cloudflare; DNS + Access app
+# are manual dashboard steps).
+#
+# Usage:  make netbox
+# Access: https://netbox.<local_domain>      (Traefik, cert-manager TLS)
+#         https://netbox.<cloudflare_domain> (CF Tunnel + Access, demo)
+# Login:  admin / vault.yml::netbox_superuser_password
+# =============================================================================
+
+- name: Deploy NetBox
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  become: false
+
+  vars:
+    netbox_chart_version: "8.3.67"
+    # image (netbox_image_repository/tag in main.yml) pins NetBox v4.6.10 —
+    # diode plugin 1.16.0 declares max_version 4.6.99, NOT 4.7.x.
+    netbox_values: "{{ playbook_dir }}/../../k8s/netbox/values-netbox.yml"
+
+  tasks:
+    - name: Ensure netbox namespace exists
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: netbox
+      tags: [netbox]
+
+    # --- Secrets ----------------------------------------------------------
+    # Recreated on every run (state=present updates in place if vault values
+    # change). Must exist before `helm upgrade --wait` — pods mount them at
+    # startup via a projected volume.
+
+    - name: Create netbox-secrets (Django secret_key)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: netbox-secrets
+            namespace: netbox
+          type: Opaque
+          stringData:
+            secret_key: "{{ netbox_secret_key }}"
+            # Email is unconfigured, but the chart's projected secrets volume
+            # mounts this key unconditionally — it must exist or pods wedge
+            # at ContainerCreating (FailedMount: non-existent secret key).
+            email_password: ""
+      tags: [netbox]
+
+    - name: Create netbox-superuser secret
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: netbox-superuser
+            namespace: netbox
+          type: Opaque
+          stringData:
+            # Honoured only while the superuser doesn't exist yet — rotate
+            # via the UI later, the values here go inert.
+            username: admin
+            email: "admin@{{ local_domain }}"
+            password: "{{ netbox_superuser_password }}"
+            api_token: "{{ netbox_superuser_api_token }}"
+      tags: [netbox]
+
+    - name: Create netbox-postgresql secret (bitnami existingSecret contract)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: netbox-postgresql
+            namespace: netbox
+          type: Opaque
+          stringData:
+            # Key names are the bitnami postgresql auth.secretKeys defaults.
+            postgres-password: "{{ netbox_postgres_password }}"
+            password: "{{ netbox_postgres_password }}"
+      tags: [netbox]
+
+    - name: Create netbox-valkey secret (cache + RQ queue auth)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: netbox-valkey
+            namespace: netbox
+          type: Opaque
+          stringData:
+            valkey-password: "{{ netbox_valkey_password }}"
+      tags: [netbox]
+
+    - name: Create ghcr.io pull secret (custom netbox-diode image is private)
+      ansible.builtin.shell: |
+        kubectl create secret docker-registry ghcr-registry \
+          --namespace netbox \
+          --docker-server=ghcr.io \
+          --docker-username=lothriell \
+          --docker-password='{{ ghcr_token }}' \
+          --dry-run=client -o yaml | kubectl apply -f -
+      changed_when: false
+      tags: [netbox]
+
+    # Diode plugin config — mounted via the chart's extraConfig secret
+    # mechanism so the OAuth2 secret never lands in the ConfigMap.
+    - name: Create netbox-diode-config secret (diode plugin settings)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: netbox-diode-config
+            namespace: netbox
+          type: Opaque
+          stringData:
+            diode.yaml: |
+              PLUGINS_CONFIG:
+                netbox_diode_plugin:
+                  diode_target_override: "{{ netbox_diode_target }}"
+                  diode_username: diode
+                  netbox_to_diode_client_secret: "{{ netbox_diode_client_secret }}"
+      tags: [netbox]
+
+    # Diode (docker on minisforum-c, outside cluster DNS) calls the NetBox API
+    # by ClusterIP — that IP must be in ALLOWED_HOSTS. Empty on first install
+    # (service doesn't exist yet); populated from the second run onward.
+    - name: Look up netbox Service ClusterIP (for diode ALLOWED_HOSTS)
+      kubernetes.core.k8s_info:
+        kind: Service
+        name: netbox
+        namespace: netbox
+      register: netbox_svc
+      tags: [netbox]
+
+    - name: Set netbox service IP fact
+      ansible.builtin.set_fact:
+        netbox_svc_ip: "{{ netbox_svc.resources[0].spec.clusterIP | default('') }}"
+      tags: [netbox]
+
+    # --- Helm install -----------------------------------------------------
+    # OCI chart — no `helm repo add`/`update` dance, the version pin IS the
+    # staleness guard.
+
+    - name: Deploy NetBox
+      ansible.builtin.command: >
+        helm upgrade --install netbox
+        oci://ghcr.io/netbox-community/netbox-chart/netbox
+        --version {{ netbox_chart_version }}
+        --namespace netbox
+        -f {{ netbox_values }}
+        --set image.repository={{ netbox_image_repository }}
+        --set image.tag={{ netbox_image_tag }}
+        --set 'allowedHosts={netbox.{{ local_domain }},netbox.{{ cloudflare_domain }},netbox.netbox.svc.cluster.local{% if netbox_svc_ip %},{{ netbox_svc_ip }}{% endif %}}'
+        --set 'csrf.trustedOrigins={https://netbox.{{ local_domain }},https://netbox.{{ cloudflare_domain }}}'
+        --wait --timeout 15m
+      register: helm_deploy
+      changed_when: "'has been upgraded' in helm_deploy.stdout or 'has been installed' in helm_deploy.stdout"
+      tags: [netbox]
+
+    # First install: init containers run DB migrations + create the superuser
+    # — the app pod only goes Ready after that finishes.
+    - name: Wait for NetBox pod to be Ready
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Ready pods
+        -l app.kubernetes.io/name=netbox,app.kubernetes.io/component=netbox
+        -n netbox --timeout=300s
+      changed_when: false
+      tags: [netbox, verify]
+
+    - name: Show NetBox pod status
+      ansible.builtin.command: kubectl get pods -n netbox -o wide
+      register: netbox_pods
+      changed_when: false
+      tags: [netbox, verify]
+
+    - name: Display NetBox pods
+      ansible.builtin.debug:
+        var: netbox_pods.stdout_lines
+      tags: [netbox, verify]
+
+    - name: Report access URL + next steps
+      ansible.builtin.debug:
+        msg: |
+          NetBox deployed. Access at:  https://netbox.{{ local_domain }}
+          Login: admin / vault.yml::netbox_superuser_password
+
+          Post-deploy checklist (eval):
+            1. Ingress applied? If netbox.{{ local_domain }} 404s:
+               ansible-playbook ansible/playbooks/03-post-install.yml --tags ingress
+            2. External demo access:
+               a. make cloudflare   (picks up the netbox tunnel rule)
+               b. Cloudflare dashboard → DNS: CNAME netbox → <tunnel-id>.cfargotunnel.com
+                  (proxied; NEVER `cloudflared tunnel route dns` — cert.pem zone trap)
+               c. Zero Trust → Access → app for netbox.{{ cloudflare_domain }},
+                  policy: colleague emails, One-Time PIN
+
+          Promotion checklist (if NetBox is adopted):
+            - critical_pvcs + restore_targets (postgres + media PVCs), make backup-relabel
+            - k8s/network-policies/netbox.yml + make network-policies
+            - pin postgresql.image.tag (bitnami :latest floating-tag risk)
+            - CLAUDE.md service section + Prometheus scrape (granian /metrics :9090)
+      tags: [netbox]

@@ -1,0 +1,22 @@
+# NetBox + Diode ingestion plugin (NetBox Discovery eval)
+# Build/push (amd64 only — netbox pods are arch-pinned):
+#   podman build --platform linux/amd64 -f k8s/netbox/Dockerfile.diode \
+#     -t ghcr.io/lothriell/netbox-diode:v4.6.10-plugin1.16.0 k8s/netbox
+#   podman push ghcr.io/lothriell/netbox-diode:v4.6.10-plugin1.16.0
+# Plugin↔NetBox version matrix: https://github.com/netboxlabs/diode-netbox-plugin
+FROM ghcr.io/netbox-community/netbox:v4.6.10
+# The image's venv (/opt/netbox/venv, already on PATH) is uv-built and ships
+# without pip or ensurepip — install with a borrowed uv binary instead.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+RUN uv pip install --python /opt/netbox/venv/bin/python3 --no-cache \
+      netboxlabs-diode-netbox-plugin==1.16.0 \
+ && rm /usr/local/bin/uv
+# Plugin 1.16.0 monkey-patches utilities.counters.update_counter with a
+# wrapper that lacks the `using` kwarg NetBox 4.6.10's post_save signal now
+# passes — every dcim.device apply 500s with a TypeError. Widen the wrapper
+# signature (single-DB cluster: pass-through only; buffered path may drop it).
+RUN sed -i \
+  -e 's/def _buffered_update_counter(model, pk, counter_name, value):/def _buffered_update_counter(model, pk, counter_name, value, using=None):/' \
+  -e 's/return _previous_update_counter(model, pk, counter_name, value)$/return _previous_update_counter(model, pk, counter_name, value, using=using)/' \
+  /opt/netbox/venv/lib/python3.14/site-packages/netbox_diode_plugin/api/counter_buffer.py \
+ && grep -q "using=None" /opt/netbox/venv/lib/python3.14/site-packages/netbox_diode_plugin/api/counter_buffer.py

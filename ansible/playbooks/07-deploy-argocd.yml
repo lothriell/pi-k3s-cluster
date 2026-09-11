@@ -108,6 +108,47 @@
       changed_when: false
       tags: [argocd]
 
+    # -- ArgoCD OIDC client secret (authentik SSO) -----------------------------
+    # values-argocd.yml references `$argocd-oidc:client_secret`; the secret was
+    # hand-made during the 2026-05 SSO rollout and nothing recreated it on
+    # rebuild (found in the 2026-08-30 DR-5 dry-run sweep). The client secret
+    # is in vault; the matching value also lives in authentik's provider
+    # config (restored with its postgres volume), so SSO survives a rebuild.
+    - name: Create ArgoCD OIDC client secret (vault)
+      ansible.builtin.shell: |
+        kubectl -n argocd create secret generic argocd-oidc \
+          --from-literal=client_secret='{{ authentik_oidc_client_secret_argocd }}' \
+          --dry-run=client -o yaml | kubectl apply -f -
+      no_log: true
+      changed_when: false
+      tags: [argocd, oidc]
+
+    # -- eve-tracker ArgoCD Applications ---------------------------------------
+    # The Application CRs previously lived ONLY in etcd (hand-applied per
+    # docs/12+13) — a rebuilt cluster came up with ArgoCD empty and eve never
+    # redeployed (2026-08-30 DR-5 dry-run finding). Real manifests are
+    # gitignored (owner/repo values); tracked .example templates document them.
+    # Skip gracefully when a file is missing (fresh-clone path).
+    - name: Check for eve-tracker Application manifests
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../../k8s/argocd/{{ item }}"
+      register: eve_app_stats
+      loop:
+        - eve-tracker-app.yml
+        - eve-tracker-test-app.yml
+      tags: [argocd, eve-apps]
+
+    - name: Apply eve-tracker Application manifests (when present)
+      ansible.builtin.command: >
+        kubectl apply -f {{ item.stat.path }}
+      loop: "{{ eve_app_stats.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.stat.exists
+      register: eve_apps_apply
+      changed_when: "'configured' in eve_apps_apply.stdout or 'created' in eve_apps_apply.stdout"
+      tags: [argocd, eve-apps]
+
     # -- ArgoCD Image Updater (CRD-based v1.1+) --------------------------------
     # Watches the Gitea container registry and patches Application specs
     # with digest-pinned images. Must be installed AFTER ArgoCD itself but
@@ -148,6 +189,31 @@
             ansible-playbook playbooks/07-deploy-argocd.yml --tags image-updater
       when: not iu_values_stat.stat.exists
       tags: [argocd, image-updater]
+
+    # ImageUpdater CRDs for the eve apps (gitignored real files, like the apps
+    # above; must apply AFTER the helm install that brings the CRD). Also
+    # hand-applied historically — codified 2026-08-30 (DR-5 dry-run finding).
+    - name: Check for eve-tracker ImageUpdater manifests
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../../k8s/argocd/{{ item }}"
+      register: eve_iu_stats
+      loop:
+        - eve-tracker-image-updater.yml
+        - eve-tracker-test-image-updater.yml
+      tags: [argocd, image-updater, eve-apps]
+
+    - name: Apply eve-tracker ImageUpdater manifests (when present)
+      ansible.builtin.command: >
+        kubectl apply -f {{ item.stat.path }}
+      loop: "{{ eve_iu_stats.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      # iu_values_stat only exists when the image-updater tag ran in the same
+      # invocation — default to true so a tag-scoped run still applies.
+      when: item.stat.exists and (iu_values_stat.stat.exists | default(true))
+      register: eve_iu_apply
+      changed_when: "'configured' in eve_iu_apply.stdout or 'created' in eve_iu_apply.stdout"
+      tags: [argocd, image-updater, eve-apps]
 
     # -- Summary -----------------------------------------------------------------
 

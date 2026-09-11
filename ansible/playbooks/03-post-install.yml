@@ -105,6 +105,18 @@
       changed_when: "'configured' in ingress_apply.stdout or 'created' in ingress_apply.stdout"
       tags: [ingress]
 
+    # CoreDNS: 2 replicas pinned to the home zone (see the patch file header — a
+    # remote-site link drop must never take cluster DNS away from the control plane).
+    # K3s re-applies its packaged coredns.yaml on upgrades, which reverts this;
+    # scripts/k3s-upgrade.sh re-applies the same patch afterwards.
+    - name: Patch CoreDNS placement (2 replicas, zone=home)
+      ansible.builtin.command: >
+        kubectl -n kube-system patch deployment coredns
+        --patch-file {{ playbook_dir }}/../../k8s/coredns/coredns-placement-patch.yml
+      register: coredns_patch
+      changed_when: "'(no change)' not in coredns_patch.stdout"
+      tags: [ingress, coredns]
+
     # Cluster-wide HTTP→HTTPS redirect for Traefik. K3s HelmController merges
     # this HelmChartConfig on top of the bundled Traefik chart values.
     - name: Apply Traefik HelmChartConfig (HTTP→HTTPS redirect)

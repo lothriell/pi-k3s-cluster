@@ -79,3 +79,19 @@ defectdojo_valkey_password: "changeme-32-alphanumeric-chars"
 # api_token: DefectDojo API v2 token for the trivy-dojo-report-operator; mint via
 # POST /api/v2/api-token-auth/ with the admin credentials (or UI → API v2 Key)
 defectdojo_api_token: "changeme-40-char-defectdojo-api-token"
+
+# NetBox (IPAM/DCIM eval — playbook 24)
+# Generate alnum strings with `LC_ALL=C tr -dc A-Za-z0-9 </dev/urandom | head -c <N>`
+# secret_key:          50+ alnum (Django SECRET_KEY)
+# superuser_password:  initial admin login, honoured only on first init; rotate via UI after
+# superuser_api_token: 40 hex (`openssl rand -hex 20`) — NB: NetBox 4.7 (v2
+#   tokens) does not seed a DB token row from this; mint API tokens via the UI
+# postgres_password:   32 alnum, used for both bitnami admin + app user keys
+netbox_secret_key: "changeme-50-alphanumeric-chars"
+netbox_superuser_password: "changeme-22-alphanumeric-chars"
+netbox_superuser_api_token: "changeme-40-hex-chars"
+netbox_postgres_password: "changeme-32-alphanumeric-chars"
+netbox_valkey_password: "changeme-32-alphanumeric-chars"
+# diode_client_secret: the "netbox-to-diode" OAuth2 client secret from the diode
+# server bootstrap (oauth2/client/client-credentials.json on the diode host)
+netbox_diode_client_secret: "changeme-from-diode-quickstart"

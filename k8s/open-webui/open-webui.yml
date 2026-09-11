@@ -47,6 +47,12 @@ spec:
       labels:
         app: open-webui
     spec:
+      # amd64 only: the image is ~4 GB unpacked. On 2026-09-10 a reboot-driven
+      # reschedule pulled it onto rpi-k3s-1 (32 GB eMMC), the pull was cut by the
+      # node's own reboot and left 6 GB of leaked containerd layers under a 24 h
+      # pull lease -> NodeDiskFull. Keep it on the x86 nodes (50 GB+ disks).
+      nodeSelector:
+        kubernetes.io/arch: amd64
       securityContext:
         seccompProfile:
           type: RuntimeDefault
@@ -62,7 +68,7 @@ spec:
       # Accepts 1 × KSV-0014 finding on open-webui.
       containers:
         - name: open-webui
-          image: ghcr.io/open-webui/open-webui:v0.11.0
+          image: ghcr.io/open-webui/open-webui:v0.11.3
           ports:
             - containerPort: 8080
           env:
@@ -79,10 +85,11 @@ spec:
               value: "true"
             - name: DO_NOT_TRACK
               value: "true"
-            # First user to sign up becomes admin. Disable manually after:
-            #   kubectl set env deployment/open-webui -n open-webui ENABLE_SIGNUP=false
+            # Admin exists since first deploy; keep signup OFF here so a manifest
+            # re-apply no longer silently re-enables it (2026-09-09 trap). For a
+            # fresh cluster, flip to "true" for the first signup, then back.
             - name: ENABLE_SIGNUP
-              value: "true"
+              value: "false"
             # With readOnlyRootFilesystem: true, the default `.webui_secret_key`
             # relative path is not writable. Point it at the PVC instead so the
             # key is generated once and persisted across pod restarts.

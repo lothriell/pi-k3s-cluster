@@ -1,6 +1,20 @@
 # Custom CoreDNS entries for *.{{ local_domain }} resolution inside the cluster.
 # Rendered by 03-post-install.yml. Allows pods to resolve the same local domain
 # names that external clients (Mac /etc/hosts) use.
+#
+# Two pieces (K3s imports `*.override` inside its `.:53` block and `*.server` as
+# extra server blocks — https://docs.k3s.io/advanced#coredns-custom-configuration-imports):
+#
+#   *.override  rewrites for names that must stay IN-cluster (gitea registry pulls,
+#               authentik OIDC issuer) — the Traefik VIP would be the wrong answer.
+#   *.server    a dedicated `{{ local_domain }}` zone that forwards to Pi-hole (athena).
+#               Without it CoreDNS forwards to the node's resolv.conf list, which is
+#               MagicDNS (correct) + the UCG gateway (NXDOMAIN for this domain) chosen
+#               at random → each replica negative-caches different names (found
+#               2026-09-11: grafana/argocd.<domain> NXDOMAIN from pods, whoami fine).
+#               The block repeats the overrides + the kubernetes plugin because a
+#               rewritten `*.svc.cluster.local` name must be answerable inside the
+#               same block (rewrite → kubernetes → forward, CoreDNS plugin order).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -10,3 +24,14 @@ data:
   {{ local_domain | replace('.', '-') }}.override: |
     rewrite name gitea.{{ local_domain }} gitea-http.gitea.svc.cluster.local
     rewrite name authentik.{{ local_domain }} authentik-server.authentik.svc.cluster.local
+  {{ local_domain | replace('.', '-') }}.server: |
+    {{ local_domain }}:53 {
+        errors
+        cache 30
+        import /etc/coredns/custom/*.override
+        kubernetes cluster.local in-addr.arpa ip6.arpa {
+          pods insecure
+          fallthrough in-addr.arpa ip6.arpa
+        }
+        forward . {{ sff_athena_ip }}
+    }

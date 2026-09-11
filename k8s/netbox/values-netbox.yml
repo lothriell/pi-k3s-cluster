@@ -1,0 +1,173 @@
+# =============================================================================
+# NetBox — IPAM/DCIM (network source of truth) — LIGHTWEIGHT EVAL
+# =============================================================================
+# Helm chart: oci://ghcr.io/netbox-community/netbox-chart/netbox
+#             (https://github.com/netbox-community/netbox-chart)
+# Deployed by: ansible/playbooks/24-deploy-netbox.yml (make netbox)
+# Accessible at: netbox.<local_domain> via Traefik (local-ingress.yml.j2)
+#                + netbox.<cloudflare_domain> via CF Tunnel + CF Access (demo)
+#
+# EVAL SCOPE (2026-09-03): deliberately NOT enrolled in critical_pvcs /
+# restore_targets, no netpol, no CLAUDE.md section. Promotion checklist lives
+# in the playbook's final debug task. Rip out with:
+#   helm uninstall netbox -n netbox && kubectl delete ns netbox
+#
+# Hostname policy: allowedHosts / csrf.trustedOrigins contain the real
+# domains, so they are passed by the playbook via --set (kept out of this
+# committed file — public-mirror sanitization).
+#
+# Secrets policy (authentik pattern — nothing sensitive in helm history):
+#   All secrets live in vault.yml; the playbook creates four K8s Secrets
+#   BEFORE the chart installs:
+#     netbox-secrets     → secret_key (Django), email_password ("" — key must
+#                          exist: the projected secrets volume mounts it
+#                          unconditionally even with email unconfigured)
+#     netbox-superuser   → username, email, password, api_token
+#     netbox-postgresql  → postgres-password (admin), password (app user)
+#                          (bitnami postgresql default secretKeys)
+#     netbox-valkey      → valkey-password
+#
+# Images: netbox itself is multi-arch ghcr.io/netbox-community/netbox, but the
+# bundled bitnami postgresql/valkey default to docker.io/bitnami/*:latest —
+# the post-Broadcom free tier is amd64-only AND floating-tag. Everything is
+# pinned to x86 nodes; the floating :latest postgres is an accepted eval risk
+# (a re-pull across a major PG version would strand the data dir — pin via
+# postgresql.image.tag if NetBox is promoted to production).
+# =============================================================================
+
+# --- NetBox app --------------------------------------------------------------
+
+replicaCount: 1
+
+# NetBox Discovery eval: custom image = upstream netbox + diode plugin
+# (k8s/netbox/Dockerfile.diode). repository/tag set via --set from the
+# gitignored inventory (real ghcr namespace stays out of this file).
+# Pinned to v4.6.10 — diode plugin 1.16.0 caps at NetBox 4.6.99.
+image:
+  pullSecrets:
+    - ghcr-registry
+
+plugins:
+  - netbox_diode_plugin
+
+# Plugin config (incl. the netbox-to-diode OAuth2 secret) is loaded from the
+# playbook-created netbox-diode-config Secret, NOT from pluginsConfig (which
+# would land in a world-readable ConfigMap).
+extraConfig:
+  - secret:
+      secretName: netbox-diode-config
+
+# Django SECRET_KEY comes from the pre-created secret (key: secret_key).
+existingSecret: netbox-secrets
+
+superuser:
+  # username/email/password/api_token all read from the secret's keys.
+  existingSecret: netbox-superuser
+
+# allowedHosts + csrf.trustedOrigins set via --set in the playbook (real
+# domains). allowedHostsIncludesPodIP stays default true (probes).
+
+# Ingress handled centrally by k8s/ingress/local-ingress.yml.j2 (Traefik +
+# cert-manager homielab-internal). Chart ingress off.
+ingress:
+  enabled: false
+
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    # NetBox 4.x (granian + Django) idles ~600Mi; UI spikes past 1Gi on big
+    # imports — same OOM-trap class as authentik/defectdojo.
+    memory: 2Gi
+
+# Media = uploaded images/attachments. RWO is safe with replicaCount=1.
+persistence:
+  enabled: true
+  storageClass: longhorn-storage  # x86-pinned replicas
+  size: 1Gi
+
+# Reports/scripts volumes off — eval doesn't use custom scripts.
+reportsPersistence:
+  enabled: false
+scriptsPersistence:
+  enabled: false
+
+worker:
+  # netbox + netbox-worker both mount the RWO `netbox-media` PVC, so the worker
+  # MUST land on the same node as the web pod. Without this, any reschedule
+  # (node reboot, drain) puts them on different amd64 nodes and the worker sits
+  # in Init forever ("Volume is already used by pod ...") — 2026-09-10 fleet
+  # upgrade: the scheduler kept picking minisforum-c while netbox ran on x86-2.
+  affinity:
+    podAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: netbox
+              app.kubernetes.io/component: netbox
+  enabled: true
+  replicaCount: 1
+  nodeSelector:
+    kubernetes.io/arch: amd64
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+housekeeping:
+  enabled: true
+  nodeSelector:
+    kubernetes.io/arch: amd64
+
+# Granian /metrics stays on (chart default); ServiceMonitor off — no
+# prometheus-operator here, add an extraScrapeConfigs job if promoted.
+metrics:
+  granian:
+    serviceMonitor:
+      enabled: false
+
+# --- Bundled Postgres (bitnami/postgresql sub-chart) -------------------------
+
+postgresql:
+  enabled: true
+  auth:
+    username: netbox
+    database: netbox
+    existingSecret: netbox-postgresql
+    # secretKeys defaults: postgres-password (admin) / password (app user)
+    # — the playbook's Secret uses exactly these key names.
+  primary:
+    persistence:
+      enabled: true
+      storageClass: longhorn-storage  # x86-pinned replicas
+      size: 8Gi
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+      limits:
+        memory: 512Mi
+    nodeSelector:
+      kubernetes.io/arch: amd64
+
+# --- Valkey (cache + RQ task queue; bitnami sub-chart) -----------------------
+
+valkey:
+  enabled: true
+  architecture: standalone
+  auth:
+    existingSecret: netbox-valkey
+    existingSecretPasswordKey: valkey-password
+  primary:
+    # Cache + queue only — contents are disposable; skip the Longhorn volume.
+    persistence:
+      enabled: false
+    nodeSelector:
+      kubernetes.io/arch: amd64

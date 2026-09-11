@@ -51,6 +51,15 @@ django:
   nodeSelector:
     kubernetes.io/arch: amd64
 
+  # The media PVC is RWO and only the django pod mounts it. With the chart's
+  # default RollingUpdate the new pod is often scheduled onto another amd64
+  # node and sits in Init forever ("Volume is already used by pod ...") while
+  # helm --wait times out — same deadlock as the Gitea quirk in CLAUDE.md
+  # (hit 2026-09-10 on the 1Gi→2Gi limit bump; broken by deleting the old
+  # pod). Recreate = short outage per rollout, no deadlock.
+  strategy:
+    type: Recreate
+
   uwsgi:
     resources:
       requests:
@@ -59,7 +68,12 @@ django:
       limits:
         # Chart default 512Mi is tight for Django + report parsing spikes
         # (same class of trap as authentik's 900Mi OOM on migrate).
-        memory: 1Gi
+        # 1Gi was still too tight: 4 uwsgi procs idle at ~950Mi, and the
+        # daily wazuh-dojo-export (10 reports, up to 5.3k states each) OOM-killed
+        # a worker on every other run (Wazuh rule 5108 on k3s-x86-1, 2026-08-29
+        # → 09-10) → 502s → export FAILED for the remaining agents. 2Gi gives
+        # the parse spike headroom; the node has >10 GiB free.
+        memory: 2Gi
 
   nginx:
     resources:

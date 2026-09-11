@@ -22,6 +22,6 @@ spec:
       images:
         # TODO CHANGEME: replace host + owner with your values
         - alias: backend
-          imageName: gitea.example.local/CHANGEME/eve-tracking-jobs-backend:test
+          imageName: ghcr.io/CHANGEME/eve-tracking-jobs-backend:test
         - alias: frontend
-          imageName: gitea.example.local/CHANGEME/eve-tracking-jobs-frontend:test
+          imageName: ghcr.io/CHANGEME/eve-tracking-jobs-frontend:test

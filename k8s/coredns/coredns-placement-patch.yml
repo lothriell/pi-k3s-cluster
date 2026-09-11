@@ -1,0 +1,29 @@
+# CoreDNS placement patch — applied ON TOP of K3s's packaged coredns.yaml.
+#
+# Why: K3s ships CoreDNS as a single replica with no site awareness (it even spreads
+# by topology.kubernetes.io/zone, i.e. across sites). On 2026-09-11 the replica was on
+# k3s-x86-2 (remote) when the home UCG rebooted for a firmware update; Site Magic dropped
+# and the whole home site — control plane included — had no cluster DNS for ~5 min.
+# cloudflared, authentik, netbox and argocd-repo-server all crashed on lookups.
+#
+# Fix: 2 replicas, REQUIRED on zone=home nodes. The packaged hostname spread
+# (DoNotSchedule) keeps them on two different home nodes; the packaged zone spread is
+# ScheduleAnyway, so pinning to one zone is allowed.
+#
+# Applied by playbook 03 (post-install, tag `coredns`) and re-applied by
+# scripts/k3s-upgrade.sh, because K3s re-deploys its packaged manifest whenever its
+# checksum changes (= on K3s upgrades), which would revert this.
+#
+#   kubectl -n kube-system patch deploy coredns --patch-file k8s/coredns/coredns-placement-patch.yml
+spec:
+  replicas: 2
+  template:
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: topology.kubernetes.io/zone
+                    operator: In
+                    values: ["home"]

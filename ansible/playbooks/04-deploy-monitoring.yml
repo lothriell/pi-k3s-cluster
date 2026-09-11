@@ -58,6 +58,20 @@
       changed_when: "'configured' in syncthing_secret.stdout"
       tags: [prometheus, syncthing]
 
+    # Grafana OIDC client secret (authentik SSO) — referenced by
+    # values-grafana.yml env GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET. Hand-made
+    # during the 2026-05 SSO rollout; codified 2026-08-30 (DR-5 dry-run
+    # finding: nothing recreated it on rebuild → Grafana SSO login broken).
+    - name: Create Grafana OIDC client secret (vault)
+      ansible.builtin.shell: |
+        kubectl create secret generic grafana-oidc \
+          --namespace monitoring \
+          --from-literal=GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET='{{ authentik_oidc_client_secret_grafana }}' \
+          --dry-run=client -o yaml | kubectl apply -f -
+      no_log: true
+      changed_when: false
+      tags: [grafana, oidc]
+
     - name: Render Prometheus values from template
       ansible.builtin.template:
         src: "{{ prometheus_values_template }}"

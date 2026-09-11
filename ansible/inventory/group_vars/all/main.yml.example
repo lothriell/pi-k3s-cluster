@@ -98,6 +98,9 @@ cloudflare_ingress_rules:
     service: "http://ntfy-external.default.svc.cluster.local:8080"
   - hostname: "dev-app.{{ cloudflare_domain }}"
     service: "http://app-frontend.app-dev-namespace.svc.cluster.local:80"
+  # NetBox eval demo — keep behind Cloudflare Access (Zero Trust email OTP).
+  - hostname: "netbox.{{ cloudflare_domain }}"
+    service: "http://netbox.netbox.svc.cluster.local:80"
 
 # ntfy (public config — credentials in vault.yml)
 ntfy_topic: "dns-alerts"
@@ -139,3 +142,9 @@ syncthing_thorwsl_tsip: 100.x.x.x
 pve_host_ip: 100.64.0.99
 # MAC of the pve uplink NIC (vmbr0 bridge port) — used by bridge-selfheal
 pve_uplink_mac: "aa:bb:cc:dd:ee:ff"
+
+# NetBox Discovery eval (playbook 24) — custom image with diode plugin
+# (k8s/netbox/Dockerfile.diode); diode server = docker compose on the GPU node
+netbox_image_repository: "your-ghcr-namespace/netbox-diode"
+netbox_image_tag: "v4.6.10-plugin1.16.0"
+netbox_diode_target: "grpc://<gpu-node-ip>:8080/diode"

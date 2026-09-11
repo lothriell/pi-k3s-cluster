@@ -1,7 +1,7 @@
 # =============================================================================
 # Authentik — LAN-only OIDC provider (task #44 wave 1)
 # =============================================================================
-# Helm chart: authentik/authentik 2026.8.0 (https://goauthentik.io)
+# Helm chart: authentik/authentik 2026.8.1 (https://goauthentik.io)
 # Deployed by: ansible/playbooks/15-deploy-authentik.yml
 # Accessible at: authentik.<local_domain> via Traefik (local-ingress.yml.j2)
 #
@@ -29,7 +29,7 @@ global:
   # the Authentik server image so server + worker share the tag.
   image:
     repository: ghcr.io/goauthentik/server
-    tag: "2026.8.0"
+    tag: "2026.8.1"
     pullPolicy: IfNotPresent
 
 # -- Authentik configuration --------------------------------------------------

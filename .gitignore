@@ -58,6 +58,7 @@ scripts/eve-tracker-cutover.sh
 # Helm values + ArgoCD app manifests with real domains/IPs.
 # Use the .example variants as a template; copy + edit before deploy.
 k8s/argocd/values-argocd.yml
+k8s/argocd/eve-tracker-app.yml
 k8s/argocd/eve-tracker-test-app.yml
 k8s/monitoring/values-grafana.yml
 k8s/argocd/eve-tracker-test-image-updater.yml
