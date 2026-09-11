@@ -1,0 +1,9 @@
+---
+# Service hostnames every node must resolve WITHOUT cluster DNS — kubelet/containerd
+# pull from the Gitea registry and host-side tooling reaches DefectDojo, both outside
+# CoreDNS. All map to the Traefik LoadBalancer IP (first address of the MetalLB range).
+# Extend this list rather than adding one-off lineinfile tasks (#73.2, 2026-09-11 —
+# the defectdojo line had been added live on 15 hosts and was missing on x86-1/2).
+cluster_service_hosts:
+  - "{{ gitea_registry_host | default('gitea.' + (local_domain | default('homielab.local'))) }}"
+  - "defectdojo.{{ local_domain | default('homielab.local') }}"

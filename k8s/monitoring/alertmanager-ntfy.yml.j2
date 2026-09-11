@@ -56,6 +56,12 @@ stringData:
             {{ index .Annotations "summary" }}
 
             {{ index .Annotations "description" }}
+          # Tap-to-open: GeneratorURL = prometheus.<local_domain> graph link. Re-enabled
+          # 2026-09-11 (#73.4) — resolvable off-LAN via tailnet split DNS; removed 2026-04-20
+          # while phones on cellular couldn't reach it.
+          headers:
+            X-Click: |
+              {{ .GeneratorURL }}
       async: false
 {% endraw %}
 ---

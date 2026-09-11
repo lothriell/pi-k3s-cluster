@@ -217,18 +217,20 @@
 # Belt-and-suspenders: if cloud-init still regenerates /etc/hosts (e.g. x86
 # nodes where user-data comes from read-only ISO), make sure the template it
 # renders from contains the Gitea line so the entry survives regeneration.
-- name: Ensure Gitea line is baked into the cloud-init hosts template
+- name: Ensure cluster service hosts are baked into the cloud-init hosts template
   ansible.builtin.lineinfile:
     path: /etc/cloud/templates/hosts.debian.tmpl
-    line: "{{ metallb_ip_range.split('-')[0] }} {{ gitea_registry_host | default('gitea.' + (local_domain | default('homielab.local'))) }}"
+    line: "{{ metallb_ip_range.split('-')[0] }} {{ item }}"
     state: present
+  loop: "{{ cluster_service_hosts }}"
   tags: [system, registry]
 
-- name: Add Gitea registry to /etc/hosts (MetalLB Traefik IP)
+- name: Add cluster service hosts to /etc/hosts (MetalLB Traefik IP)
   ansible.builtin.lineinfile:
     path: /etc/hosts
-    line: "{{ metallb_ip_range.split('-')[0] }} {{ gitea_registry_host | default('gitea.' + (local_domain | default('homielab.local'))) }}"
+    line: "{{ metallb_ip_range.split('-')[0] }} {{ item }}"
     state: present
+  loop: "{{ cluster_service_hosts }}"
   tags: [system, registry]
 
 - name: Create K3s config directory for agents

@@ -236,11 +236,12 @@
   tags: [kernel]
 
 # --- Gitea registry trust ---------------------------------------------------
-- name: Add Gitea registry to /etc/hosts (MetalLB Traefik IP)
+- name: Add cluster service hosts to /etc/hosts (MetalLB Traefik IP)
   ansible.builtin.lineinfile:
     path: /etc/hosts
-    line: "{{ metallb_ip_range.split('-')[0] }} {{ gitea_registry_host | default('gitea.' + (local_domain | default('homielab.local'))) }}"
+    line: "{{ metallb_ip_range.split('-')[0] }} {{ item }}"
     state: present
+  loop: "{{ cluster_service_hosts }}"
   tags: [system, registry]
 
 - name: Create K3s config directory for agents

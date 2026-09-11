@@ -65,7 +65,7 @@
         storage_class: longhorn-storage
       - namespace: eve-tracker
         pvc: eve-tracker-data
-        size: 4Gi
+        size: 16Gi
         access_mode: ReadWriteOnce
         storage_class: longhorn
       - namespace: eve-tracker-test

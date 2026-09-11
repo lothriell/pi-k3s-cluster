@@ -1,0 +1,138 @@
+# =============================================================================
+# zap-dast-eve: weekly OWASP ZAP baseline scan of the PUBLIC eve-tracker URL,
+# imported into DefectDojo (#73.3, 2026-09-11)
+# =============================================================================
+# Rendered by ansible/playbooks/21-deploy-defectdojo.yml (--tags zap-dast); the
+# Dojo API token + in-cluster URL come from the `zap-dast-dojo-api` Secret the
+# playbook creates from vault (defectdojo_api_token — same token the Trivy feed
+# uses). Target host comes from group_vars `cloudflare_domain`.
+#
+# Why trivy-system and not defectdojo: the django NetworkPolicy only admits
+# kube-system / trivy-system / monitoring, NOT its own namespace — the other
+# scanner feed already lives here, so no policy change.
+#
+# What runs: `zap-baseline.py` = spider (≤5 min) + PASSIVE rules only — no
+# active attacks against the public site, safe through the Cloudflare tunnel.
+# Init container writes the ZAP XML to an emptyDir, the curl container POSTs it
+# to /api/v2/import-scan/ (parser "ZAP Scan", product type `dast`,
+# close_old_findings so fixed items auto-close, one Test per run under a single
+# engagement). Baseline exit codes 1/2 (FAIL/WARN findings) are expected — the
+# findings ARE the deliverable — so the init container only fails when no
+# report was produced.
+#
+# Schedule: Monday 04:00 node-local (K3s CronJob TZ trap — node TZ is CEST),
+# after the 03:00 Longhorn backups. amd64 only: the ZAP image is ~1.5 GB
+# (leaked-layer quirk on Pi eMMC) and amd64-only upstream.
+# =============================================================================
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zap-dast-eve-scripts
+  namespace: trivy-system
+  labels:
+    app: zap-dast-eve
+data:
+  scan.sh: |
+    #!/bin/sh
+    # ZAP baseline: 0 = clean, 1 = FAIL findings, 2 = WARN findings, 3 = error.
+    cd /zap/wrk
+    echo "== zap-baseline against ${TARGET} (spider max ${SPIDER_MINUTES}m)"
+    zap-baseline.py -t "${TARGET}" -x zap-report.xml -m "${SPIDER_MINUTES}" -I
+    rc=$?
+    echo "== zap-baseline exit ${rc}"
+    if [ -s zap-report.xml ]; then
+      echo "== report: $(wc -c < zap-report.xml) bytes"
+      exit 0
+    fi
+    echo "!! no report produced"
+    exit 1
+  upload.sh: |
+    #!/bin/sh
+    set -eu
+    REPORT=/zap/wrk/zap-report.xml
+    [ -s "$REPORT" ] || { echo "!! no report at $REPORT"; exit 1; }
+    echo "== importing into ${DD_URL} as product '${DD_PRODUCT}' (type dast)"
+    curl -sS -o /tmp/resp.json -w "== import-scan HTTP %{http_code}\n" \
+      -H "Authorization: Token ${DD_API_TOKEN}" \
+      -F "scan_type=ZAP Scan" \
+      -F "file=@${REPORT};type=text/xml" \
+      -F "product_type_name=dast" \
+      -F "product_name=${DD_PRODUCT}" \
+      -F "engagement_name=ZAP baseline (weekly)" \
+      -F "test_title=${TARGET}" \
+      -F "auto_create_context=true" \
+      -F "close_old_findings=true" \
+      -F "deduplication_on_engagement=true" \
+      -F "minimum_severity=Info" \
+      -F "active=true" -F "verified=false" \
+      "${DD_URL}/api/v2/import-scan/"
+    head -c 600 /tmp/resp.json; echo
+    grep -q '"test_id"' /tmp/resp.json || grep -q '"test"' /tmp/resp.json
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: zap-dast-eve
+  namespace: trivy-system
+  labels:
+    app: zap-dast-eve
+spec:
+  schedule: "0 4 * * 1"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 2400
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app: zap-dast-eve
+        spec:
+          restartPolicy: Never
+          nodeSelector:
+            kubernetes.io/arch: amd64
+          volumes:
+            - name: wrk
+              emptyDir: {}
+            - name: scripts
+              configMap:
+                name: zap-dast-eve-scripts
+                defaultMode: 0755
+          initContainers:
+            - name: zap
+              image: ghcr.io/zaproxy/zaproxy:stable
+              command: ["/bin/sh", "/scripts/scan.sh"]
+              env:
+                - name: TARGET
+                  value: "https://eve.{{ cloudflare_domain }}/"
+                - name: SPIDER_MINUTES
+                  value: "5"
+              volumeMounts:
+                - { name: wrk, mountPath: /zap/wrk }
+                - { name: scripts, mountPath: /scripts, readOnly: true }
+              resources:
+                requests: { cpu: 500m, memory: 1Gi }
+                limits: { memory: 3Gi }
+          containers:
+            - name: upload
+              image: curlimages/curl:8.14.1
+              command: ["/bin/sh", "/scripts/upload.sh"]
+              env:
+                - name: TARGET
+                  value: "https://eve.{{ cloudflare_domain }}/"
+                - name: DD_PRODUCT
+                  value: "eve-tracker (public)"
+              envFrom:
+                - secretRef:
+                    name: zap-dast-dojo-api
+              volumeMounts:
+                - { name: wrk, mountPath: /zap/wrk, readOnly: true }
+                - { name: scripts, mountPath: /scripts, readOnly: true }
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { memory: 128Mi }

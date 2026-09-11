@@ -11,6 +11,15 @@
 # copy is a byte-identical mirror of the backupstore, which Longhorn can still
 # read (BackupTarget `b2`, restore-only). etcd snapshots ride along unchanged.
 #
+# Change detection: size + modtime, with the S3 side using the object's
+# Last-Modified straight from the listing (RCLONE_CONFIG_R2_USE_SERVER_MODTIME:
+# no per-object HEAD; the backend flag form is not accepted by rclone 1.75). NOT --size-only: Longhorn rewrites each volume's `volume.cfg` after every
+# backup at (almost) the same byte size, so --size-only never re-copied it and
+# Longhorn's B2 view of "latest backup" froze at the first sync (2026-08-23 →
+# found by the DR-5 pre-flight 2026-09-11; the backup files themselves were all
+# there). Backup blocks / backup_*.cfg are immutable, so only ~12 small cfg
+# files re-copy per night.
+#
 # Immutability lives on B2 (Object Lock, governance 14d + lifecycle 14d):
 # `sync` deletions are *hides* on the native b2 backend, locked versions can't
 # be destroyed, so a wiped/poisoned R2 only hides objects on B2 for 14 days.
@@ -79,6 +88,8 @@ spec:
                   value: Cloudflare
                 - name: RCLONE_CONFIG_R2_NO_CHECK_BUCKET
                   value: "true"
+                - name: RCLONE_CONFIG_R2_USE_SERVER_MODTIME   # Last-Modified from the listing, no per-object HEAD (see header)
+                  value: "true"
                 - name: RCLONE_CONFIG_B2_TYPE
                   value: b2
                 - name: RCLONE_CONFIG_B2_HARD_DELETE
@@ -95,7 +106,6 @@ spec:
                   echo "backup-mirror: $SRC -> $DST  ($(date -u +%FT%TZ))"
                   rclone sync "$SRC" "$DST" \
                     --fast-list --transfers 8 --checkers 16 \
-                    --size-only \
                     --retries 5 --low-level-retries 20 \
                     --stats 5m --stats-one-line --stats-log-level NOTICE \
                     --log-level NOTICE

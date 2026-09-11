@@ -214,6 +214,13 @@ netbox: ## Deploy NetBox (IPAM/DCIM eval) at netbox.<local_domain>
 wazuh-dojo-export: ## Deploy daily Wazuh→DefectDojo vulnerability export (timer on the Wazuh VM)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/22-deploy-wazuh-dojo-export.yml
 
+.PHONY: zap-dast zap-dast-run
+zap-dast: ## Deploy weekly OWASP ZAP baseline DAST of the public eve URL → DefectDojo (CronJob in trivy-system)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/21-deploy-defectdojo.yml --tags zap-dast
+
+zap-dast-run: ## Same as zap-dast, then run one scan immediately and wait for the Dojo import
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/21-deploy-defectdojo.yml --tags zap-dast -e run_now=true
+
 .PHONY: network-policies
 network-policies: ## Apply all namespace NetworkPolicies (requires target namespaces to exist)
 	$(KUBECTL) apply -f k8s/network-policies/

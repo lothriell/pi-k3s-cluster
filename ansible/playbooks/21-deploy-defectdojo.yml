@@ -30,6 +30,9 @@
     defectdojo_values: "{{ playbook_dir }}/../../k8s/defectdojo/values-defectdojo.yml"
     trivy_dojo_operator_chart_version: "0.11.0"
     trivy_dojo_operator_values: "{{ playbook_dir }}/../../k8s/defectdojo/values-trivy-dojo-operator.yml"
+    zap_dast_template: "{{ playbook_dir }}/../../k8s/defectdojo/zap-dast-eve-cronjob.yml.j2"
+    zap_dast_rendered: "/tmp/zap-dast-eve.rendered.yml"
+    run_now: false   # -e run_now=true → also kick off one ZAP scan immediately and wait for it (make zap-dast-run)
 
   tasks:
     - name: Ensure defectdojo namespace exists
@@ -230,3 +233,78 @@
       ansible.builtin.debug:
         var: tdro_pods.stdout_lines
       tags: [defectdojo, trivy-dojo, verify]
+
+    # -- ZAP DAST → Dojo (#73.3) ---------------------------------------------
+    # Weekly OWASP ZAP baseline (passive) scan of the public eve URL, imported
+    # into Dojo. Lives in trivy-system (django netpol admits it). `make zap-dast`
+    # / `make zap-dast-run`.
+    - name: Create DefectDojo API secret for the ZAP DAST CronJob
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: zap-dast-dojo-api
+            namespace: trivy-system
+          type: Opaque
+          stringData:
+            DD_API_TOKEN: "{{ defectdojo_api_token }}"
+            DD_URL: "http://defectdojo-django.defectdojo.svc.cluster.local"
+      tags: [defectdojo, zap-dast]
+
+    - name: Render ZAP DAST CronJob manifest
+      ansible.builtin.template:
+        src: "{{ zap_dast_template }}"
+        dest: "{{ zap_dast_rendered }}"
+        mode: "0600"
+      tags: [defectdojo, zap-dast]
+
+    - name: Apply ZAP DAST CronJob manifest
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ zap_dast_rendered }}"
+      tags: [defectdojo, zap-dast]
+
+    - name: Remove rendered ZAP DAST manifest
+      ansible.builtin.file:
+        path: "{{ zap_dast_rendered }}"
+        state: absent
+      tags: [defectdojo, zap-dast]
+
+    - name: Name the one-off ZAP job (playbook runs with gather_facts false)
+      ansible.builtin.set_fact:
+        zap_job: "zap-dast-eve-manual-{{ lookup('pipe', 'date +%s') }}"
+      when: run_now | bool
+      tags: [defectdojo, zap-dast]
+
+    - name: Kick off a one-off ZAP scan now
+      ansible.builtin.command: >
+        kubectl -n trivy-system create job {{ zap_job }}
+        --from=cronjob/zap-dast-eve
+      register: zap_manual_job
+      when: run_now | bool
+      tags: [defectdojo, zap-dast]
+
+    - name: Wait for the one-off ZAP scan to finish (≤ 40 min)
+      ansible.builtin.command: >
+        kubectl -n trivy-system wait --for=condition=complete --timeout=40m
+        job/{{ zap_job }}
+      when: run_now | bool
+      changed_when: false
+      tags: [defectdojo, zap-dast]
+
+    - name: Show one-off ZAP scan logs (zap + upload)
+      ansible.builtin.shell: >
+        kubectl -n trivy-system logs job/{{ zap_job }} -c zap | tail -25;
+        kubectl -n trivy-system logs job/{{ zap_job }} -c upload
+      register: zap_manual_logs
+      when: run_now | bool
+      changed_when: false
+      tags: [defectdojo, zap-dast]
+
+    - name: Display one-off ZAP scan logs
+      ansible.builtin.debug:
+        var: zap_manual_logs.stdout_lines
+      when: run_now | bool
+      tags: [defectdojo, zap-dast]

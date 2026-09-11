@@ -11,6 +11,12 @@
 #   ~/.claude/projects/        memories + session transcripts (agent-*.jsonl excluded:
 #                              subagent logs, huge + regenerable)
 #   ~/.claude/CLAUDE.md, settings*.json, keybindings.json   (symlinks resolved)
+#   <repo>/ansible/inventory/group_vars/all/{vault.yml,main.yml}  (DR-4 follow-up,
+#                              2026-09-11: vault.yml is pushed ONLY if it is ansible-vault
+#                              ciphertext — the decryption key is the PAPER copy of the
+#                              vault password; main.yml is non-secret IPs/hostnames. Both
+#                              are gitignored, so without this they lived only on the
+#                              Syncthing machines.)
 # NOT backed up: ~/.claude/plugins (reinstallable), caches, *.lock.
 #
 # Setup (once per Mac; both Air and macmini run their own copy of this):
@@ -28,8 +34,11 @@
 #   5. Verify: `claude-memories-backup.sh` (manual run) then
 #        rclone lsd b2-claude:homielab-claude-memories
 #
-# Restore: rclone copy b2-claude:homielab-claude-memories/projects ~/.claude/projects
+# Restore: rclone copy b2-claude:homielab-claude-memories/<host>/projects ~/.claude/projects
 #          (add --b2-version-at "2026-05-07T23:00:00Z" for a point-in-time view)
+#          rclone copy b2-claude:homielab-claude-memories/<host>/ansible-vault \
+#                 ~/claude/kubernetes/ansible/inventory/group_vars/all/
+#          then `ansible-vault view .../vault.yml` with the paper vault password.
 #
 # Exit codes: 0 ok, 1 rclone failure (launchd logs to ~/Library/Logs/claude-backup.log)
 # =============================================================================
@@ -37,6 +46,8 @@ set -uo pipefail
 
 REMOTE="${CLAUDE_BACKUP_REMOTE:-b2-claude:homielab-claude-memories}"
 SRC_DIR="${HOME}/.claude"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VAULT_DIR="${CLAUDE_BACKUP_VAULT_DIR:-$REPO_DIR/ansible/inventory/group_vars/all}"
 HOST="$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
 LOG="${HOME}/Library/Logs/claude-backup.log"
 RCLONE="$(command -v rclone || echo /opt/homebrew/bin/rclone)"
@@ -74,6 +85,26 @@ for f in CLAUDE.md settings.json settings.local.json keybindings.json; do
 done
 "$RCLONE" sync "$tmp" "$REMOTE/$HOST/config" --b2-hard-delete=false \
   --stats-one-line --stats 0 --log-level NOTICE --log-file "$LOG" || rc=1
+rm -rf "$tmp"
+
+# 3) ansible vault + main.yml (DR-4 follow-up). Hard guard: vault.yml MUST be
+#    ansible-vault ciphertext — a decrypted working copy (ansible-vault decrypt for
+#    an edit session) must never reach B2, where it would sit under a 30-day
+#    compliance lock that even the account owner cannot shorten.
+tmp=$(mktemp -d)
+if [ -f "$VAULT_DIR/vault.yml" ]; then
+  if head -1 "$VAULT_DIR/vault.yml" | grep -q '^\$ANSIBLE_VAULT;'; then
+    cp "$VAULT_DIR/vault.yml" "$tmp/vault.yml"
+    [ -f "$VAULT_DIR/main.yml" ] && cp "$VAULT_DIR/main.yml" "$tmp/main.yml"
+    "$RCLONE" sync "$tmp" "$REMOTE/$HOST/ansible-vault" --b2-hard-delete=false \
+      --stats-one-line --stats 0 --log-level NOTICE --log-file "$LOG" || rc=1
+  else
+    log "ERROR $VAULT_DIR/vault.yml is NOT ansible-vault ciphertext — refusing to push it (re-encrypt it!)"
+    rc=1
+  fi
+else
+  log "WARN $VAULT_DIR/vault.yml not found — vault step skipped"
+fi
 rm -rf "$tmp"
 
 if [ $rc -eq 0 ]; then
