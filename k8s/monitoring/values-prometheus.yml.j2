@@ -64,6 +64,14 @@ alertmanager:
           # after a single notification.
           repeat_interval: 1h
           continue: false
+    inhibit_rules:
+      # A site-link drop already pages as RemoteSiteLinkDown; the two per-node
+      # NodeDown alerts for the remote x86 nodes are the same event.
+      - source_matchers:
+          - alertname="RemoteSiteLinkDown"
+        target_matchers:
+          - alertname="NodeDown"
+          - instance=~"k3s-x86-.*"
     receivers:
       - name: 'null'
       - name: heartbeat
@@ -469,6 +477,30 @@ serverFiles:
             annotations:
               summary: "Node exporter down on {{ '{{' }} $labels.instance {{ '}}' }}"
               description: "Node has not reported metrics for 5 minutes."
+          - alert: RemoteSiteLinkDown
+            # Both remote-site (x86) nodes vanishing together = the Site Magic VPN
+            # between the sites, not two independent node failures (2026-08-13
+            # 3-min blip; 2026-09-11 6-min drop after the home UCG firmware
+            # reboot). Fires in 2m (NodeDown needs 5m), names the cause, and
+            # inhibits the per-node NodeDown for k3s-x86-* (alertmanager
+            # inhibit_rules above). `count(… == 0)` is absent when both are up.
+            expr: count(up{job="node-exporter",instance=~"k3s-x86-.*"} == 0) == 2
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Remote site link down (Site Magic) — both x86 nodes unreachable"
+              description: "Both k3s-x86 nodes stopped reporting at once. Expect Longhorn degraded volumes and amd64 pod reschedules until the VPN re-peers; check the home gateway first (UCG reboot/firmware)."
+          - alert: RemoteSiteLinkFlapping
+            # Post-hoc trail: both x86 nodes went down AND came back within 6h.
+            # Warning only (digest, no page) — the blip itself is over.
+            expr: min(changes(up{job="node-exporter",instance=~"k3s-x86-.*"}[6h])) >= 2
+            for: 1m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Remote site link flapped in the last 6h"
+              description: "Both k3s-x86 nodes dropped and recovered together within 6h — Site Magic blip. Check k3s-x86-1's journal for 'Remotedialer proxy error' timestamps."
           # TODO: NodeResolverDown / NodeServiceDown (systemd-resolved / tailscaled /
           # k3s health) — pending the node-exporter TEXTFILE-collector approach;
           # the systemd-collector source was reverted (AppArmor-blocked). See the
@@ -495,13 +527,20 @@ serverFiles:
             # uid in the join (task #51): a recreated pod (same ns+pod, new
             # uid — typical StatefulSet) must not fire on the OLD incarnation's
             # restart counts lingering in the 24h increase() window.
-            expr: increase(kube_pod_container_status_restarts_total[24h]) * on(namespace, pod, uid) group_left() kube_pod_info > 5
+            # `and … [1h] > 0` (2026-09-11): the 24h lookback alone kept paging
+            # hourly for a full day after a one-off burst (6 repo-server restarts
+            # during a 6-min site-link drop, pod healthy 5 min later). Now the
+            # alert resolves once the pod has gone an hour without a restart.
+            expr: >-
+              (increase(kube_pod_container_status_restarts_total[24h]) * on(namespace, pod, uid) group_left() kube_pod_info > 5)
+              and on(namespace, pod, uid)
+              (increase(kube_pod_container_status_restarts_total[1h]) > 0)
             for: 10m
             labels:
               severity: critical
             annotations:
               summary: "Pod {{ '{{' }} $labels.namespace {{ '}}' }}/{{ '{{' }} $labels.pod {{ '}}' }} restarted too many times"
-              description: "More than 5 restarts in the last 24 hours."
+              description: "More than 5 restarts in the last 24 hours and still restarting within the last hour."
           - alert: ContainerOOMKilled
             # last_terminated_reason is sticky (stays 1 until the NEXT
             # termination overwrites it) — alone it re-pages the same old kill
