@@ -39,6 +39,44 @@
           cloudflare_tunnel_id and cloudflare_ingress_rules must be set in
           ansible/inventory/group_vars/all/main.yml. See main.yml.example.
 
+    # DR (2026-09-11, DR-5 pre-flight): the tunnel credentials JSON lived ONLY in
+    # ~/.cloudflared on the Air. When vault.yml carries
+    # `cloudflare_tunnel_credentials_json` (the file's content, one line), it WINS
+    # and is materialised to a 0600 temp file — so any machine with the repo +
+    # vault_pass (macmini, loki) can redeploy the tunnel. The local file remains
+    # the fallback for a vault without the key.
+    # Gate: a malformed vault value must fail HERE, not after it has replaced the live
+    # Secret (2026-09-11: a pasted trailing '%' crash-looped the new cloudflared pods;
+    # only the not-yet-rolled old pod kept the tunnel up).
+    - name: Validate the vault tunnel credentials are well-formed JSON with the expected keys
+      ansible.builtin.assert:
+        that:
+          - (cloudflare_tunnel_credentials_json | from_json) is mapping
+          - "'AccountTag' in (cloudflare_tunnel_credentials_json | from_json)"
+          - "'TunnelSecret' in (cloudflare_tunnel_credentials_json | from_json)"
+          - "'TunnelID' in (cloudflare_tunnel_credentials_json | from_json)"
+          - (cloudflare_tunnel_credentials_json | from_json).TunnelID == cloudflare_tunnel_id
+        fail_msg: >-
+          vault cloudflare_tunnel_credentials_json is not valid JSON with AccountTag/TunnelSecret/TunnelID
+          matching cloudflare_tunnel_id — check for stray characters (e.g. a trailing '%' from a
+          terminal paste). The live Secret was NOT touched.
+        quiet: true
+      when: cloudflare_tunnel_credentials_json is defined and (cloudflare_tunnel_credentials_json | length) > 0
+      no_log: true
+
+    - name: Materialise tunnel credentials from vault (when present)
+      ansible.builtin.copy:
+        content: "{{ cloudflare_tunnel_credentials_json }}"
+        dest: "/tmp/cloudflared-credentials.vault.json"
+        mode: "0600"
+      when: cloudflare_tunnel_credentials_json is defined and (cloudflare_tunnel_credentials_json | length) > 0
+      no_log: true
+
+    - name: Point the credentials path at the vault copy
+      ansible.builtin.set_fact:
+        cloudflare_tunnel_credentials_file: "/tmp/cloudflared-credentials.vault.json"
+      when: cloudflare_tunnel_credentials_json is defined and (cloudflare_tunnel_credentials_json | length) > 0
+
     - name: Fail fast if the tunnel credentials file is missing
       ansible.builtin.stat:
         path: "{{ cloudflare_tunnel_credentials_file }}"
@@ -49,9 +87,9 @@
         that: cf_creds_stat.stat.exists
         fail_msg: >-
           Tunnel credentials file not found at
-          {{ cloudflare_tunnel_credentials_file }}.
-          Run `cloudflared tunnel login` and `cloudflared tunnel create`
-          to generate it.
+          {{ cloudflare_tunnel_credentials_file }} and vault has no
+          cloudflare_tunnel_credentials_json. Run `cloudflared tunnel login` +
+          `cloudflared tunnel create` to generate it, or restore vault.yml.
 
     - name: Ensure cloudflare namespace exists
       ansible.builtin.command: kubectl create namespace cloudflare --dry-run=client -o yaml
@@ -72,6 +110,12 @@
           --dry-run=client -o yaml | kubectl apply -f -
       register: cf_secret
       changed_when: "'configured' in cf_secret.stdout or 'created' in cf_secret.stdout"
+
+    - name: Remove the materialised vault credentials copy
+      ansible.builtin.file:
+        path: "/tmp/cloudflared-credentials.vault.json"
+        state: absent
+      when: cloudflare_tunnel_credentials_json is defined
 
     - name: Render cloudflared-config ConfigMap from template
       ansible.builtin.template:

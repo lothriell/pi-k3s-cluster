@@ -150,8 +150,11 @@ def render(todo_lines, plan_lines):
     out.append("> tool is unavailable (it is missing in some Claude Code builds); when `TaskCreate` exists,")
     out.append("> create one task per line below (subject = the item text, in_progress for `[~]`).")
     out.append("")
-    out.append("Generated %s · git `%s` · **%d open** (%d in progress) — %d from todo.md, %d from improvement-plan.md"
-               % (date.today().isoformat(), git_head(), n_open, n_prog, len(todo_items), plan_items))
+    # No git hash in the header (dropped 2026-09-15, #78.1): the file is Syncthing'd to machines
+    # whose .git is not synced, so every SessionStart hook there stamped ITS OWN (stale) HEAD and
+    # the churn dirtied the Air's tree with content-identical rewrites. Date + counts only.
+    out.append("Generated %s · **%d open** (%d in progress) — %d from todo.md, %d from improvement-plan.md"
+               % (date.today().isoformat(), n_open, n_prog, len(todo_items), plan_items))
     out.append("")
     out.append("ID scheme: `T<n>` = todo.md item (in file order); `<task>.<n>` = improvement-plan sub-item")
     out.append("under numbered task `<task>` (e.g. `DR-2.3`, `73.1`). `(Lnnn)` = source line at generation time.")

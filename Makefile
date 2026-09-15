@@ -214,6 +214,17 @@ netbox: ## Deploy NetBox (IPAM/DCIM eval) at netbox.<local_domain>
 wazuh-dojo-export: ## Deploy daily Wazuh→DefectDojo vulnerability export (timer on the Wazuh VM)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/22-deploy-wazuh-dojo-export.yml
 
+.PHONY: open-webui
+open-webui: ## Deploy Open WebUI (chat UI for Ollama) — plain manifest + local ingress; PVC comes from restore-volumes on a rebuild
+	kubectl apply -f k8s/open-webui/open-webui.yml
+	@[ -f k8s/open-webui/ingress.local.yml ] && kubectl apply -f k8s/open-webui/ingress.local.yml || echo "k8s/open-webui/ingress.local.yml missing (copy from .example) — no ingress applied"
+
+.PHONY: services
+services: authentik forgejo vaultwarden netbox defectdojo backup-mirror open-webui backup-relabel ## Post-`all` service tier (everything live that is NOT in the base chain), ends with backup-relabel so restored PVCs enrol
+
+.PHONY: rebuild
+rebuild: all services ## Full DR rebuild = base chain (`all`) + service tier (`services`); the runbook's scenario-2 one-liner
+
 .PHONY: zap-dast zap-dast-run
 zap-dast: ## Deploy weekly OWASP ZAP baseline DAST of the public eve URL → DefectDojo (CronJob in trivy-system)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/21-deploy-defectdojo.yml --tags zap-dast

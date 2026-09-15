@@ -41,7 +41,7 @@ Other managed nodes (via Tailscale):
 
 ### Execution Flow
 
-`make all` chains every build stage — the Makefile `all:` target is the authoritative stage list (`make help`).
+`make all` chains every BASE build stage — the Makefile `all:` target is the authoritative stage list (`make help`). Services outside that chain (authentik, forgejo, vaultwarden, netbox, defectdojo, backup-mirror, open-webui) are the **`make services`** tier; **`make rebuild` = all + services** is the full DR rebuild.
 
 **Bootstrap playbooks (00-*)** run as personal user and must be invoked separately.
 **All other playbooks** use the `ansible` service account (configured in ansible.cfg).
