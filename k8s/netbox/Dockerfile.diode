@@ -4,7 +4,7 @@
 #     -t ghcr.io/lothriell/netbox-diode:v4.6.10-plugin1.16.0 k8s/netbox
 #   podman push ghcr.io/lothriell/netbox-diode:v4.6.10-plugin1.16.0
 # Plugin↔NetBox version matrix: https://github.com/netboxlabs/diode-netbox-plugin
-FROM ghcr.io/netbox-community/netbox:v4.6.10
+FROM ghcr.io/netbox-community/netbox:v4.7.1
 # The image's venv (/opt/netbox/venv, already on PATH) is uv-built and ships
 # without pip or ensurepip — install with a borrowed uv binary instead.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
