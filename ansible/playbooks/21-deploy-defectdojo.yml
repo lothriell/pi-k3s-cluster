@@ -26,7 +26,7 @@
   become: false
 
   vars:
-    defectdojo_chart_version: "1.9.44"   # app 3.2.0
+    defectdojo_chart_version: "1.9.52"   # app 3.3.100 (2026-09-20; was 1.9.44 / 3.2.0)
     defectdojo_values: "{{ playbook_dir }}/../../k8s/defectdojo/values-defectdojo.yml"
     trivy_dojo_operator_chart_version: "0.11.0"
     trivy_dojo_operator_values: "{{ playbook_dir }}/../../k8s/defectdojo/values-trivy-dojo-operator.yml"

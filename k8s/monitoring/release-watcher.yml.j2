@@ -89,6 +89,8 @@ data:
     smartctl-exporter https://prometheus-community.github.io/helm-charts prometheus-smartctl-exporter
     trivy-operator https://aquasecurity.github.io/helm-charts/ trivy-operator
     vaultwarden https://guerzon.github.io/vaultwarden vaultwarden
+    defectdojo https://raw.githubusercontent.com/DefectDojo/django-DefectDojo/helm-charts defectdojo
+    trivy-dojo-report-operator https://telekom-mms.github.io/trivy-dojo-report-operator/ trivy-dojo-report-operator
   # workload (ns/kind/name/container-match) -> github repo for latest release
   images.map: |
     cloudflare deployment cloudflared cloudflared cloudflare/cloudflared
@@ -190,7 +192,7 @@ spec:
           restartPolicy: Never
           containers:
             - name: watcher
-              image: alpine/k8s:1.34.1
+              image: alpine/k8s:1.36.4
               command: ["/bin/sh", "/config/watch.sh"]
               envFrom:
                 - secretRef:

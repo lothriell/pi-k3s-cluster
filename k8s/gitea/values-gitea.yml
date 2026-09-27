@@ -17,6 +17,9 @@
 # ---------------------------------------------------------------------------
 image:
   rootless: true
+  # 1.27.1 fixes CVE-2026-60004 (gitea.dev) — chart 12.7.0 still ships 1.27.0 (2026-09-20);
+  # the chart appends -rootless. Drop this once the chart's appVersion catches up.
+  tag: "1.27.1"
 
 # ---------------------------------------------------------------------------
 # Hardened pod + container securityContext.

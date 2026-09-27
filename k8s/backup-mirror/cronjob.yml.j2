@@ -112,13 +112,18 @@ spec:
                   echo "backup-mirror: sync OK ($(date -u +%FT%TZ)); sizes:"
                   rclone size --fast-list "$SRC" | sed 's/^/  src /'
                   rclone size --fast-list "$DST" | sed 's/^/  dst /'
+              # Memory: `--fast-list` holds BOTH bucket listings in RAM; at ~100k objects
+              # per side the job outgrew 1Gi and was OOMKilled ~45 s in (2026-09-19 retry
+              # passed, 09-20 both attempts died → BackupMirrorStale). 3Gi ≈ 3× the
+              # 09-20 size; amd64 nodes have 40+ GB free. Revisit when the bucket
+              # passes ~250k objects (or drop --fast-list: less RAM, more class-C calls).
               resources:
                 requests:
                   cpu: 100m
-                  memory: 256Mi
+                  memory: 1Gi
                 limits:
                   cpu: "2"
-                  memory: 1Gi
+                  memory: 3Gi
               volumeMounts:
                 - name: tmp
                   mountPath: /tmp
