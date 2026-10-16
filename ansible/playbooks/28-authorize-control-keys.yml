@@ -1,0 +1,41 @@
+---
+# Playbook 28: extra controller keys (#82.1, 2026-10-16).
+# Long fleet jobs belong on the macmini (tmux, never sleeps) — the Air's lid
+# close killed the 2026-10-15/16 upgrade run. The fleet only trusted the Air's
+# key (ssh_pubkey, seeded by the 00-bootstrap playbooks), so the macmini could
+# reach every host but log in to none. This adds `control_pubkeys`
+# (group_vars/all/main.yml) next to it: the ansible service account everywhere,
+# plus the personal user on gpu_servers (playbooks 09/27 run as that user).
+#
+# Additive only (state: present, exclusive: false) — never removes ssh_pubkey.
+# Offline hosts (roaming desktops) are skipped; re-run when they are back.
+#
+# Usage: make control-keys   (run from a machine that already has access)
+
+- name: Authorize extra controller keys for the ansible service account
+  hosts: all
+  gather_facts: false
+  ignore_unreachable: true
+  tasks:
+    - name: Install control_pubkeys for ansible
+      ansible.posix.authorized_key:
+        user: ansible
+        key: "{{ item }}"
+        state: present
+      loop: "{{ control_pubkeys }}"
+      loop_control:
+        label: "{{ item.split(' ')[2] | default(item[:30]) }}"
+
+- name: Authorize extra controller keys for the personal user on the GPU node
+  hosts: gpu_servers
+  gather_facts: false
+  ignore_unreachable: true
+  tasks:
+    - name: Install control_pubkeys for {{ personal_user }}
+      ansible.posix.authorized_key:
+        user: "{{ personal_user }}"
+        key: "{{ item }}"
+        state: present
+      loop: "{{ control_pubkeys }}"
+      loop_control:
+        label: "{{ item.split(' ')[2] | default(item[:30]) }}"

@@ -1,0 +1,33 @@
+---
+# =============================================================================
+# Playbook 27: Diode server + orb-agent (NetBox Discovery eval) on the GPU node
+# =============================================================================
+# Usage:  make diode        (CHECK=1 for --check)
+#
+# Pairs with playbook 24 (NetBox + diode plugin). Was hand-run docker compose
+# until 2026-10-16; brought under Ansible after the 09-10 reboot left hydra,
+# ingress-nginx and orb-agent down for 5 weeks (restart: on-failure / no).
+# Secrets: vault.yml diode_* + orb_snmp_community (+ netbox_diode_client_secret
+# shared with playbook 24). Bootstrap from a live host: scripts/diode-vault-snippet.sh
+# =============================================================================
+
+- name: Resolve the NetBox plugin API URL
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  become: false
+  tasks:
+    - name: Look up netbox Service ClusterIP
+      ansible.builtin.command: kubectl -n netbox get svc netbox -o jsonpath={.spec.clusterIP}
+      register: netbox_svc
+      changed_when: false
+      check_mode: false
+
+- name: Deploy diode + orb-agent
+  hosts: gpu_servers
+  become: false
+  vars:
+    ansible_user: "{{ personal_user }}"
+    diode_netbox_api_base_url: "http://{{ hostvars['localhost'].netbox_svc.stdout }}/api/plugins/diode"
+  roles:
+    - role: ../roles/diode

@@ -10,6 +10,12 @@ personal_user: myuser
 # SSH public key (used in cloud-init for both personal and ansible users)
 ssh_pubkey: "ssh-ed25519 AAAA... your-key-here"
 
+# Extra controller pubkeys (beyond ssh_pubkey) allowed into the ansible service
+# account fleet-wide, and the personal user on gpu_servers — lets the macmini
+# run long fleet jobs (#82.1). Applied by playbook 28 / `make control-keys`.
+control_pubkeys:
+  - "ssh-ed25519 AAAA... user@second-controller"
+
 # Node IPs — must match your network/DHCP reservations
 node_ip_1: 10.0.0.11
 node_ip_2: 10.0.0.12
@@ -63,6 +69,10 @@ timezone: "UTC"
 tailscale_arch_t_01: 100.x.x.x
 tailscale_cachy_t_01: 100.x.x.x
 tailscale_loki: 100.x.x.x
+tailscale_freyr: 100.x.x.x
+tailscale_hel: 100.x.x.x
+# SSH sources allowed through ufw on desktops (playbook 25)
+desktop_ssh_allowed_cidrs: ["192.168.0.0/16", "100.64.0.0/10", "fd7a:115c:a1e0::/48"]   # home LAN + tailnet (v4/v6)
 tailscale_macmini: 100.x.x.x
 tailscale_wazuh_server: 100.x.x.x
 tailscale_thorwsl: 100.64.0.15
@@ -146,5 +156,14 @@ pve_uplink_mac: "aa:bb:cc:dd:ee:ff"
 # NetBox Discovery eval (playbook 24) — custom image with diode plugin
 # (k8s/netbox/Dockerfile.diode); diode server = docker compose on the GPU node
 netbox_image_repository: "your-ghcr-namespace/netbox-diode"
-netbox_image_tag: "v4.6.10-plugin1.16.0"
+netbox_image_tag: "v4.7.3-plugin1.18.1"
 netbox_diode_target: "grpc://<gpu-node-ip>:8080/diode"
+
+# Diode + orb-agent (playbook 27 / roles/diode) — discovery scope
+orb_network_targets:
+  - <home-cluster-subnet>/24
+  - <remote-cluster-subnet>/24
+orb_snmp_policies:
+  - name: unifi_snmp_home
+    site: home
+    targets: ["<home-cluster-subnet>/24"]

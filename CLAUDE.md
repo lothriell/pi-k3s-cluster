@@ -37,6 +37,7 @@ Other managed nodes (via Tailscale):
      Docker. The former separate "gpu-1" inventory identity was removed
      2026-07-24 — one machine, one IP.)
   arch-t-01, cachy-t-01    — Desktops (Arch/CachyOS)
+  loki, freyr, hel         — Omarchy desktops (loki laptop; freyr + hel SFFs)
 ```
 
 ### Execution Flow
@@ -48,7 +49,7 @@ Other managed nodes (via Tailscale):
 **Playbooks 03-08** run on `localhost` using kubectl/helm against the cluster (except 08-tailscale which runs on nodes).
 **Playbook 09** (Ollama) runs on `gpu_servers` group as personal user (Docker requires it).
 
-**Desktop / macOS / manual-node bootstrap:** step-by-step procedures for bootstrapping Arch/CachyOS desktops (RSA key), macOS nodes (`make bootstrap-macos`, `make shell-macos`), and standalone Ubuntu VMs (`make bootstrap-manual-node`) live in the `node-bootstrap` skill (`.claude/skills/node-bootstrap/SKILL.md`).
+**Desktop / macOS / manual-node bootstrap:** step-by-step procedures for Linux desktops (two steps: `make bootstrap-desktop HOST=<h>` asks your sudo password once, then `make desktop-onboard HOST=<h>` does shell, CA, Wazuh + os-release fix and sshd hardening), macOS nodes (`make bootstrap-macos`, `make shell-macos`), and standalone Ubuntu VMs (`make bootstrap-manual-node`) live in the `node-bootstrap` skill (`.claude/skills/node-bootstrap/SKILL.md`).
 
 ### Variable Flow
 

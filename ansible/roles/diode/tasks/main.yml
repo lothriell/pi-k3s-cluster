@@ -1,0 +1,152 @@
+---
+# Diode server (docker compose) + orb-agent on the GPU node. Runs as the
+# personal user (docker group), like the ollama role.
+
+- name: Assert diode vault secrets are present
+  ansible.builtin.assert:
+    that:
+      - vars[item] is defined
+      - vars[item] | string | length >= 8
+      - "'%' not in (vars[item] | string)"
+    fail_msg: >-
+      vault.yml is missing or has a bad {{ item }} — import the live values with
+      `scripts/diode-vault-snippet.sh | pbcopy`, then `ansible-vault edit
+      ansible/inventory/group_vars/all/vault.yml` and paste.
+    quiet: true
+  loop:
+    - diode_redis_password
+    - diode_postgres_password
+    - diode_db_password
+    - diode_hydra_db_password
+    - diode_hydra_secrets_system
+    - diode_ingest_client_secret
+    - diode_to_netbox_client_secret
+    - netbox_diode_client_secret
+    - orb_snmp_community
+  no_log: true
+
+- name: Assert NetBox plugin API URL and discovery targets are set
+  ansible.builtin.assert:
+    that:
+      - diode_netbox_api_base_url is match('^https?://')
+      - orb_network_targets | length > 0
+    fail_msg: "Set orb_network_targets / orb_snmp_policies in main.yml; the API URL comes from playbook 27."
+    quiet: true
+
+# --- diode server ---------------------------------------------------------
+
+- name: Diode directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ diode_dir }}"
+    - "{{ diode_dir }}/nginx"
+    - "{{ diode_dir }}/oauth2/client"
+
+- name: Diode compose file + nginx config
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ diode_dir }}/{{ item.dest }}"
+    mode: "0644"
+  loop:
+    - { src: docker-compose.yaml, dest: docker-compose.yaml }
+    - { src: nginx.conf, dest: nginx/nginx.conf }
+  register: diode_files
+
+- name: Diode .env (secrets)
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ diode_dir }}/.env"
+    mode: "0600"
+  register: diode_env
+  diff: false
+
+# Read by diode-auth-bootstrap (registers the clients in hydra) and the
+# reconciler, both via a read-only bind mount as non-root — keep 0644.
+- name: Diode OAuth2 client credentials
+  ansible.builtin.template:
+    src: client-credentials.json.j2
+    dest: "{{ diode_dir }}/oauth2/client/client-credentials.json"
+    mode: "0644"
+  register: diode_creds
+  diff: false
+
+# `up` always re-starts the exited one-shots (hydra-migrate, auth-bootstrap —
+# both idempotent), so only Created/Recreated counts as a change.
+- name: Diode stack up
+  ansible.builtin.command:
+    cmd: docker compose up -d --remove-orphans
+    chdir: "{{ diode_dir }}"
+  register: diode_up
+  changed_when: diode_up.stderr is search('Recreated|Created')
+  when: not ansible_check_mode
+
+# nginx resolves its upstreams (diode-auth/-ingester/-reconciler) once at
+# startup; recreated containers get new IPs and nginx keeps proxying to the old
+# ones -> 502 / "No route to host" on /diode/auth/token (2.3.1 upgrade,
+# 2026-10-16). Restart it whenever the stack changed.
+- name: Restart ingress-nginx after container changes (re-resolve upstreams)
+  ansible.builtin.command: docker restart diode-ingress-nginx-1
+  when:
+    - not ansible_check_mode
+    - diode_up is changed
+
+# --- orb-agent ------------------------------------------------------------
+
+- name: orb-agent config, compose file and .env
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ orb_dir }}/{{ item.dest }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { src: agent.yaml.j2, dest: agent.yaml, mode: "0644" }
+    - { src: orb-compose.yaml.j2, dest: compose.yaml, mode: "0644" }
+    - { src: orb-env.j2, dest: .env, mode: "0600" }
+  register: orb_files
+  diff: false
+
+# The pre-2026-10-16 orb-agent was a bare `docker run`; compose can't adopt it
+# (name clash), so remove it once.
+- name: Look up legacy (non-compose) orb-agent container
+  ansible.builtin.command:
+    cmd: >-
+      docker inspect orb-agent --format
+      '{% raw %}{{ index .Config.Labels "com.docker.compose.project" }}{% endraw %}'
+  register: orb_legacy
+  changed_when: false
+  failed_when: false
+
+- name: Remove legacy orb-agent container
+  ansible.builtin.command: docker rm -f orb-agent
+  when:
+    - orb_legacy.rc == 0
+    - orb_legacy.stdout | trim == ''
+    - not ansible_check_mode
+
+- name: orb-agent up
+  ansible.builtin.command:
+    cmd: docker compose up -d
+    chdir: "{{ orb_dir }}"
+  register: orb_up
+  changed_when: orb_up.stderr is search('Recreated|Created')
+  when: not ansible_check_mode
+
+# --- verify ---------------------------------------------------------------
+
+- name: Long-running containers are up with a reboot-safe restart policy
+  ansible.builtin.shell: |
+    set -o pipefail
+    for c in diode-ingress-nginx-1 diode-diode-ingester-1 diode-diode-reconciler-1 \
+             diode-diode-auth-1 diode-hydra-1 diode-postgres-1 diode-redis-1 orb-agent; do
+      docker inspect "$c" --format '{% raw %}{{.Name}} {{.State.Status}} {{.HostConfig.RestartPolicy.Name}}{% endraw %}'
+    done
+  args:
+    executable: /bin/bash
+  register: diode_state
+  changed_when: false
+  failed_when: >-
+    diode_state.rc != 0 or
+    (diode_state.stdout_lines | reject('search', ' running unless-stopped$') | list | length) > 0
+  when: not ansible_check_mode

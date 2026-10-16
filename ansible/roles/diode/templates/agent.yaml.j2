@@ -1,0 +1,52 @@
+# {{ ansible_managed }} — ansible/roles/diode
+orb:
+  config_manager:
+    active: local
+  backends:
+    common:
+      diode:
+        target: grpc://localhost:{{ diode_nginx_port }}/diode
+        client_id: ${DIODE_CLIENT_ID}
+        client_secret: ${DIODE_CLIENT_SECRET}
+        agent_name: {{ orb_agent_name }}
+    network_discovery:
+    snmp_discovery:
+
+  policies:
+    network_discovery:
+      homielab_sweep:
+        config:
+          # no schedule -> single execution at container start (eval run)
+          timeout: 10
+          defaults:
+            description: "IP discovered by orb-agent network sweep"
+            tags: [netbox-discovery, orb-agent]
+        scope:
+          targets:
+{% for t in orb_network_targets %}
+            - {{ t }}
+{% endfor %}
+          ping_scan: true
+          icmp_echo: true
+          timing: 4
+          use_target_masks: true
+
+    snmp_discovery:
+{% for p in orb_snmp_policies %}
+      {{ p.name }}:
+        config:
+          timeout: 600
+          snmp_timeout: 5
+          retries: 1
+          defaults:
+            site: {{ p.site }}
+            tags: [snmp-discovery, unifi]
+        scope:
+          targets:
+{% for t in p.targets %}
+            - host: "{{ t }}"
+{% endfor %}
+          authentication:
+            protocol_version: "SNMPv2c"
+            community: {{ orb_snmp_community | to_json }}
+{% endfor %}

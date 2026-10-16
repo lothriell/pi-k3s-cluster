@@ -1,0 +1,29 @@
+---
+# Diode server + orb-agent on the GPU node (NetBox Discovery eval). Playbook 27.
+# Secrets come from vault (asserted in tasks/main.yml); network targets from main.yml.
+diode_dir: "/home/{{ personal_user }}/diode"
+orb_dir: "/home/{{ personal_user }}/orb"
+
+diode_tag: "2.3.1"   # images diode-ingester/-reconciler/-auth (2026-10-16; was 2.1.0)
+diode_nginx_port: 8080
+diode_logging_level: "DEBUG"
+# Reconciler -> NetBox plugin calls. The first bulk-plan-apply burst after the
+# 5-week gap took 6-45 s on NetBox 4.7.3 (2026-10-16); at the old 30 s the
+# reconciler gave up and retried while NetBox still committed. 60 s headroom.
+diode_netbox_api_timeout_seconds: 60
+diode_to_netbox_rate_limiter_rps: 20
+diode_to_netbox_rate_limiter_burst: 1
+diode_batch_size: 50
+diode_concurrency: 1
+# Set by playbook 27 from the netbox Service ClusterIP (minisforum-c is a K3s
+# node, so kube-proxy routes it).
+diode_netbox_api_base_url: ""
+
+orb_agent_image: "netboxlabs/orb-agent:latest"
+orb_agent_name: "{{ inventory_hostname }}"
+# One-shot sweep/crawl at container start (no schedule) — the eval setup.
+orb_network_targets: []
+orb_snmp_policies: []
+#  - name: unifi_snmp_home
+#    site: home
+#    targets: ["10.0.0.0/24"]

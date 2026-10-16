@@ -97,6 +97,7 @@ data:
     open-webui deployment open-webui open-webui open-webui/open-webui
     kube-system daemonset kube-vip-ds kube-vip kube-vip/kube-vip
     monitoring deployment alertmanager-ntfy alertmanager-ntfy alexbakker/alertmanager-ntfy
+    monitoring daemonset smartctl-exporter-prometheus-smartctl-exporter-0 main prometheus-community/smartctl_exporter
   watch.sh: |
     #!/bin/sh
     # Weekly release digest. Every stdout line is kept in the report.
@@ -192,7 +193,7 @@ spec:
           restartPolicy: Never
           containers:
             - name: watcher
-              image: alpine/k8s:1.36.4
+              image: alpine/k8s:1.36.5
               command: ["/bin/sh", "/config/watch.sh"]
               envFrom:
                 - secretRef:

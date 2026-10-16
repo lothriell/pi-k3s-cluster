@@ -42,7 +42,7 @@ replicaCount: 1
 # NetBox Discovery eval: custom image = upstream netbox + diode plugin
 # (k8s/netbox/Dockerfile.diode). repository/tag set via --set from the
 # gitignored inventory (real ghcr namespace stays out of this file).
-# Pinned to v4.6.10 — diode plugin 1.16.0 caps at NetBox 4.6.99.
+# Pinned to v4.7.3 + diode plugin 1.18.1 (4.7.x needs plugin >= 1.17.0).
 image:
   pullSecrets:
     - ghcr-registry
@@ -121,8 +121,10 @@ worker:
     limits:
       memory: 1Gi
 
+# Off since v4.7.3 (2026-10-16): NetBox >= 4.6 runs housekeeping internally;
+# chart 8.3.92 defaults this to false too.
 housekeeping:
-  enabled: true
+  enabled: false
   nodeSelector:
     kubernetes.io/arch: amd64
 

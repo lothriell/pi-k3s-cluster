@@ -1,0 +1,14 @@
+# {{ ansible_managed }} — ansible/roles/diode
+# Was a bare `docker run` with restart=no until 2026-10-16: it stopped cleanly on
+# the 09-10 reboot and never came back (5 weeks of no discovery).
+name: orb
+services:
+  orb-agent:
+    image: {{ orb_agent_image }}
+    container_name: orb-agent
+    restart: unless-stopped
+    network_mode: host
+    command: ["run", "-c", "/opt/orb/agent.yaml"]
+    env_file: .env
+    volumes:
+      - {{ orb_dir }}:/opt/orb

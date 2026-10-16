@@ -75,6 +75,20 @@ bootstrap-macos: ## Create 'ansible' service account on macOS hosts (macmini, et
 bootstrap-manual-node: ## Create 'ansible' service account on a standalone Ubuntu node (Wazuh etc.) — pass HOSTS=security_stack
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/00-bootstrap-user.yml --ask-become-pass -e "target_hosts=$(HOSTS)"
 
+.PHONY: bootstrap-desktop
+bootstrap-desktop: ## Step 1 for a new Linux desktop: create 'ansible' account (asks your sudo password) — HOST=<name>
+	@test -n "$(HOST)" || { echo "usage: make bootstrap-desktop HOST=<name>"; exit 1; }
+	ANSIBLE_PRIVATE_KEY_FILE=$$HOME/.ssh/id_rsa $(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/00-bootstrap-user.yml -e target_hosts=desktops --limit $(HOST) --ask-become-pass -u $$USER
+
+.PHONY: desktop-onboard
+desktop-onboard: ## Step 2 for a new Linux desktop: shell, CA trust, Wazuh agent + os-release fix, sshd hardening — HOST=<name>
+	@test -n "$(HOST)" || { echo "usage: make desktop-onboard HOST=<name>"; exit 1; }
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/00-setup-shell.yml -e target_hosts=desktops --limit $(HOST)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/16-trust-homielab-ca.yml --limit localhost,$(HOST)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/13-deploy-wazuh-agent.yml -e target_hosts=desktops --limit $(HOST)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/26-desktop-wazuh-os-release.yml --limit $(HOST)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/25-harden-desktop-ssh.yml --limit $(HOST)
+
 .PHONY: shell
 shell: ## Setup zsh + oh-my-posh + eza on all Linux nodes (for personal user)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/00-setup-shell.yml
@@ -176,6 +190,9 @@ ssh-aliases: ## Distribute fleet ssh aliases (~/.ssh/config managed block) to al
 harden-wsl: ## Harden WSL nodes: key-only sshd + boot-enable + Tailscale MTU workaround (thorwsl)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/19-harden-wsl-node.yml
 
+harden-desktop-ssh: ## Desktop sshd key-only + ufw 22 scoped to home subnets/tailnet (HOST=<name> or all desktops)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/25-harden-desktop-ssh.yml $(if $(HOST),--limit $(HOST),)
+
 .PHONY: tailscale-monitor
 tailscale-monitor: ## Deploy tailnet peer-offline monitor on athena (pages if always-on nodes drop off Tailscale)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/18-deploy-tailscale-monitor.yml
@@ -205,6 +222,18 @@ authentik: ## Deploy Authentik (LAN-only OIDC for Grafana + ArgoCD) at authentik
 .PHONY: defectdojo
 defectdojo: ## Deploy DefectDojo (vulnerability management) at defectdojo.<local_domain>
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/21-deploy-defectdojo.yml
+
+.PHONY: diode
+diode: ## Deploy the diode server + orb-agent on the GPU node (NetBox Discovery; pairs with `make netbox`). CHECK=1 for --check
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/27-deploy-diode.yml $(if $(CHECK),--check,)
+
+.PHONY: control-keys
+control-keys: ## Authorize extra controller keys (control_pubkeys, e.g. macmini) for ansible fleet-wide + personal user on gpu_servers
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/28-authorize-control-keys.yml
+
+.PHONY: on-macmini
+on-macmini: ## Run a long job on the macmini in tmux (survives Air lid-close): make on-macmini CMD="ansible-playbook ansible/playbooks/80-upgrade-packages.yml"
+	@scripts/on-macmini.sh $(if $(NAME),-n $(NAME),) -- $(CMD)
 
 .PHONY: netbox
 netbox: ## Deploy NetBox (IPAM/DCIM eval) at netbox.<local_domain>
@@ -287,6 +316,10 @@ longhorn: ## Deploy Longhorn distributed storage
 		--wait --timeout 5m
 	$(KUBECTL) patch storageclass local-path -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
 	@$(MAKE) --no-print-directory longhorn-etcd-guard
+
+.PHONY: longhorn-engine-upgrade
+longhorn-engine-upgrade: ## Live-upgrade all Longhorn volume engines to the default engine image (serial, health-gated; run after `make longhorn`; DRY=1 to preview)
+	@./scripts/longhorn-engine-upgrade.sh $(if $(DRY),--dry-run,)
 
 .PHONY: longhorn-etcd-guard
 longhorn-etcd-guard: ## Block Longhorn replica scheduling on etcd nodes (task #64: backup I/O on control-plane eMMC stalls etcd, drops kube-vip leases)

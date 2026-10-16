@@ -14,6 +14,11 @@
 #   6. Registry DNS assert on all K3s nodes
 #   7. Proxmox host userspace pass (imported 81-upgrade-proxmox.yml, no reboot)
 #
+# Drains (phases 2+3) run scripts/longhorn-drain-guard.sh around them: 1-replica
+# Longhorn volumes on the node get their workload stopped + the drain policy
+# relaxed, restored in an always: (#82). Override the drain timeout with
+# -e drain_timeout=900s. Run long fleet passes from the macmini, not a laptop.
+#
 # K3s binary is installed via script, not apt — apt won't touch it.
 # =============================================================================
 
@@ -118,75 +123,106 @@
       when: ansible_os_family == 'Debian'
       changed_when: false
 
-    # Drain BEFORE reboot (2026-07-24, minisforum hang #2): systemd kills the
-    # Longhorn instance-managers before unmounting the CSI filesystems they
-    # back; the unmounts then block forever in D-state and the shutdown hangs
-    # (needs a physical power-cycle). Draining evicts the pods and detaches
-    # the volumes cleanly while the engines are still alive, so shutdown has
-    # no Longhorn mounts left to trip over.
-    - name: Drain node before reboot (clean Longhorn detach)
+    # #82 (2026-10-16): a 1-replica Longhorn volume whose only replica is on
+    # this node blocks the drain forever (IM PDB under
+    # block-if-contains-last-replica). Stop its workload + relax the policy
+    # first; the always: below puts both back. State is kept in annotations
+    # on the cluster, so `scripts/longhorn-drain-guard.sh post` also recovers
+    # an aborted run by hand.
+    - name: Longhorn single-replica guard (scale owners to 0, relax drain policy)
       delegate_to: localhost
       become: false
       ansible.builtin.command:
-        argv:
-          - kubectl
-          - drain
-          - "{{ inventory_hostname }}"
-          - --ignore-daemonsets
-          - --delete-emptydir-data
-          - --timeout=600s
+        argv: ["{{ playbook_dir }}/../../scripts/longhorn-drain-guard.sh", pre, "{{ inventory_hostname }}"]
+      register: lh_guard
+      changed_when: "'scaled' in lh_guard.stdout or 'node-drain-policy' in lh_guard.stdout"
       when: >
         ansible_os_family == 'Archlinux' or
         (ansible_os_family == 'Debian' and
          (reboot_required_deb.stat.exists or
           (newest_kernel.stdout | default(ansible_kernel)) != ansible_kernel))
-      register: drained
-      changed_when: true
 
-    - name: Reboot Debian if flagged
-      ansible.builtin.reboot:
-        msg: "Reboot triggered by apt upgrade"
-        pre_reboot_delay: 5
-        post_reboot_delay: 45
-        reboot_timeout: 600
-      when:
-        - ansible_os_family == 'Debian'
-        - reboot_required_deb.stat.exists or (newest_kernel.stdout | default(ansible_kernel)) != ansible_kernel
-      register: rebooted_deb
+    - name: Drain, reboot, uncordon
+      block:
+        # Drain BEFORE reboot (2026-07-24, minisforum hang #2): systemd kills the
+        # Longhorn instance-managers before unmounting the CSI filesystems they
+        # back; the unmounts then block forever in D-state and the shutdown hangs
+        # (needs a physical power-cycle). Draining evicts the pods and detaches
+        # the volumes cleanly while the engines are still alive, so shutdown has
+        # no Longhorn mounts left to trip over.
+        - name: Drain node before reboot (clean Longhorn detach)
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - drain
+              - "{{ inventory_hostname }}"
+              - --ignore-daemonsets
+              - --delete-emptydir-data
+              - "--timeout={{ drain_timeout | default('600s') }}"
+          when: >
+            ansible_os_family == 'Archlinux' or
+            (ansible_os_family == 'Debian' and
+             (reboot_required_deb.stat.exists or
+              (newest_kernel.stdout | default(ansible_kernel)) != ansible_kernel))
+          register: drained
+          changed_when: true
 
-    - name: Reboot Arch family unconditionally (kernel/module drift risk)
-      ansible.builtin.reboot:
-        msg: "Reboot triggered by pacman -Syu"
-        pre_reboot_delay: 5
-        post_reboot_delay: 45
-        reboot_timeout: 600
-      when: ansible_os_family == 'Archlinux'
-      register: rebooted_arch
+        - name: Reboot Debian if flagged
+          ansible.builtin.reboot:
+            msg: "Reboot triggered by apt upgrade"
+            pre_reboot_delay: 5
+            post_reboot_delay: 45
+            reboot_timeout: 600
+          when:
+            - ansible_os_family == 'Debian'
+            - reboot_required_deb.stat.exists or (newest_kernel.stdout | default(ansible_kernel)) != ansible_kernel
+          register: rebooted_deb
 
-    - name: Wait for node Ready in Kubernetes
-      delegate_to: localhost
-      become: false
-      ansible.builtin.command:
-        argv:
-          - kubectl
-          - wait
-          - node
-          - "{{ inventory_hostname }}"
-          - --for=condition=Ready
-          - --timeout=300s
-      when: (rebooted_deb is defined and rebooted_deb.changed) or (rebooted_arch is defined and rebooted_arch.changed)
-      changed_when: false
+        - name: Reboot Arch family unconditionally (kernel/module drift risk)
+          ansible.builtin.reboot:
+            msg: "Reboot triggered by pacman -Syu"
+            pre_reboot_delay: 5
+            post_reboot_delay: 45
+            reboot_timeout: 600
+          when: ansible_os_family == 'Archlinux'
+          register: rebooted_arch
 
-    - name: Uncordon node after reboot
-      delegate_to: localhost
-      become: false
-      ansible.builtin.command:
-        argv:
-          - kubectl
-          - uncordon
-          - "{{ inventory_hostname }}"
-      when: drained is defined and drained.changed
-      changed_when: true
+        - name: Wait for node Ready in Kubernetes
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - wait
+              - node
+              - "{{ inventory_hostname }}"
+              - --for=condition=Ready
+              - --timeout=300s
+          when: (rebooted_deb is defined and rebooted_deb.changed) or (rebooted_arch is defined and rebooted_arch.changed)
+          changed_when: false
+
+        - name: Uncordon node after reboot
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - uncordon
+              - "{{ inventory_hostname }}"
+          when: drained is defined and drained.changed
+          changed_when: true
+      always:
+        # After uncordon on success; straight away on failure so a broken drain
+        # never leaves Prometheus down or the drain policy relaxed.
+        - name: Longhorn single-replica guard (restore policy + workloads)
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            argv: ["{{ playbook_dir }}/../../scripts/longhorn-drain-guard.sh", post]
+          register: lh_guard_post
+          changed_when: lh_guard_post.stdout | length > 0
 
     # Node Ready is NOT enough: Longhorn replicas on the rebooted node need
     # time to rebuild. Rebooting the next storage node while volumes are
@@ -238,58 +274,85 @@
         path: /var/run/reboot-required
       register: reboot_required
 
-    - name: Drain node before reboot (clean Longhorn detach)
-      delegate_to: localhost
-      become: false
-      ansible.builtin.command:
-        argv:
-          - kubectl
-          - drain
-          - "{{ inventory_hostname }}"
-          - --ignore-daemonsets
-          - --delete-emptydir-data
-          - --timeout=600s
-      when: reboot_required.stat.exists or (newest_kernel.stdout | default(ansible_kernel)) != ansible_kernel
-      register: drained
-      changed_when: true
-
-    - name: Detect newest installed kernel 
+    - name: Detect newest installed kernel (before the drain — its condition reads it)
       ansible.builtin.shell: ls -1 /boot/vmlinuz-* | sed 's/.*vmlinuz-//' | sort -V | tail -1
       register: newest_kernel
       changed_when: false
 
-    - name: Reboot if flagged
-      ansible.builtin.reboot:
-        msg: "Reboot triggered by apt upgrade (etcd voter)"
-        pre_reboot_delay: 10
-        post_reboot_delay: 60
-        reboot_timeout: 600
-      when: reboot_required.stat.exists or (newest_kernel.stdout | default(ansible_kernel)) != ansible_kernel
-
-    - name: Wait for node Ready in Kubernetes
+    # #82 (2026-10-16): a 1-replica Longhorn volume whose only replica is on
+    # this node blocks the drain forever (IM PDB under
+    # block-if-contains-last-replica). Stop its workload + relax the policy
+    # first; the always: below puts both back. State is kept in annotations
+    # on the cluster, so `scripts/longhorn-drain-guard.sh post` also recovers
+    # an aborted run by hand.
+    - name: Longhorn single-replica guard (scale owners to 0, relax drain policy)
       delegate_to: localhost
       become: false
       ansible.builtin.command:
-        argv:
-          - kubectl
-          - wait
-          - node
-          - "{{ inventory_hostname }}"
-          - --for=condition=Ready
-          - --timeout=300s
+        argv: ["{{ playbook_dir }}/../../scripts/longhorn-drain-guard.sh", pre, "{{ inventory_hostname }}"]
+      register: lh_guard
+      changed_when: "'scaled' in lh_guard.stdout or 'node-drain-policy' in lh_guard.stdout"
       when: reboot_required.stat.exists or (newest_kernel.stdout | default(ansible_kernel)) != ansible_kernel
-      changed_when: false
 
-    - name: Uncordon node after reboot
-      delegate_to: localhost
-      become: false
-      ansible.builtin.command:
-        argv:
-          - kubectl
-          - uncordon
-          - "{{ inventory_hostname }}"
-      when: drained is defined and drained.changed
-      changed_when: true
+    - name: Drain, reboot, uncordon
+      block:
+        - name: Drain node before reboot (clean Longhorn detach)
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - drain
+              - "{{ inventory_hostname }}"
+              - --ignore-daemonsets
+              - --delete-emptydir-data
+              - "--timeout={{ drain_timeout | default('600s') }}"
+          when: reboot_required.stat.exists or (newest_kernel.stdout | default(ansible_kernel)) != ansible_kernel
+          register: drained
+          changed_when: true
+
+        - name: Reboot if flagged
+          ansible.builtin.reboot:
+            msg: "Reboot triggered by apt upgrade (etcd voter)"
+            pre_reboot_delay: 10
+            post_reboot_delay: 60
+            reboot_timeout: 600
+          when: reboot_required.stat.exists or (newest_kernel.stdout | default(ansible_kernel)) != ansible_kernel
+
+        - name: Wait for node Ready in Kubernetes
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - wait
+              - node
+              - "{{ inventory_hostname }}"
+              - --for=condition=Ready
+              - --timeout=300s
+          when: reboot_required.stat.exists or (newest_kernel.stdout | default(ansible_kernel)) != ansible_kernel
+          changed_when: false
+
+        - name: Uncordon node after reboot
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - uncordon
+              - "{{ inventory_hostname }}"
+          when: drained is defined and drained.changed
+          changed_when: true
+      always:
+        # After uncordon on success; straight away on failure so a broken drain
+        # never leaves Prometheus down or the drain policy relaxed.
+        - name: Longhorn single-replica guard (restore policy + workloads)
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            argv: ["{{ playbook_dir }}/../../scripts/longhorn-drain-guard.sh", post]
+          register: lh_guard_post
+          changed_when: lh_guard_post.stdout | length > 0
 
     - name: Wait for Longhorn volumes to regain full redundancy
       delegate_to: localhost

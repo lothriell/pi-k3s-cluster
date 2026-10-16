@@ -96,6 +96,10 @@ spec:
                   value: "false"                       # deletions = hides (Object Lock-compatible, recoverable)
                 - name: RCLONE_CONFIG_B2_VERSIONS
                   value: "false"
+                - name: RCLONE_CONFIG_B2_CHUNK_SIZE          # bound multipart buffers (see Memory note below)
+                  value: "32Mi"
+                - name: RCLONE_CONFIG_B2_UPLOAD_CONCURRENCY
+                  value: "2"
                 - name: SRC
                   value: "r2:{{ r2_backup_bucket }}"
                 - name: DST
@@ -117,6 +121,11 @@ spec:
               # passed, 09-20 both attempts died → BackupMirrorStale). 3Gi ≈ 3× the
               # 09-20 size; amd64 nodes have 40+ GB free. Revisit when the bucket
               # passes ~250k objects (or drop --fast-list: less RAM, more class-C calls).
+              # 2026-10: first attempts OOMKilled again at 3Gi (retry passed). Not the
+              # listing (~650Mi) but multipart buffers: etcd snapshots grew past B2's 200Mi
+              # upload cutoff (~230Mi × 12/day), and the b2 defaults (96Mi chunks ×
+              # concurrency 4 per file × 8 transfers) can hold ~3Gi. CHUNK_SIZE 32Mi ×
+              # UPLOAD_CONCURRENCY 2 caps that at ~512Mi.
               resources:
                 requests:
                   cpu: 100m

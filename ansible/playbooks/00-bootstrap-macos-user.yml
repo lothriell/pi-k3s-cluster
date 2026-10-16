@@ -161,13 +161,15 @@
       become: true
       tags: [ssh]
 
+    # authorized_key (additive), not copy: a rerun must not wipe keys added
+    # later by playbook 28 (control_pubkeys).
     - name: Install MacBook pubkey in authorized_keys
-      ansible.builtin.copy:
-        dest: "{{ service_account_home }}/.ssh/authorized_keys"
-        content: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_ed25519.pub') }}\n"
-        owner: "{{ service_account }}"
-        group: staff
-        mode: "0600"
+      ansible.posix.authorized_key:
+        user: "{{ service_account }}"
+        path: "{{ service_account_home }}/.ssh/authorized_keys"
+        key: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_ed25519.pub') }}"
+        manage_dir: false
+        state: present
       become: true
       tags: [ssh]
 

@@ -1,22 +1,19 @@
 # NetBox + Diode ingestion plugin (NetBox Discovery eval)
 # Build/push (amd64 only — netbox pods are arch-pinned):
 #   podman build --platform linux/amd64 -f k8s/netbox/Dockerfile.diode \
-#     -t ghcr.io/lothriell/netbox-diode:v4.6.10-plugin1.16.0 k8s/netbox
-#   podman push ghcr.io/lothriell/netbox-diode:v4.6.10-plugin1.16.0
+#     -t ghcr.io/lothriell/netbox-diode:v4.7.3-plugin1.18.1 k8s/netbox
+#   podman push ghcr.io/lothriell/netbox-diode:v4.7.3-plugin1.18.1
 # Plugin↔NetBox version matrix: https://github.com/netboxlabs/diode-netbox-plugin
-FROM ghcr.io/netbox-community/netbox:v4.6.10
+# (plugin >= 1.17.0 for NetBox 4.7.x).
+FROM ghcr.io/netbox-community/netbox:v4.7.3
 # The image's venv (/opt/netbox/venv, already on PATH) is uv-built and ships
 # without pip or ensurepip — install with a borrowed uv binary instead.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# PyJWT < 2.14.0 = CVE-2026-102268 (critical, Trivy 2026-10-16). A floor, not a
+# pin: keeps whatever the base ships if it is already newer.
 RUN uv pip install --python /opt/netbox/venv/bin/python3 --no-cache \
-      netboxlabs-diode-netbox-plugin==1.16.0 \
+      netboxlabs-diode-netbox-plugin==1.18.1 \
+      "PyJWT>=2.14.0" \
  && rm /usr/local/bin/uv
-# Plugin 1.16.0 monkey-patches utilities.counters.update_counter with a
-# wrapper that lacks the `using` kwarg NetBox 4.6.10's post_save signal now
-# passes — every dcim.device apply 500s with a TypeError. Widen the wrapper
-# signature (single-DB cluster: pass-through only; buffered path may drop it).
-RUN sed -i \
-  -e 's/def _buffered_update_counter(model, pk, counter_name, value):/def _buffered_update_counter(model, pk, counter_name, value, using=None):/' \
-  -e 's/return _previous_update_counter(model, pk, counter_name, value)$/return _previous_update_counter(model, pk, counter_name, value, using=using)/' \
-  /opt/netbox/venv/lib/python3.14/site-packages/netbox_diode_plugin/api/counter_buffer.py \
- && grep -q "using=None" /opt/netbox/venv/lib/python3.14/site-packages/netbox_diode_plugin/api/counter_buffer.py
+# (The -patch1 counter_buffer `using` kwarg sed fix for plugin 1.16.0 is gone:
+# 1.18.x ships `_buffered_update_counter(..., using=None, **kwargs)` upstream.)

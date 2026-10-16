@@ -492,15 +492,19 @@ serverFiles:
               summary: "Remote site link down (Site Magic) — both x86 nodes unreachable"
               description: "Both k3s-x86 nodes stopped reporting at once. Expect Longhorn degraded volumes and amd64 pod reschedules until the VPN re-peers; check the home gateway first (UCG reboot/firmware)."
           - alert: RemoteSiteLinkFlapping
-            # Post-hoc trail: both x86 nodes went down AND came back within 6h.
-            # Warning only (digest, no page) — the blip itself is over.
-            expr: min(changes(up{job="node-exporter",instance=~"k3s-x86-.*"}[6h])) >= 2
+            # Post-hoc trail: both x86 nodes dropped and recovered at least TWICE
+            # within 6h (changes >= 4 = down/up/down/up). Warning only (digest, no
+            # page) — the blip itself is over. Was `>= 2` until 2026-10-17: a single
+            # one-scrape blip (10-06, 10-14) or two serial x86 reboots (fleet upgrade
+            # 10-15) held it firing ~6h; a lone blip is already covered by
+            # RemoteSiteLinkDown when it lasts >= 2m.
+            expr: min(changes(up{job="node-exporter",instance=~"k3s-x86-.*"}[6h])) >= 4
             for: 1m
             labels:
               severity: warning
             annotations:
-              summary: "Remote site link flapped in the last 6h"
-              description: "Both k3s-x86 nodes dropped and recovered together within 6h — Site Magic blip. Check k3s-x86-1's journal for 'Remotedialer proxy error' timestamps."
+              summary: "Remote site link flapped repeatedly in the last 6h"
+              description: "Both k3s-x86 nodes dropped and recovered at least twice within 6h — repeated Site Magic blips. Check k3s-x86-1's journal for 'Remotedialer proxy error' timestamps."
           # TODO: NodeResolverDown / NodeServiceDown (systemd-resolved / tailscaled /
           # k3s health) — pending the node-exporter TEXTFILE-collector approach;
           # the systemd-collector source was reverted (AppArmor-blocked). See the

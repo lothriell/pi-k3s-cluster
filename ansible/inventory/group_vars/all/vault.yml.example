@@ -96,6 +96,18 @@ netbox_valkey_password: "changeme-32-alphanumeric-chars"
 # server bootstrap (oauth2/client/client-credentials.json on the diode host)
 netbox_diode_client_secret: "changeme-from-diode-quickstart"
 
+# Diode server + orb-agent (playbook 27). On an existing host import the live
+# values with `scripts/diode-vault-snippet.sh | pbcopy`; fresh install: generate
+# (openssl rand -base64 32) — hydra/diode bootstrap the DBs + clients from them.
+diode_redis_password: "changeme"
+diode_postgres_password: "changeme"
+diode_db_password: "changeme"
+diode_hydra_db_password: "changeme"
+diode_hydra_secrets_system: "changeme-32+-chars"
+diode_ingest_client_secret: "changeme"         # orb-agent -> diode
+diode_to_netbox_client_secret: "changeme"      # diode reconciler -> NetBox plugin
+orb_snmp_community: "changeme"
+
 # Cloudflare tunnel credentials JSON — the content of ~/.cloudflared/<tunnel-id>.json on one
 # line. Optional: when set, playbook 06 uses it instead of the local file (DR: any machine
 # with the vault can redeploy the tunnel).

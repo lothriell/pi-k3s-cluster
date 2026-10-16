@@ -1,0 +1,118 @@
+---
+# Playbook 25: desktop SSH hardening (2026-10-02, freyr bootstrap).
+# Brings Omarchy/Arch desktops to the same sshd baseline the servers carry
+# (hand-applied there as 99-hardening.conf + cloud-init PasswordAuthentication
+# no): key-only, no root, no keyboard-interactive. Also narrows ufw's port-22
+# rule to the home subnets + the tailnet (Omarchy installs with ufw default
+# deny; a bootstrap `ufw allow 22/tcp` opens it to every source).
+#
+# Tailscale SSH (RunSSH) answers on the tailnet IP without touching sshd, so it
+# stays a way in even if this ever breaks OpenSSH.
+#
+# Usage: ansible-playbook ansible/playbooks/25-harden-desktop-ssh.yml --limit <host>
+#        (or: make harden-desktop-ssh HOST=<host>)
+# Vars:  desktop_ssh_allowed_cidrs (group_vars/all/main.yml) — defaults to the
+#        tailnet ranges only. desktop_personal_pubkey_files — controller pubkeys
+#        installed for personal_user (default: ~/.ssh/id_ed25519.pub + id_rsa.pub).
+
+- name: Harden desktop sshd (key-only) + restrict ufw port 22
+  hosts: desktops
+  become: true
+  gather_facts: true
+  vars:
+    ssh_allowed_cidrs: "{{ desktop_ssh_allowed_cidrs | default(['100.64.0.0/10', 'fd7a:115c:a1e0::/48']) }}"
+    # Controller's own pubkeys (whoever runs this: Air, macmini) → the personal
+    # user. A Tailscale-SSH-only bootstrap leaves no authorized_keys, and the
+    # key-only drop-in below would then lock OpenSSH out for that user.
+    personal_pubkey_files: "{{ desktop_personal_pubkey_files | default(['~/.ssh/id_ed25519.pub', '~/.ssh/id_rsa.pub']) }}"
+  tasks:
+    - name: Install controller pubkeys for the personal user (before key-only sshd)
+      ansible.posix.authorized_key:
+        user: "{{ personal_user }}"
+        key: "{{ lookup('file', item | expanduser) }}"
+        state: present
+      loop: "{{ personal_pubkey_files }}"
+      when: (item | expanduser) is file
+      tags: [ssh, keys]
+
+    - name: Ensure sshd drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      tags: [ssh]
+
+    # 10- sorts before distro drop-ins (Arch ships 99-archlinux.conf); sshd
+    # keeps the FIRST value it reads, so this file wins.
+    - name: Key-only SSH hardening drop-in (server baseline)
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/10-hardening.conf
+        content: |
+          # Managed by Ansible (kubernetes repo, playbook 25) — server baseline
+          PermitRootLogin no
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PubkeyAuthentication yes
+        owner: root
+        group: root
+        mode: "0644"
+      register: sshd_hardening
+      tags: [ssh]
+
+    - name: Validate full sshd config
+      ansible.builtin.command: /usr/sbin/sshd -t
+      changed_when: false
+      tags: [ssh]
+
+    # Fresh Omarchy installs ship sshd disabled (freyr's was enabled by hand,
+    # hel's was not). Desktops accept LAN SSH like the servers do; a reload on
+    # a stopped unit would fail, so start it first.
+    - name: Enable and start sshd
+      ansible.builtin.systemd:
+        name: sshd
+        enabled: true
+        state: started
+      register: sshd_started
+      tags: [ssh]
+
+    - name: Reload sshd on config change
+      ansible.builtin.systemd:
+        name: sshd
+        state: reloaded
+      when: sshd_hardening.changed and not sshd_started.changed
+      tags: [ssh]
+
+    - name: Check whether ufw is active
+      ansible.builtin.command: ufw status
+      register: ufw_status
+      changed_when: false
+      failed_when: false
+      tags: [firewall]
+
+    # Add the scoped rules BEFORE removing the open one, so an interrupted run
+    # never leaves 22 closed to the LAN.
+    - name: Allow SSH from home subnets + tailnet
+      community.general.ufw:
+        rule: allow
+        proto: tcp
+        port: "22"
+        from_ip: "{{ item }}"
+        comment: ssh-scoped
+      loop: "{{ ssh_allowed_cidrs }}"
+      when: "'Status: active' in ufw_status.stdout"
+      tags: [firewall]
+
+    - name: Remove any allow-from-anywhere SSH rule
+      community.general.ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto | default(omit) }}"
+        delete: true
+      loop:
+        - { port: "22", proto: tcp }
+        - { port: "22" }
+        - { port: "ssh" }
+      when: "'Status: active' in ufw_status.stdout"
+      tags: [firewall]

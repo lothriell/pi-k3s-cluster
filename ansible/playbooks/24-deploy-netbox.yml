@@ -31,9 +31,9 @@
   become: false
 
   vars:
-    netbox_chart_version: "8.3.67"
-    # image (netbox_image_repository/tag in main.yml) pins NetBox v4.6.10 —
-    # diode plugin 1.16.0 declares max_version 4.6.99, NOT 4.7.x.
+    netbox_chart_version: "8.3.92"   # app v4.7.3 (2026-10-16; was 8.3.67 running a v4.6.10 image)
+    # image (netbox_image_repository/tag in main.yml) pins NetBox v4.7.3 +
+    # diode plugin 1.18.1 (4.7.x needs plugin >= 1.17.0).
     netbox_values: "{{ playbook_dir }}/../../k8s/netbox/values-netbox.yml"
 
   tasks:

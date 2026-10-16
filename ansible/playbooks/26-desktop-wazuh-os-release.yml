@@ -1,0 +1,98 @@
+---
+# Playbook 26: present Arch-derivative desktops as Arch to Wazuh (2026-10-02).
+# Wazuh's vulnerability scanner maps OS -> feed by the /etc/os-release ID. It
+# has an Arch feed but no entry for derivative IDs (omarchy, cachyos, ...), so
+# such hosts get zero vulnerability states. Rewriting NAME/PRETTY_NAME/ID to
+# Arch (ID_LIKE and vendor URLs kept) makes the scanner use the Arch feed.
+# Ansible itself is unaffected: os_family stays "Archlinux" for both IDs.
+#
+# The original file is kept at /etc/os-release.<original-id>. On Omarchy,
+# omarchy-update regenerates os-release, so a post-update hook re-asserts the
+# masquerade and restarts wazuh-agent (no-op when ID=arch already).
+# Servers on CachyOS get the same treatment from roles/common-arch.
+#
+# Usage: ansible-playbook ansible/playbooks/26-desktop-wazuh-os-release.yml --limit <host>
+#        (part of: make desktop-onboard HOST=<host>)
+
+- name: Masquerade Arch-derivative desktops as Arch for the Wazuh vuln feed
+  hosts: desktops
+  become: true
+  gather_facts: true
+  vars:
+    omarchy_hook_dir: "/home/{{ personal_user }}/.config/omarchy/hooks/post-update.d"
+  tasks:
+    - name: Read current os-release ID
+      ansible.builtin.shell: . /etc/os-release && echo "$ID"
+      register: osr_id
+      changed_when: false
+      tags: [wazuh]
+
+    - name: Skip non-Arch-family hosts
+      ansible.builtin.meta: end_host
+      when: ansible_facts['os_family'] != 'Archlinux'
+
+    - name: Keep the original os-release (once)
+      ansible.builtin.copy:
+        src: /etc/os-release
+        dest: "/etc/os-release.{{ osr_id.stdout }}"
+        remote_src: true
+        force: false
+        mode: "0644"
+      when: osr_id.stdout != 'arch'
+      tags: [wazuh]
+
+    - name: Rewrite identity lines to Arch
+      ansible.builtin.lineinfile:
+        path: /etc/os-release
+        regexp: "^{{ item.key }}="
+        line: "{{ item.key }}={{ item.value }}"
+      loop:
+        - { key: NAME, value: '"Arch Linux"' }
+        - { key: PRETTY_NAME, value: '"Arch Linux"' }
+        - { key: ID, value: arch }
+      register: osr_rewrite
+      tags: [wazuh]
+
+    - name: Check for Omarchy hook directory
+      ansible.builtin.stat:
+        path: "{{ omarchy_hook_dir }}"
+      register: hook_dir
+      tags: [wazuh]
+
+    - name: Install Omarchy post-update hook that re-asserts the masquerade
+      ansible.builtin.copy:
+        dest: "{{ omarchy_hook_dir }}/wazuh-os-release-masquerade.hook"
+        owner: "{{ personal_user }}"
+        group: "{{ personal_user }}"
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          # Managed by Ansible (kubernetes repo, playbook 26).
+          # omarchy-update regenerates /etc/os-release (ID=omarchy), which drops the
+          # Wazuh vuln-feed mapping. Re-assert ID=arch and restart the agent.
+          set -e
+          grep -q '^ID=arch$' /etc/os-release && exit 0
+          id=$(. /etc/os-release && echo "$ID")
+          sudo cp -n /etc/os-release "/etc/os-release.$id"
+          sudo sed -i -e 's/^NAME=.*/NAME="Arch Linux"/' \
+                      -e 's/^PRETTY_NAME=.*/PRETTY_NAME="Arch Linux"/' \
+                      -e 's/^ID=.*/ID=arch/' /etc/os-release
+          if systemctl list-unit-files wazuh-agent.service >/dev/null 2>&1; then
+            sudo systemctl restart wazuh-agent
+          fi
+      when: hook_dir.stat.exists and hook_dir.stat.isdir
+      tags: [wazuh]
+
+    - name: Check for wazuh-agent unit
+      ansible.builtin.command: systemctl list-unit-files wazuh-agent.service
+      register: wazuh_unit
+      changed_when: false
+      failed_when: false
+      tags: [wazuh]
+
+    - name: Restart wazuh-agent so the manager re-reads the OS
+      ansible.builtin.systemd:
+        name: wazuh-agent
+        state: restarted
+      when: osr_rewrite.changed and wazuh_unit.rc == 0
+      tags: [wazuh]
