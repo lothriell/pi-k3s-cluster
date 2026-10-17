@@ -89,6 +89,15 @@ desktop-onboard: ## Step 2 for a new Linux desktop: shell, CA trust, Wazuh agent
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/26-desktop-wazuh-os-release.yml --limit $(HOST)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/25-harden-desktop-ssh.yml --limit $(HOST)
 
+.PHONY: personal-nopasswd
+personal-nopasswd: ## Personal user passwordless sudo on every Linux host except opted-out ones (loki) — optional HOST=<name>
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/31-personal-user-nopasswd.yml $(if $(HOST),--limit $(HOST),)
+
+.PHONY: desktop-tpm-unlock
+desktop-tpm-unlock: ## Omarchy desktop: LUKS root unlocks from the TPM2 at boot (systemd initramfs); prints the one-time enroll command — HOST=<name>
+	@test -n "$(HOST)" || { echo "usage: make desktop-tpm-unlock HOST=<name>"; exit 1; }
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/30-desktop-tpm-unlock.yml --limit $(HOST)
+
 .PHONY: shell
 shell: ## Setup zsh + oh-my-posh + eza on all Linux nodes (for personal user)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/00-setup-shell.yml
@@ -190,7 +199,7 @@ ssh-aliases: ## Distribute fleet ssh aliases (~/.ssh/config managed block) to al
 harden-wsl: ## Harden WSL nodes: key-only sshd + boot-enable + Tailscale MTU workaround (thorwsl)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/19-harden-wsl-node.yml
 
-harden-desktop-ssh: ## Desktop sshd key-only + ufw 22 scoped to home subnets/tailnet (HOST=<name> or all desktops)
+harden-desktop-ssh: ## Desktop sshd key-only + ufw enabled, 22 scoped to home subnets/tailnet (HOST=<name> or all desktops)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/25-harden-desktop-ssh.yml $(if $(HOST),--limit $(HOST),)
 
 .PHONY: tailscale-monitor
@@ -264,6 +273,13 @@ zap-dast-run: ## Same as zap-dast, then run one scan immediately and wait for th
 .PHONY: network-policies
 network-policies: ## Apply all namespace NetworkPolicies (requires target namespaces to exist)
 	$(KUBECTL) apply -f k8s/network-policies/
+
+.PHONY: wazuh-indexer wazuh-indexer-check
+wazuh-indexer: ## Wazuh VM indexer tuning: 2g heap, 1-shard template, monthly alert indices, ISM retention (re-run after Wazuh upgrades)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/29-tune-wazuh-indexer.yml
+
+wazuh-indexer-check: ## Report Wazuh indexer tuning drift (check mode, changes nothing)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/29-tune-wazuh-indexer.yml --check --diff
 
 .PHONY: wazuh-agent
 wazuh-agent: ## Install Wazuh agent on target hosts (HOSTS=sff_nodes by default)

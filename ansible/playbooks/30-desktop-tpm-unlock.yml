@@ -1,0 +1,169 @@
+---
+# =============================================================================
+# Playbook 30: TPM2 auto-unlock of the LUKS root on Omarchy desktops (2026-10-17)
+# =============================================================================
+# Omarchy installs full-disk LUKS with the busybox `encrypt` initramfs hook: after
+# every reboot the box sits at the passphrase prompt with no network, tailscaled
+# or sshd (freyr, 2026-10-17). This switches the initramfs to the systemd hooks
+# (`systemd` + `sd-encrypt`, which can unseal a key from the TPM) via
+# /etc/crypttab.initramfs `tpm2-device=auto`.
+#
+# Safety:
+#   * Omarchy's own /etc/mkinitcpio.conf.d/omarchy_hooks.conf (owned by
+#     omarchy-settings) is NOT edited — a `zz-` drop-in sorts after it and wins.
+#   * The kernel cmdline keeps `cryptdevice=` — if the drop-in ever disappears the
+#     busybox hook still unlocks (with the passphrase) instead of failing to boot.
+#   * No TPM token enrolled yet / TPM refuses → sd-encrypt asks for the passphrase.
+#   * Known cost: Omarchy's btrfs-overlayfs hook (boot-into-snapshot) is busybox
+#     only, so the Limine "Snapshots" entries won't boot. Normal boots unaffected.
+#
+# Enrolment needs the existing passphrase, so it is a ONE-TIME hand step at the
+# console (the playbook prints the exact command and reports enrolment state):
+#   sudo systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 <luks-device>
+# PCR 7 = Secure Boot state/keys: stable across kernel + Omarchy updates. With
+# Secure Boot off this protects a REMOVED disk, not a stolen whole box — fine for
+# the home-only SFFs (freyr, hel). Deliberately NOT for the loki laptop.
+#
+# Rollback: delete the two files below, `limine-mkinitcpio`, reboot.
+#
+# Usage: make desktop-tpm-unlock HOST=<host>
+# =============================================================================
+
+- name: TPM2 auto-unlock of the LUKS root (systemd initramfs)
+  hosts: desktops
+  become: true
+  gather_facts: false
+  vars:
+    tpm_hooks_dropin: /etc/mkinitcpio.conf.d/zz-tpm2-unlock.conf
+    # Omarchy's hook list mapped to systemd equivalents: udev → systemd,
+    # keymap+consolefont → sd-vconsole, encrypt → sd-encrypt; resume is native
+    # in a systemd initramfs (resume= on the cmdline); btrfs-overlayfs dropped.
+    tpm_hooks: >-
+      base systemd plymouth keyboard autodetect microcode modconf kms
+      sd-vconsole block sd-encrypt filesystems fsck
+  tasks:
+    - name: TPM 2.0 present
+      ansible.builtin.command: systemd-cryptenroll --tpm2-device=list
+      register: tpm_list
+      changed_when: false
+      check_mode: false   # read-only probe
+      failed_when: "'/dev/tpmrm0' not in tpm_list.stdout"
+
+    - name: Find the LUKS device under the root mount
+      ansible.builtin.shell: |
+        set -euo pipefail
+        lsblk -nrpo NAME,TYPE,PKNAME | awk '$2=="crypt"{print $1, $3}'
+      args:
+        executable: /bin/bash
+      register: crypt_devs
+      changed_when: false
+      check_mode: false   # read-only probe
+
+    - name: Exactly one LUKS mapping
+      ansible.builtin.assert:
+        that: crypt_devs.stdout_lines | length == 1
+        fail_msg: "expected one crypt device, got: {{ crypt_devs.stdout_lines }}"
+
+    - name: LUKS UUID
+      ansible.builtin.command: blkid -s UUID -o value {{ crypt_devs.stdout.split()[1] }}
+      register: luks_uuid
+      changed_when: false
+      check_mode: false   # read-only probe
+
+    - name: Set facts
+      ansible.builtin.set_fact:
+        luks_dev: "{{ crypt_devs.stdout.split()[1] }}"
+        luks_name: "{{ crypt_devs.stdout.split()[0] | basename }}"
+        luks_uuid: "{{ luks_uuid.stdout }}"
+
+    - name: Root mapper name matches the cmdline root=
+      ansible.builtin.command: cat /proc/cmdline
+      register: cmdline
+      changed_when: false
+      check_mode: false   # read-only probe
+      failed_when: "('root=/dev/mapper/' ~ luks_name) not in cmdline.stdout"
+
+    - name: tpm2-tss installed (sd-encrypt pulls the TPM libs from it)
+      community.general.pacman:
+        name: tpm2-tss
+        state: present
+
+    - name: crypttab.initramfs — unlock the root via TPM2, passphrase fallback
+      ansible.builtin.copy:
+        dest: /etc/crypttab.initramfs
+        content: |
+          # Managed by Ansible (kubernetes repo, playbook 30) — TPM2 auto-unlock
+          {{ luks_name }}  UUID={{ luks_uuid }}  none  tpm2-device=auto
+        owner: root
+        group: root
+        mode: "0600"
+      notify: Rebuild initramfs
+
+    - name: systemd-based initramfs hooks (drop-in after omarchy_hooks.conf)
+      ansible.builtin.copy:
+        dest: "{{ tpm_hooks_dropin }}"
+        content: |
+          # Managed by Ansible (kubernetes repo, playbook 30) — TPM2 auto-unlock.
+          # Overrides omarchy_hooks.conf (sorts later). Remove + limine-mkinitcpio to revert.
+          HOOKS=({{ tpm_hooks }})
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Rebuild initramfs
+
+    - name: Apply the rebuild before verifying
+      ansible.builtin.meta: flush_handlers
+
+    # Boot images are hash-pinned in limine.conf (UKIs or plain initramfs —
+    # hence limine-mkinitcpio, which re-pins). Check EVERY bootable initrd.
+    - name: Verify every boot initrd has crypttab + systemd-cryptsetup + TPM libs
+      ansible.builtin.shell: |
+        set -euo pipefail
+        shopt -s nullglob
+        tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+        check() {  # $1 = label, $2 = initramfs file
+          c=$(lsinitcpio "$2")
+          n=0
+          grep -qx 'etc/crypttab' <<<"$c"       && n=$((n+1))
+          grep -q 'systemd-cryptsetup' <<<"$c"  && n=$((n+1))
+          grep -q 'libtss2-esys' <<<"$c"        && n=$((n+1))
+          if [ "$n" = 3 ]; then echo "ok $1"; else echo "MISSING $1 ($n/3)"; fi
+        }
+        # Layout A (freyr): UKIs. Layout B (hel, ENABLE_UKI=no): plain
+        # /boot/<machine-id>/<kernel>/initramfs (limine_history = snapshots, skipped).
+        for uki in /boot/EFI/Linux/*.efi; do
+          objcopy -O binary --only-section=.initrd "$uki" "$tmp"
+          check "$(basename "$uki")" "$tmp"
+        done
+        for img in /boot/*/*/initramfs; do
+          case "$img" in */limine_history/*) continue ;; esac
+          check "${img#/boot/}" "$img"
+        done
+      args:
+        executable: /bin/bash
+      register: initrd_check
+      changed_when: false
+      check_mode: false   # read-only probe
+      failed_when: initrd_check.stdout_lines | select('match', '^MISSING') | list | length > 0
+                   or initrd_check.stdout_lines | length == 0
+      when: not ansible_check_mode   # UKIs are only rebuilt on a real run
+
+    - name: TPM2 token enrolled?
+      ansible.builtin.command: cryptsetup luksDump {{ luks_dev }}
+      register: luks_dump
+      changed_when: false
+      check_mode: false   # read-only probe
+
+    - name: Enrolment state
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: initramfs {{ 'ready (' ~ (initrd_check.stdout_lines | join(', ')) ~ ')' if not ansible_check_mode else 'not rebuilt (check mode)' }}.
+          {% if 'systemd-tpm2' in luks_dump.stdout %}TPM2 token ENROLLED — reboots unlock unattended.
+          {% else %}TPM2 token NOT enrolled yet — at the console run:
+          sudo systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 {{ luks_dev }}
+          (asks for the current passphrase, which stays as fallback), then reboot to test.{% endif %}
+
+  handlers:
+    - name: Rebuild initramfs
+      ansible.builtin.command: limine-mkinitcpio
+      changed_when: true

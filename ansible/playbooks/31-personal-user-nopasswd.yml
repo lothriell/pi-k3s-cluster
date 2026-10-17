@@ -1,0 +1,71 @@
+---
+# =============================================================================
+# Playbook 31: passwordless sudo for the personal user, fleet-wide (2026-10-17)
+# =============================================================================
+# User decision 2026-10-17: the personal user gets NOPASSWD sudo on every Linux
+# host EXCEPT loki (laptop that leaves the house — `personal_user_nopasswd: false`
+# in inventory, which makes this playbook REMOVE the drop-in there).
+# Before this it was a mix: cloud-init gave it on the x86 VMs/wazuh, the Pi
+# image on rpizerow, by hand on athena/artemis — and password elsewhere.
+#
+# Drop-in sorts late (95-) so it wins over distro/installer lines like
+# Omarchy's 03_<user> `ALL=(ALL) ALL` (sudoers: last match wins).
+# verifypw=any: `sudo -v` otherwise still prompts while ANY entry for the user
+# needs a password (omarchy-update-stay-awake calls it).
+#
+# macOS (macos_nodes) is excluded — different sudoers layout, decide separately.
+#
+# Usage: make personal-nopasswd            (all reachable hosts)
+#        make personal-nopasswd HOST=<h>   (one host)
+# =============================================================================
+
+- name: Personal user passwordless sudo
+  hosts: "all:!macos_nodes"
+  become: true
+  gather_facts: false
+  vars:
+    nopasswd_dropin: /etc/sudoers.d/95-personal-nopasswd
+  tasks:
+    - name: Personal user exists?
+      ansible.builtin.command: id -u {{ personal_user }}
+      register: personal_id
+      changed_when: false
+      failed_when: false
+      check_mode: false   # read-only probe
+
+    - name: NOPASSWD drop-in
+      ansible.builtin.copy:
+        dest: "{{ nopasswd_dropin }}"
+        content: |
+          # Managed by Ansible (kubernetes repo, playbook 31)
+          Defaults:{{ personal_user }} verifypw=any
+          {{ personal_user }} ALL=(ALL) NOPASSWD: ALL
+        owner: root
+        group: root
+        mode: "0440"
+        validate: visudo -cf %s
+      when:
+        - personal_id.rc == 0
+        - personal_user_nopasswd | default(true) | bool
+
+    - name: No drop-in where opted out (loki)
+      ansible.builtin.file:
+        path: "{{ nopasswd_dropin }}"
+        state: absent
+      when: not (personal_user_nopasswd | default(true) | bool)
+
+    - name: Verify (sudo -n as the personal user)
+      ansible.builtin.command: sudo -u {{ personal_user }} sudo -n true
+      register: nopasswd_check
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: personal_id.rc == 0
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: {{ personal_user }} sudo
+          {{ 'NOPASSWD' if nopasswd_check.rc | default(1) == 0 else 'needs password' }}
+          (expected {{ 'NOPASSWD' if personal_user_nopasswd | default(true) | bool else 'password' }})
+      when: personal_id.rc == 0

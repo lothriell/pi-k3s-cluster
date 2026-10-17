@@ -1,0 +1,168 @@
+# DefectDojo PostgreSQL — official image (2026-10-17)
+# =============================================================================
+# Replaces the chart's bundled bitnami/postgresql sub-chart. Bitnami stopped
+# free versioned images (2025); DefectDojo's mirror is frozen at
+# 17.6.0-debian-12-r4 (16 CRITICAL in Trivy, unpatchable). The official
+# Debian image is patched upstream and tracked by release-watcher.
+#
+# Chart side (values-defectdojo.yml): postgresql.enabled=false +
+# postgresServer=defectdojo-pg. The chart still reads postgresql.auth.* (user,
+# db, existingSecret, secretKeys) and primary.service.ports.postgresql, and the
+# existing Secret `defectdojo-postgresql-specific` (playbook 21) is reused:
+#   postgresql-postgres-password → superuser `postgres`
+#   postgresql-password          → app role `defectdojo` (NOT superuser — the
+#                                  official image would make POSTGRES_USER one)
+#
+# Label app.kubernetes.io/name=postgresql keeps it under the existing
+# defectdojo-postgres-allowed-ingress NetworkPolicy (k8s/network-policies).
+# Hardened like the bitnami pod: non-root 999, read-only rootfs, no caps.
+# PGDATA in a subdir (the Longhorn volume root has lost+found).
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: defectdojo-pg-init
+  namespace: defectdojo
+data:
+  10-defectdojo-role.sh: |
+    #!/bin/bash
+    # Runs once, on an empty data dir only (docker-entrypoint-initdb.d).
+    set -euo pipefail
+    psql -v ON_ERROR_STOP=1 -v pw="$DEFECTDOJO_PASSWORD" --username postgres --dbname postgres <<'SQL'
+    CREATE ROLE defectdojo LOGIN PASSWORD :'pw';
+    CREATE DATABASE defectdojo OWNER defectdojo ENCODING 'UTF8'
+      LC_COLLATE 'en_US.utf8' LC_CTYPE 'en_US.utf8' TEMPLATE template0;
+    SQL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: defectdojo-pg
+  namespace: defectdojo
+  labels:
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/instance: defectdojo-pg
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/instance: defectdojo-pg
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: defectdojo-pg
+  namespace: defectdojo
+  labels:
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/instance: defectdojo-pg
+spec:
+  serviceName: defectdojo-pg
+  replicas: 1
+  # Never let a scale-down / STS delete take the data with it.
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+      app.kubernetes.io/instance: defectdojo-pg
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgresql
+        app.kubernetes.io/instance: defectdojo-pg
+    spec:
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        runAsNonRoot: true
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: postgres
+          image: docker.io/library/postgres:17.11-trixie
+          ports:
+            - name: postgresql
+              containerPort: 5432
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: defectdojo-postgresql-specific
+                  key: postgresql-postgres-password
+            - name: DEFECTDOJO_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: defectdojo-postgresql-specific
+                  key: postgresql-password
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, postgres, -h, 127.0.0.1]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: [pg_isready, -U, postgres, -h, 127.0.0.1]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: init
+          configMap:
+            name: defectdojo-pg-init
+            defaultMode: 0555
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: longhorn-storage   # x86-pinned replicas
+        resources:
+          requests:
+            storage: 8Gi

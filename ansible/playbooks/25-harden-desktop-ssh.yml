@@ -84,6 +84,16 @@
       when: sshd_hardening.changed and not sshd_started.changed
       tags: [ssh]
 
+    # Every desktop gets an ENABLED ufw (2026-10-17: arch-t-01 had none —
+    # INPUT ACCEPT, sshd open to the remote LAN). Omarchy/CachyOS ship it active
+    # already; on those the defaults are left as the distro set them.
+    - name: Install ufw
+      community.general.pacman:
+        name: ufw
+        state: present
+      when: ansible_os_family == "Archlinux"
+      tags: [firewall]
+
     - name: Check whether ufw is active
       ansible.builtin.command: ufw status
       register: ufw_status
@@ -91,8 +101,22 @@
       failed_when: false
       tags: [firewall]
 
-    # Add the scoped rules BEFORE removing the open one, so an interrupted run
-    # never leaves 22 closed to the LAN.
+    # Only on a host where ufw is not yet enforcing — never rewrite the
+    # policy of an already-active firewall (docker/routed setups).
+    - name: ufw default policy (fresh enable only)
+      community.general.ufw:
+        direction: "{{ item.direction }}"
+        default: "{{ item.policy }}"
+      loop:
+        - { direction: incoming, policy: deny }
+        - { direction: outgoing, policy: allow }
+        - { direction: routed, policy: deny }
+      when: "'Status: active' not in ufw_status.stdout"
+      tags: [firewall]
+
+    # Add the scoped rules BEFORE removing the open one (and before enabling),
+    # so an interrupted run never leaves 22 closed to the LAN. ufw accepts
+    # rule changes while inactive.
     - name: Allow SSH from home subnets + tailnet
       community.general.ufw:
         rule: allow
@@ -101,7 +125,6 @@
         from_ip: "{{ item }}"
         comment: ssh-scoped
       loop: "{{ ssh_allowed_cidrs }}"
-      when: "'Status: active' in ufw_status.stdout"
       tags: [firewall]
 
     - name: Remove any allow-from-anywhere SSH rule
@@ -114,5 +137,16 @@
         - { port: "22", proto: tcp }
         - { port: "22" }
         - { port: "ssh" }
-      when: "'Status: active' in ufw_status.stdout"
+      tags: [firewall]
+
+    - name: Enable ufw (and at boot)
+      community.general.ufw:
+        state: enabled
+      tags: [firewall]
+
+    - name: ufw service enabled at boot
+      ansible.builtin.systemd:
+        name: ufw
+        enabled: true
+        state: started
       tags: [firewall]

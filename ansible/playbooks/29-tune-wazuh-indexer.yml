@@ -1,0 +1,22 @@
+---
+# =============================================================================
+# Wazuh indexer tuning (security stack) — task #81
+# =============================================================================
+# Codifies the live oversharding fix on the all-in-one Wazuh VM: 2g heap,
+# 1-shard index template, MONTHLY alert indices (filebeat pipeline), and ISM
+# retention (alerts 365d, weekly statistics/monitoring 90d). Idempotent; the
+# indexer only restarts if the heap line changes.
+# Details: roles/wazuh-indexer-tuning/defaults/main.yml.
+#
+# Usage:  make wazuh-indexer          (apply — and re-run after EVERY Wazuh upgrade,
+#                                      which can restore the stock daily pipeline)
+#         make wazuh-indexer-check    (report drift only; changes nothing)
+# =============================================================================
+
+- name: Tune Wazuh indexer (shards, monthly alert indices, ISM retention)
+  hosts: security_stack
+  gather_facts: false
+  become: false
+
+  roles:
+    - role: ../roles/wazuh-indexer-tuning

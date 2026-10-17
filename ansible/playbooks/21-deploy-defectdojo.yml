@@ -6,7 +6,7 @@
 # namespace. Creates three Secrets from Ansible Vault BEFORE the chart
 # installs (authentik pattern — no secrets in helm values/history):
 #   defectdojo                      main app secret (DD_* env keys)
-#   defectdojo-postgresql-specific  bundled postgres auth (bitnami contract)
+#   defectdojo-postgresql-specific  postgres auth (k8s/defectdojo/postgres.yml + chart)
 #   defectdojo-valkey-specific      celery broker auth
 #
 # host/siteUrl carry the real local domain → passed here via --set, not
@@ -28,6 +28,7 @@
   vars:
     defectdojo_chart_version: "1.9.57"   # app 3.4.101 (2026-10-15; was 1.9.54 / 3.3.300)
     defectdojo_values: "{{ playbook_dir }}/../../k8s/defectdojo/values-defectdojo.yml"
+    defectdojo_postgres_manifest: "{{ playbook_dir }}/../../k8s/defectdojo/postgres.yml"
     trivy_dojo_operator_chart_version: "0.11.0"
     trivy_dojo_operator_values: "{{ playbook_dir }}/../../k8s/defectdojo/values-trivy-dojo-operator.yml"
     zap_dast_template: "{{ playbook_dir }}/../../k8s/defectdojo/zap-dast-eve-cronjob.yml.j2"
@@ -102,6 +103,23 @@
           stringData:
             valkey-password: "{{ defectdojo_valkey_password }}"
       tags: [defectdojo]
+
+    # --- Postgres (official image, external to the chart) -------------------
+    # Since 2026-10-17 the chart's bundled bitnami postgres is disabled
+    # (frozen image, unpatchable CVEs). Must be Ready before the chart's
+    # initializer job runs migrations against it.
+
+    - name: Deploy DefectDojo Postgres (official postgres image)
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ defectdojo_postgres_manifest }}"
+      tags: [defectdojo, defectdojo-postgres]
+
+    - name: Wait for DefectDojo Postgres to be Ready
+      ansible.builtin.command: >
+        kubectl -n defectdojo rollout status statefulset/defectdojo-pg --timeout=300s
+      changed_when: false
+      tags: [defectdojo, defectdojo-postgres]
 
     # --- Helm install -----------------------------------------------------
 

@@ -187,12 +187,14 @@ All IPs are configured in `ansible/inventory/hosts.yml` and `group_vars/all/main
 - All-in-one: Manager + Indexer + Dashboard
 - Agents installed on all cluster nodes + Proxmox host
 - Dashboard accessible via HTTPS on Servers VLAN
+- Indexer tuning (2g heap, 1-shard template, MONTHLY alert indices, ISM retention 365d alerts / 90d weeklies) is the `wazuh-indexer-tuning` role (`make wazuh-indexer`, drift report `make wazuh-indexer-check`). **Re-run after every Wazuh upgrade** — it re-extracts the filebeat module pipeline (back to daily indices)
 
 ### DefectDojo (vulnerability management)
 - Namespace: `defectdojo`; official Helm chart, playbook 21 (`make defectdojo`)
 - Web UI/API at `defectdojo.<local_domain>` (Traefik + internal CA); login `admin` / vault `defectdojo_admin_password`
-- Stack: django (nginx+uwsgi pod) + celery worker/beat + initializer job + bundled Postgres + Valkey (broker, no persistence)
-- All workloads pinned amd64; Postgres (8Gi) + media (5Gi, RWO — only the django pod mounts media) on `longhorn-storage`, enrolled in `critical_pvcs`
+- Stack: django (nginx+uwsgi pod) + celery worker/beat + initializer job + Postgres + Valkey (broker, no persistence)
+- Postgres is **external to the chart** since 2026-10-17: `k8s/defectdojo/postgres.yml` (official `postgres:17.x-trixie`, StatefulSet `defectdojo-pg`, applied by playbook 21 before the chart; `postgresql.enabled: false` + `postgresServer`). The chart-bundled bitnami image was frozen/unpatchable. App role `defectdojo` is NOT superuser
+- All workloads pinned amd64; Postgres (`data-defectdojo-pg-0`, 8Gi) + media (5Gi, RWO — only the django pod mounts media) on `longhorn-storage`, enrolled in `critical_pvcs`
 - Secrets pre-created by the playbook from vault (authentik pattern); `host`/`siteUrl` passed via `--set` to keep the real domain out of the committed values file
 - `defectdojo_aes_key` must NEVER rotate after first boot (encrypts stored tool credentials in the DB)
 - **Trivy feed is LIVE:** trivy-dojo-report-operator (in `trivy-system`, same playbook, tag `trivy-dojo`) streams every VulnerabilityReport into Dojo — products per namespace under product type `pi-k3s-cluster`, test title = image repo. API token in vault `defectdojo_api_token`; netpol allows trivy-system → django :8080

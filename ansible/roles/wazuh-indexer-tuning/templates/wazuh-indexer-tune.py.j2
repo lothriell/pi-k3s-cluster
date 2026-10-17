@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+# {{ ansible_managed }} (role wazuh-indexer-tuning)
+#
+# Enforces the indexer-side state of the oversharding fix (task #81):
+#   1. _template/wazuh            → number_of_shards={{ wazuh_indexer_shards }}, replicas 0
+#   2. filebeat-*-wazuh-alerts-pipeline (every loaded version) → date_index_name
+#      rounding "{{ wazuh_alerts_date_rounding }}" / format "{{ wazuh_alerts_index_name_format }}"
+#   3. ISM retention policies (create/update) + attach to unmanaged matching indices
+#
+# Output: one line per item, "OK: …" or "CHANGED: …" ("WOULD CHANGE: …" with --check).
+# Exit 0 unless the indexer API fails.
+import json
+import ssl
+import sys
+import urllib.error
+import urllib.request
+
+URL = "{{ wazuh_indexer_url }}"
+CHECK = "--check" in sys.argv
+SHARDS = "{{ wazuh_indexer_shards }}"
+ROUNDING = "{{ wazuh_alerts_date_rounding }}"
+FORMAT = "{{ wazuh_alerts_index_name_format }}"
+POLICIES = json.loads('{{ wazuh_ism_policies | to_json }}')
+
+ctx = ssl.create_default_context(cafile="{{ wazuh_indexer_ca }}")
+ctx.check_hostname = False  # cert is issued to the node name, we talk to localhost
+ctx.load_cert_chain("{{ wazuh_indexer_cert }}", "{{ wazuh_indexer_key }}")
+
+
+def api(method, path, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(URL + path, data=data, method=method,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=60) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise SystemExit(f"FAILED: {method} {path}: {e.code} {e.read()[:300]!r}")
+
+
+def report(changed, msg):
+    print(("WOULD CHANGE: " if CHECK else "CHANGED: ") + msg if changed else "OK: " + msg)
+
+
+# 1. index template ----------------------------------------------------------
+tpl = (api("GET", "/_template/wazuh") or {}).get("wazuh")
+if tpl is None:
+    print("WARN: _template/wazuh missing (filebeat loads it on start)")
+else:
+    idx = tpl.setdefault("settings", {}).setdefault("index", {})
+    if str(idx.get("number_of_shards")) != SHARDS or str(idx.get("number_of_replicas")) != "0":
+        if not CHECK:
+            idx["number_of_shards"], idx["number_of_replicas"] = SHARDS, "0"
+            api("PUT", "/_template/wazuh", tpl)
+        report(True, f"_template/wazuh shards {idx.get('number_of_shards')} → {SHARDS}")
+    else:
+        report(False, f"_template/wazuh shards={SHARDS}")
+
+# 2. loaded alerts pipeline(s) -------------------------------------------------
+pipes = api("GET", "/_ingest/pipeline/filebeat-*-wazuh-alerts-pipeline") or {}
+if not pipes:
+    print("WARN: no filebeat-*-wazuh-alerts-pipeline loaded")
+for pid, pipe in pipes.items():
+    procs = [p["date_index_name"] for p in pipe.get("processors", []) if "date_index_name" in p]
+    if not procs:
+        print(f"WARN: {pid} has no date_index_name processor")
+        continue
+    dirty = any(p.get("date_rounding") != ROUNDING or p.get("index_name_format") != FORMAT for p in procs)
+    if dirty and not CHECK:
+        for p in procs:
+            p["date_rounding"], p["index_name_format"] = ROUNDING, FORMAT
+        api("PUT", f"/_ingest/pipeline/{pid}", pipe)
+    report(dirty, f"{pid} date_index_name {ROUNDING}/{FORMAT}")
+
+# 3. ISM policies + attach ----------------------------------------------------
+def desired_policy(p):
+    return {"policy": {
+        "description": p["description"],
+        "default_state": "hot",
+        "states": [
+            {"name": "hot", "actions": [],
+             "transitions": [{"state_name": "delete", "conditions": {"min_index_age": p["min_index_age"]}}]},
+            {"name": "delete", "actions": [{"delete": {}}], "transitions": []},
+        ],
+        "ism_template": [{"index_patterns": p["index_patterns"], "priority": 100}],
+    }}
+
+
+def shape(pol):
+    """Comparable subset of a policy (the API adds retry blocks/timestamps)."""
+    return (
+        pol.get("description"), pol.get("default_state"),
+        [(s["name"], sorted(k for a in s.get("actions", []) for k in a if k != "retry"),
+          [(t["state_name"], t.get("conditions")) for t in s.get("transitions", [])])
+         for s in pol.get("states", [])],
+        [(sorted(t["index_patterns"]), t.get("priority")) for t in pol.get("ism_template") or []],
+    )
+
+
+for p in POLICIES:
+    want = desired_policy(p)
+    have = api("GET", f"/_plugins/_ism/policies/{p['id']}")
+    if have is None:
+        if not CHECK:
+            api("PUT", f"/_plugins/_ism/policies/{p['id']}", want)
+        report(True, f"ISM policy {p['id']} created ({p['min_index_age']})")
+    elif shape(have["policy"]) != shape(want["policy"]):
+        if not CHECK:
+            api("PUT", f"/_plugins/_ism/policies/{p['id']}?if_seq_no={have['_seq_no']}"
+                       f"&if_primary_term={have['_primary_term']}", want)
+        report(True, f"ISM policy {p['id']} updated ({p['min_index_age']})")
+    else:
+        report(False, f"ISM policy {p['id']} ({p['min_index_age']})")
+
+    for pattern in p["index_patterns"]:
+        explain = api("GET", f"/_plugins/_ism/explain/{pattern}") or {}
+        unmanaged = sorted(k for k, v in explain.items()
+                           if isinstance(v, dict) and not v.get("policy_id")
+                           and not v.get("index.plugins.index_state_management.policy_id"))
+        foreign = sorted(k for k, v in explain.items()
+                         if isinstance(v, dict) and v.get("policy_id") not in (None, p["id"]))
+        for k in foreign:
+            print(f"WARN: {k} is managed by {explain[k]['policy_id']}, not {p['id']}")
+        if unmanaged and not CHECK:
+            api("POST", f"/_plugins/_ism/add/{','.join(unmanaged)}", {"policy_id": p["id"]})
+        report(bool(unmanaged), f"{pattern}: {len(unmanaged)} unmanaged → {p['id']}"
+               if unmanaged else f"{pattern}: all attached to {p['id']}")
+
+# 4. ISM's own system indices on a single node -------------------------------
+# ISM creates .opendistro-ism-config / -job-scheduler-lock / daily
+# -managed-index-history-* with 1 replica, which a 1-node cluster can never
+# assign → cluster YELLOW (seen on first enable, 2026-10-17).
+HIST = "plugins.index_state_management.history.number_of_replicas"
+cs = api("GET", "/_cluster/settings?flat_settings=true") or {}
+cur = cs.get("persistent", {}).get(HIST)
+if cur != "0":
+    if not CHECK:
+        api("PUT", "/_cluster/settings", {"persistent": {HIST: 0}})
+    report(True, f"{HIST} {cur} → 0")
+else:
+    report(False, f"{HIST}=0")
+
+SYS = ".opendistro-ism-*,.opendistro-job-scheduler-lock"
+reps = api("GET", f"/{SYS}/_settings/index.number_of_replicas?expand_wildcards=all") or {}
+bad = sorted(k for k, v in reps.items() if v["settings"]["index"]["number_of_replicas"] != "0")
+if bad and not CHECK:
+    api("PUT", f"/{','.join(bad)}/_settings", {"index": {"number_of_replicas": 0}})
+report(bool(bad), f"ISM system indices: {len(bad)} set to 0 replicas" if bad
+       else "ISM system indices: 0 replicas")

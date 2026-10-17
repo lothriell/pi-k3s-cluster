@@ -120,7 +120,7 @@ spec:
                 limits: { memory: 3Gi }
           containers:
             - name: upload
-              image: curlimages/curl:8.14.1
+              image: curlimages/curl:8.23.0
               command: ["/bin/sh", "/scripts/upload.sh"]
               env:
                 - name: TARGET

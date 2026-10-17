@@ -135,29 +135,22 @@ metrics:
     serviceMonitor:
       enabled: false
 
-# --- Bundled Postgres (bitnami/postgresql sub-chart) -------------------------
+# --- Postgres: EXTERNAL since 2026-10-17 -------------------------------------
+# The bundled bitnami sub-chart ran the floating `bitnami/postgresql:latest`
+# (no free versioned bitnami images any more) — a PG major bump on a pod
+# restart would have refused the data dir. The DB is now k8s/netbox/postgres.yml
+# (official postgres:18.x-trixie), applied by playbook 24 before the chart.
 
 postgresql:
-  enabled: true
-  auth:
-    username: netbox
-    database: netbox
-    existingSecret: netbox-postgresql
-    # secretKeys defaults: postgres-password (admin) / password (app user)
-    # — the playbook's Secret uses exactly these key names.
-  primary:
-    persistence:
-      enabled: true
-      storageClass: longhorn-storage  # x86-pinned replicas
-      size: 8Gi
-    resources:
-      requests:
-        cpu: 50m
-        memory: 256Mi
-      limits:
-        memory: 512Mi
-    nodeSelector:
-      kubernetes.io/arch: amd64
+  enabled: false
+
+externalDatabase:
+  host: netbox-pg
+  port: 5432
+  database: netbox
+  username: netbox
+  existingSecretName: netbox-postgresql
+  existingSecretKey: password   # app-role key in the playbook's Secret
 
 # --- Valkey (cache + RQ task queue; bitnami sub-chart) -----------------------
 

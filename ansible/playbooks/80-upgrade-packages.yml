@@ -375,17 +375,97 @@
   hosts: desktops
   become: true
   tasks:
+    # Omarchy 4.x refuses a direct `pacman -Syu` (pre-transaction hook
+    # omarchy-update-pacman-guard, 2026-10-17) — it must go through
+    # `omarchy update`, which also snapshots, migrates the user's ~/.config,
+    # runs post-update hooks (our os-release masquerade) and updates AUR + mise.
+    # `-y` is its unattended mode (no prompts; the final reboot `gum confirm`
+    # declines without a TTY). It acts on $HOME, so it runs as the desktop user,
+    # and calls sudo inside — that user's sudo needs a password, so a NOPASSWD
+    # drop-in exists ONLY for the duration of the run (removed in `always`).
+    - name: Omarchy desktop?
+      ansible.builtin.stat:
+        path: /usr/bin/omarchy-update
+      register: omarchy_update_bin
+
+    - name: omarchy update -y (as the desktop user)
+      when: omarchy_update_bin.stat.exists
+      block:
+        - name: Temporary NOPASSWD sudo for the desktop user
+          ansible.builtin.copy:
+            dest: /etc/sudoers.d/zz-ansible-omarchy-update
+            # verifypw=any: omarchy-update-stay-awake runs `sudo -v`, which by
+            # default still prompts unless EVERY entry for the user is NOPASSWD
+            # (the user's own `ALL=(ALL) ALL` line isn't) — freyr 2026-10-17.
+            content: |
+              Defaults:{{ personal_user }} verifypw=any
+              {{ personal_user }} ALL=(ALL) NOPASSWD: ALL
+            owner: root
+            group: root
+            mode: "0440"
+            validate: visudo -cf %s
+
+        - name: omarchy update -y
+          ansible.builtin.shell: |
+            uid=$(id -u {{ personal_user }})
+            # `gum confirm` (orphan packages, "reboot?") ignores -y and opens
+            # /dev/tty directly, so it hangs forever whenever ANY tty exists:
+            # omarchy's own `script` wrapper (skipped via OMARCHY_UPDATE_LOGGED=1)
+            # AND the pty Ansible's ssh allocates (freyr + loki 2026-10-17).
+            # setsid → no controlling terminal → /dev/tty fails → gum declines.
+            exec setsid -w sudo -u {{ personal_user }} -H env XDG_RUNTIME_DIR=/run/user/$uid \
+              DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus OMARCHY_UPDATE_LOGGED=1 \
+              bash -lc 'omarchy update -y' </dev/null
+          register: omarchy_update
+          changed_when: "'there is nothing to do' not in omarchy_update.stdout"
+      always:
+        - name: Remove the temporary sudo drop-in
+          ansible.builtin.file:
+            path: /etc/sudoers.d/zz-ansible-omarchy-update
+            state: absent
+
     - name: pacman -Syu
       community.general.pacman:
         update_cache: yes
         upgrade: yes
+      register: desktop_pacman
+      when: not omarchy_update_bin.stat.exists
+
+    # The AUR wazuh-agent package doesn't restart the running agent, so the
+    # manager keeps reporting the old client version until the next boot
+    # (freyr + loki 4.14.9, 2026-10-17). Hosts that reboot below get it anyway.
+    - name: Restart wazuh-agent after an upgrade
+      ansible.builtin.systemd:
+        name: wazuh-agent
+        state: restarted
+      when: omarchy_update is changed or desktop_pacman is changed
+      failed_when: false
+
+    # Omarchy installs full-disk LUKS by default: a reboot stops at the unlock
+    # prompt with no network/tailscaled/sshd until someone types the passphrase
+    # (freyr, 2026-10-17). Reboot only if the root is unencrypted OR unlocks from
+    # the TPM (playbook 30 + systemd-cryptenroll). Override with
+    # -e desktop_reboot_encrypted=true when someone is at the keyboard.
+    - name: Detect a LUKS root that needs a typed passphrase (no TPM2 token)
+      ansible.builtin.shell: |
+        for d in $(lsblk -nrpo TYPE,PKNAME | awk '$1=="crypt"{print $2}'); do
+          cryptsetup luksDump "$d" | grep -q systemd-tpm2 || echo "needs-passphrase $d"
+        done
+      register: desktop_luks
+      changed_when: false
 
     - name: Reboot
       ansible.builtin.reboot:
-        msg: "Reboot triggered by pacman -Syu"
+        msg: "Reboot triggered by the package upgrade"
         pre_reboot_delay: 5
         post_reboot_delay: 30
         reboot_timeout: 600
+      when: desktop_luks.stdout == "" or desktop_reboot_encrypted | default(false) | bool
+
+    - name: Reboot pending (LUKS without TPM2 — needs the passphrase at the console)
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: upgraded, NOT rebooted ({{ desktop_luks.stdout | trim }}). Reboot by hand at the keyboard."
+      when: desktop_luks.stdout != "" and not (desktop_reboot_encrypted | default(false) | bool)
 
 - name: Phase 5 — macmini (brew, no reboot)
   # /opt/homebrew is owned by the personal user, not the ansible service

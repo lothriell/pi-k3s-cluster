@@ -181,7 +181,7 @@
       - { namespace: vaultwarden, name: vaultwarden-data-vaultwarden-0 }
       - { namespace: vaultwarden, name: vaultwarden-attachments-vaultwarden-0 }
       - { namespace: authentik,   name: data-authentik-postgresql-0 }
-      - { namespace: defectdojo,  name: data-defectdojo-postgresql-0 }
+      - { namespace: defectdojo,  name: data-defectdojo-pg-0 }   # official postgres since 2026-10-17 (was data-defectdojo-postgresql-0, bitnami)
       - { namespace: defectdojo,  name: defectdojo-django-media }
 
     # Disposable volumes deliberately run a SINGLE replica: regenerable data

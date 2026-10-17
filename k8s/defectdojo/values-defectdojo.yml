@@ -119,10 +119,17 @@ initializer:
   nodeSelector:
     kubernetes.io/arch: amd64
 
-# -- Bundled Postgres (DefectDojo-vendored bitnami/postgresql sub-chart) ------
+# -- Postgres: EXTERNAL since 2026-10-17 -----------------------------------------
+# The bundled bitnami/postgresql sub-chart is off: Bitnami ended free versioned
+# images and DefectDojo's mirror is frozen at 17.6.0-debian-12-r4 (16 CRITICAL,
+# unpatchable). The DB is now k8s/defectdojo/postgres.yml (official
+# postgres:17.x-trixie, applied by playbook 21 before the chart).
+# With enabled=false the chart still reads auth.* + primary.service.ports.
+
+postgresServer: defectdojo-pg
 
 postgresql:
-  enabled: true
+  enabled: false
   auth:
     username: defectdojo
     database: defectdojo
@@ -130,18 +137,9 @@ postgresql:
     # secretKeys defaults: postgresql-postgres-password / postgresql-password
     # — the playbook's Secret uses exactly these key names.
   primary:
-    persistence:
-      enabled: true
-      storageClass: longhorn-storage  # x86-pinned replicas
-      size: 8Gi
-    resources:
-      requests:
-        cpu: 50m
-        memory: 256Mi
-      limits:
-        memory: 512Mi
-    nodeSelector:
-      kubernetes.io/arch: amd64
+    service:
+      ports:
+        postgresql: 5432
 
 # -- Valkey (celery broker/cache; cloudpirates sub-chart) ---------------------
 

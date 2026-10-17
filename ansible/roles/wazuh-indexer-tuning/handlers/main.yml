@@ -1,0 +1,6 @@
+---
+- name: Restart wazuh-indexer
+  ansible.builtin.systemd:
+    name: wazuh-indexer
+    state: restarted
+  become: true

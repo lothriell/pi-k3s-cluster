@@ -1,0 +1,45 @@
+---
+# wazuh-indexer-tuning: keeps the all-in-one Wazuh VM's indexer from
+# oversharding itself into heap exhaustion (task #81, 2026-10-09 / 10-17).
+#
+# Background: the stock Wazuh install writes one 3-shard index PER DAY
+# (wazuh-alerts-4.x-YYYY.MM.DD) with no retention, on a 1g heap. By 2026-10-09
+# that was 647 shards for 232 MB of data and the parent circuit breaker tripped
+# (memory feedback_wazuh_indexer_oversharding). Fixed live, then codified here:
+#   - heap 2g                               (/etc/wazuh-indexer/jvm.options)
+#   - 1 shard / 0 replicas for new indices  (filebeat wazuh-template.json + _template/wazuh)
+#   - MONTHLY alert indices                 (filebeat module pipeline.json + the loaded
+#                                            filebeat-*-wazuh-alerts-pipeline)
+#   - ISM retention + auto-attach           (alerts 365d, weekly stats/monitoring 90d)
+#
+# A Wazuh/filebeat upgrade re-extracts the module pipeline.json and may reload
+# it into the indexer → back to DAILY indices. Re-run `make wazuh-indexer`
+# after every Wazuh upgrade; `make wazuh-indexer-check` reports drift only.
+
+wazuh_indexer_heap: 2g
+wazuh_indexer_jvm_options: /etc/wazuh-indexer/jvm.options
+
+wazuh_indexer_shards: 1
+wazuh_filebeat_template: /etc/filebeat/wazuh-template.json
+wazuh_filebeat_alerts_pipeline: /usr/share/filebeat/module/wazuh/alerts/ingest/pipeline.json
+
+# date_index_name rounding: "M" → wazuh-alerts-4.x-YYYY.MM (stock is "d" / yyyy.MM.dd)
+wazuh_alerts_date_rounding: M
+wazuh_alerts_index_name_format: yyyy.MM
+
+# ISM ages by index CREATION date (not the data's timestamps).
+wazuh_ism_policies:
+  - id: wazuh-alerts-retention
+    description: "Wazuh alerts (monthly indices): delete 365d after creation (task #81.1)"
+    min_index_age: 365d
+    index_patterns: ["wazuh-alerts-4.x-*"]
+  - id: wazuh-stats-retention
+    description: "Wazuh weekly statistics/monitoring: delete 90d after creation (task #81.1)"
+    min_index_age: 90d
+    index_patterns: ["wazuh-statistics-*", "wazuh-monitoring-*"]
+
+wazuh_indexer_url: "https://127.0.0.1:9200"
+wazuh_indexer_cert: /etc/wazuh-indexer/certs/admin.pem
+wazuh_indexer_key: /etc/wazuh-indexer/certs/admin-key.pem
+wazuh_indexer_ca: /etc/wazuh-indexer/certs/root-ca.pem
+wazuh_indexer_tune_script: /usr/local/sbin/wazuh-indexer-tune

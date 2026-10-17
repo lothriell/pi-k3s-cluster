@@ -1,0 +1,81 @@
+---
+# wazuh-indexer-tuning: see defaults/main.yml for the rationale.
+# On-disk config first (survives reinstall of the template/pipeline into the
+# indexer by filebeat), then the indexer API state via the helper script.
+
+- name: Indexer heap (Xms/Xmx)
+  ansible.builtin.lineinfile:
+    path: "{{ wazuh_indexer_jvm_options }}"
+    regexp: "^-{{ item }}"
+    line: "-{{ item }}{{ wazuh_indexer_heap }}"
+    backup: true
+  loop: [Xms, Xmx]
+  become: true
+  notify: Restart wazuh-indexer
+
+- name: Filebeat index template — shard count for new indices
+  ansible.builtin.replace:
+    path: "{{ wazuh_filebeat_template }}"
+    regexp: '("index\.number_of_shards":\s*)"\d+"'
+    replace: '\1"{{ wazuh_indexer_shards }}"'
+    backup: true
+  become: true
+
+- name: Filebeat alerts pipeline — monthly date_index_name rounding
+  ansible.builtin.replace:
+    path: "{{ wazuh_filebeat_alerts_pipeline }}"
+    regexp: '("date_rounding":\s*)"[a-zA-Z]+"'
+    replace: '\1"{{ wazuh_alerts_date_rounding }}"'
+    backup: true
+  become: true
+
+- name: Filebeat alerts pipeline — monthly index name format
+  ansible.builtin.replace:
+    path: "{{ wazuh_filebeat_alerts_pipeline }}"
+    regexp: '("index_name_format":\s*)"[^"]+"'
+    replace: '\1"{{ wazuh_alerts_index_name_format }}"'
+    backup: true
+  become: true
+
+- name: Deploy indexer tuning helper
+  ansible.builtin.template:
+    src: wazuh-indexer-tune.py.j2
+    dest: "{{ wazuh_indexer_tune_script }}"
+    owner: root
+    group: root
+    mode: "0700"
+  become: true
+
+- name: Apply pending indexer restart before talking to the API
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the indexer API
+  ansible.builtin.command: >-
+    curl -sk --max-time 5 --cert {{ wazuh_indexer_cert }} --key {{ wazuh_indexer_key }}
+    {{ wazuh_indexer_url }}/_cluster/health?wait_for_status=yellow&timeout=5s
+  check_mode: false   # read-only; skipped in check mode it never sets rc → until spins 5 min
+  become: true
+  register: indexer_health
+  until: indexer_health.rc == 0 and '"status"' in indexer_health.stdout
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Is the helper deployed? (absent in check mode on a fresh VM)
+  ansible.builtin.stat:
+    path: "{{ wazuh_indexer_tune_script }}"
+  become: true
+  register: indexer_tune_script
+
+- name: Enforce template / loaded pipeline / ISM retention (indexer API)
+  ansible.builtin.command: "{{ wazuh_indexer_tune_script }}{{ ' --check' if ansible_check_mode else '' }}"
+  check_mode: false   # the script has its own --check (reports, changes nothing)
+  become: true
+  register: indexer_tune
+  changed_when: "'CHANGED:' in indexer_tune.stdout or 'WOULD CHANGE:' in indexer_tune.stdout"
+  when: indexer_tune_script.stat.exists
+
+- name: Indexer tuning result
+  ansible.builtin.debug:
+    var: indexer_tune.stdout_lines
+  when: indexer_tune_script.stat.exists

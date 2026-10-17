@@ -62,6 +62,33 @@
 
     # -- Arch-based (yay from AUR) ---------------------------------------------
 
+    # An AUR-built yay links a fixed libalpm soname; a pacman major bump
+    # (7.1 → libalpm.so.16, seen on arch-t-01 2026-10-17) leaves it dead with
+    # "libalpm.so.15: cannot open shared object file". Fail with the fix.
+    - name: Check yay runs (Arch)
+      ansible.builtin.command: >
+        sudo -u {{ ansible_env.SUDO_USER | default(personal_user) }} yay --version
+      register: yay_check
+      changed_when: false
+      failed_when: false
+      when:
+        - not wazuh_installed.stat.exists
+        - ansible_os_family == "Archlinux"
+      tags: [wazuh, packages]
+
+    - name: Fail early on a broken yay (Arch)
+      ansible.builtin.fail:
+        msg: >-
+          yay does not run ({{ yay_check.stderr | default('') | trim }}). Rebuild it: as the
+          ansible user `git clone https://aur.archlinux.org/yay-bin.git && cd yay-bin && makepkg -s`,
+          then as root `pacman -Rdd --noconfirm yay; pacman -U --noconfirm yay-bin-*.pkg.tar.zst`
+          (CachyOS ships yay in its repo: `pacman -S yay`).
+      when:
+        - not wazuh_installed.stat.exists
+        - ansible_os_family == "Archlinux"
+        - yay_check.rc != 0
+      tags: [wazuh, packages]
+
     - name: Install Wazuh agent from AUR (Arch)
       ansible.builtin.command: >
         sudo -u {{ ansible_env.SUDO_USER | default(personal_user) }}
