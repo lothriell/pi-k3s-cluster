@@ -1,0 +1,16 @@
+---
+# ssh-hardening: the ONE sshd baseline for servers and desktops (task #80.1,
+# 2026-10-17). Before this the servers carried it hand-applied (a
+# 99-hardening.conf on cluster nodes + wazuh, main sshd_config edits on
+# athena/artemis/pve-1, nothing on rpizerow) and drifted: wazuh-server still
+# allowed keyboard-interactive auth, rpizerow root logins by key.
+#
+# Drop-in sorts EARLY (10-): sshd keeps the FIRST value it reads and every
+# distro here puts `Include sshd_config.d/*.conf` as directive #1, so this
+# file beats distro drop-ins (Arch 99-archlinux.conf, cloud-init 50-/60-) AND
+# the main sshd_config (wazuh-server's still says PermitRootLogin yes).
+ssh_hardening_dropin: /etc/ssh/sshd_config.d/10-hardening.conf
+
+# Hand-applied predecessors, superseded by the drop-in above.
+ssh_hardening_superseded:
+  - /etc/ssh/sshd_config.d/99-hardening.conf

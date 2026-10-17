@@ -89,6 +89,10 @@ desktop-onboard: ## Step 2 for a new Linux desktop: shell, CA trust, Wazuh agent
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/26-desktop-wazuh-os-release.yml --limit $(HOST)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/25-harden-desktop-ssh.yml --limit $(HOST)
 
+.PHONY: harden-server-ssh
+harden-server-ssh: ## sshd key-only baseline (role ssh-hardening) on every non-desktop Linux host — optional HOST=<name>
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/32-harden-server-ssh.yml $(if $(HOST),--limit $(HOST),)
+
 .PHONY: personal-nopasswd
 personal-nopasswd: ## Personal user passwordless sudo on every Linux host except opted-out ones (loki) — optional HOST=<name>
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/31-personal-user-nopasswd.yml $(if $(HOST),--limit $(HOST),)

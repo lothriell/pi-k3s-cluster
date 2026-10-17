@@ -13,8 +13,9 @@
 # allowedHosts / csrf.trustedOrigins carry the real domains → passed here via
 # --set, not committed in the values file.
 #
-# EVAL SCOPE: not enrolled in backups/netpols — see final debug for the
-# promotion checklist. External demo access via CF Tunnel + CF Access
+# Promoted 2026-10-17: DB + media in critical_pvcs + restore_targets (R2
+# nightly), Postgres on the official image with its own NetworkPolicy
+# (k8s/netbox/postgres.yml). External demo access via CF Tunnel + CF Access
 # (cloudflare_ingress_rules in main.yml → make cloudflare; DNS + Access app
 # are manual dashboard steps).
 #
@@ -242,8 +243,8 @@
                   policy: colleague emails, One-Time PIN
 
           Promotion checklist (if NetBox is adopted):
-            - critical_pvcs + restore_targets (postgres + media PVCs), make backup-relabel
-            - k8s/network-policies/netbox.yml + make network-policies
-            - pin postgresql.image.tag (bitnami :latest floating-tag risk)
+            - DONE 2026-10-17: backups (critical_pvcs + restore_targets), postgres on the
+              official image + netbox-pg NetworkPolicy (k8s/netbox/postgres.yml)
+            - k8s/network-policies/netbox.yml for the app/valkey pods + make network-policies
             - CLAUDE.md service section + Prometheus scrape (granian /metrics :9090)
       tags: [netbox]

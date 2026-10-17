@@ -356,3 +356,11 @@
   ansible.builtin.include_tasks:
     file: ../../common/tasks/node-health.yml
   tags: [always]
+
+# --- sshd key-only baseline (task #80.1) -------------------------------------
+# Shared role so servers (here + playbook 32) and desktops (playbook 25) carry
+# the identical drop-in.
+- name: sshd hardening baseline
+  ansible.builtin.include_role:
+    name: ../roles/ssh-hardening
+  tags: [always]

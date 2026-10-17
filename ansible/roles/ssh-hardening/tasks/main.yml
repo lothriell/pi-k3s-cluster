@@ -1,0 +1,46 @@
+---
+# Key-only sshd baseline. Tailscale SSH (where enabled) answers on the tailnet
+# IP without sshd, so it stays a way in even if this ever broke OpenSSH.
+
+- name: Ensure sshd drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  tags: [ssh]
+
+- name: Key-only SSH hardening drop-in
+  ansible.builtin.copy:
+    dest: "{{ ssh_hardening_dropin }}"
+    content: |
+      # Managed by Ansible (kubernetes repo, role ssh-hardening)
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PubkeyAuthentication yes
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: Reload sshd
+  tags: [ssh]
+
+- name: Remove superseded hand-applied hardening drop-ins
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ ssh_hardening_superseded }}"
+  become: true
+  notify: Reload sshd
+  tags: [ssh]
+
+# Validate BEFORE the handler reloads — a broken config never reaches sshd.
+- name: Validate full sshd config
+  ansible.builtin.shell: "$(command -v sshd || echo /usr/sbin/sshd) -t"
+  changed_when: false
+  check_mode: false
+  become: true
+  tags: [ssh]

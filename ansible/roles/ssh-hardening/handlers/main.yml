@@ -1,0 +1,10 @@
+---
+# Reload only a RUNNING sshd: Debian/Ubuntu alias sshd.service → ssh.service;
+# a stopped (socket-activated / desktop-disabled) sshd reads the file on start.
+- name: Reload sshd
+  ansible.builtin.shell: |
+    for u in sshd ssh; do
+      if systemctl is-active --quiet "$u"; then systemctl reload "$u"; exit 0; fi
+    done
+    echo "sshd not running — config applies on next start"
+  become: true

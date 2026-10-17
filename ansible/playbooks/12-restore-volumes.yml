@@ -93,14 +93,27 @@
         size: 8Gi
         access_mode: ReadWriteOnce
         storage_class: longhorn-storage
+      # official postgres StatefulSet defectdojo-pg since 2026-10-17
+      # (was data-defectdojo-postgresql-0, chart-bundled bitnami)
       - namespace: defectdojo
-        pvc: data-defectdojo-postgresql-0
+        pvc: data-defectdojo-pg-0
         size: 8Gi
         access_mode: ReadWriteOnce
         storage_class: longhorn-storage
       - namespace: defectdojo
         pvc: defectdojo-django-media
         size: 5Gi
+        access_mode: ReadWriteOnce
+        storage_class: longhorn-storage
+      # NetBox promoted out of eval scope 2026-10-17 (official postgres STS netbox-pg)
+      - namespace: netbox
+        pvc: data-netbox-pg-0
+        size: 8Gi
+        access_mode: ReadWriteOnce
+        storage_class: longhorn-storage
+      - namespace: netbox
+        pvc: netbox-media
+        size: 1Gi
         access_mode: ReadWriteOnce
         storage_class: longhorn-storage
 

@@ -1,0 +1,19 @@
+---
+# =============================================================================
+# Playbook 32: sshd key-only baseline on every non-desktop Linux host (#80.1)
+# =============================================================================
+# Role ssh-hardening (10-hardening.conf drop-in). Covers the hosts the common
+# roles never touch — wazuh-server, pve-1, athena, artemis, rpizerow — plus the
+# K3s nodes (also applied by playbook 01 via common/common-arch on rebuild).
+# Desktops get the same role from playbook 25; macOS/WSL are out of scope.
+#
+# Usage:  make harden-server-ssh            (all)
+#         make harden-server-ssh HOST=<h>   (one host)
+# =============================================================================
+
+- name: sshd key-only baseline (servers)
+  hosts: "all:!desktops:!macos_nodes:!windows_wsl_nodes"
+  become: true
+  gather_facts: false
+  roles:
+    - role: ../roles/ssh-hardening
