@@ -93,6 +93,14 @@ desktop-onboard: ## Step 2 for a new Linux desktop: shell, CA trust, Wazuh agent
 harden-server-ssh: ## sshd key-only baseline (role ssh-hardening) on every non-desktop Linux host — optional HOST=<name>
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/32-harden-server-ssh.yml $(if $(HOST),--limit $(HOST),)
 
+.PHONY: amp-update
+amp-update: ## CubeCoders AMP update on the game servers — controller first, then targets (playbook 33) — optional HOST=<name>
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/33-amp-update.yml $(if $(HOST),--limit $(HOST),)
+
+.PHONY: pve-vzdump
+pve-vzdump: ## Proxmox vzdump of the stateful VMs (wazuh, g-01) to a thin LV on the boot SSD, job defined but off (playbook 34) — ARGS="-e run_now=true" backs up now
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/34-pve-vzdump.yml $(ARGS)
+
 .PHONY: personal-nopasswd
 personal-nopasswd: ## Personal user passwordless sudo on every Linux host except opted-out ones (loki) — optional HOST=<name>
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/31-personal-user-nopasswd.yml $(if $(HOST),--limit $(HOST),)

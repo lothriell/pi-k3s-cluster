@@ -5,7 +5,7 @@
 # Idempotent: re-runnable. Already-up-to-date hosts become no-ops.
 #
 # Phases:
-#   1. Non-cluster hosts (parallel): gpu_servers, sff_nodes, security_stack
+#   1. Non-cluster hosts (parallel): gpu_servers, sff_nodes, security_stack, game_servers
 #      — mixed Ubuntu (apt) and CachyOS (pacman) handled by OS family
 #   2. K3s agents (serial=1): preserves workload availability, kubectl wait
 #   3. K3s servers (serial=1): preserves etcd quorum, kubectl wait
@@ -28,7 +28,7 @@
   # no kubectl/Longhorn wait — which took the node (and the only replica of
   # the Prometheus volume) down hard on 2026-07-11. Cluster members are only
   # ever touched by the serial phases below.
-  hosts: gpu_servers:sff_nodes:security_stack:!k3s_cluster
+  hosts: gpu_servers:sff_nodes:security_stack:game_servers:!k3s_cluster
   become: true
   gather_facts: true
   tasks:

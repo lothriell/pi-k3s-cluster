@@ -1,0 +1,96 @@
+# =============================================================================
+# Playbook 33: CubeCoders AMP update — controller first, then targets (#84)
+# =============================================================================
+# Codifies the hand-run routine from the amp user's shell history:
+#   1. ampinstmgr package from the CubeCoders apt repo (= `getamp update`)
+#   2. as amp: ampinstmgr stopall → upgradeall → startall → status
+# Two plays: amp_controller first (targets must never run a newer AMP than
+# the controller), then amp_targets with serial: 1 so the other target's games
+# stay up while one host restarts. A combined "amp_controller:amp_targets"
+# pattern resolves alphabetically (gm-01 last), hence the split. A failed host
+# stops the run; the tasks are shared via the &amp_update_tasks anchor.
+#
+# `upgradeall` that fails is retried once with --nocache (what the history
+# shows fixing stuck upgrades), then `repair`.
+#
+# ampinstmgr runs via `sudo -u amp -H` from root: pipelining is off and acl
+# isn't installed, so become_user=amp can't hand over its temp files.
+# TERM is pinned: AMP starts instances in a terminal multiplexer, and the
+# controller's TERM (xterm-ghostty) has no terminfo on Ubuntu → startall fails
+# with "missing or unsuitable terminal" while upgradeall still succeeds.
+#
+# Usage:  make amp-update            (all AMP hosts)
+#         make amp-update HOST=<h>   (one host)
+# =============================================================================
+
+- name: AMP update — controller
+  hosts: amp_controller
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  environment: &amp_update_env
+    TERM: xterm-256color
+  vars: &amp_update_vars
+    amp_cmd: "sudo -u amp -H /opt/cubecoders/amp/ampinstmgr"
+    amp_version_file: /home/amp/.ampdata/instances/ADS01/AMPVersion
+  tasks: &amp_update_tasks
+    - name: AMP version before
+      ansible.builtin.slurp:
+        src: "{{ amp_version_file }}"
+      register: amp_before
+
+    - name: Update ampinstmgr from the CubeCoders apt repo
+      ansible.builtin.apt:
+        name: ampinstmgr
+        state: latest
+        update_cache: true
+
+    - name: Stop all AMP instances
+      ansible.builtin.command: "{{ amp_cmd }} stopall"
+      changed_when: true
+
+    - name: Upgrade all AMP instances
+      block:
+        - name: ampinstmgr upgradeall
+          ansible.builtin.command: "{{ amp_cmd }} upgradeall"
+          changed_when: true
+      rescue:
+        - name: Retry upgradeall with --nocache
+          ansible.builtin.command: "{{ amp_cmd }} --nocache upgradeall"
+          changed_when: true
+
+        - name: ampinstmgr repair
+          ansible.builtin.command: "{{ amp_cmd }} repair"
+          changed_when: true
+
+    - name: Start all AMP instances
+      ansible.builtin.command: "{{ amp_cmd }} startall"
+      changed_when: true
+
+    - name: AMP status
+      ansible.builtin.command: "{{ amp_cmd }} status"
+      register: amp_status
+      changed_when: false
+      failed_when: amp_status.stdout_lines | select('match', '^ADS01 ') | select('search', '✓') | list | length == 0
+
+    - name: AMP version after
+      ansible.builtin.slurp:
+        src: "{{ amp_version_file }}"
+      register: amp_after
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: AMP {{ amp_before.content | b64decode | trim }}
+          → {{ amp_after.content | b64decode | trim }};
+          {{ amp_status.stdout_lines | select('search', '│') | reject('match', '^Instance Name') | list }}
+
+- name: AMP update — targets (one at a time)
+  hosts: amp_targets
+  become: true
+  serial: 1
+  gather_facts: false
+  any_errors_fatal: true
+  environment: *amp_update_env
+  vars: *amp_update_vars
+  tasks: *amp_update_tasks

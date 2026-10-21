@@ -91,6 +91,9 @@ macmini_lan_ip: 10.0.0.12
 pve_lan_ip: 10.0.0.10
 desktop_arch_t_lan_ip: 10.0.0.50
 desktop_cachy_t_lan_ip: 10.0.0.51
+game_gm01_ip: 10.0.0.30               # AMP controller VM
+game_g01_ip: 10.0.0.31               # game server VM 1
+game_g02_ip: 10.0.0.32               # game server VM 2
 desktop_loki_lan_ip: 10.0.0.94         # Dell laptop (Omarchy/Arch), home LAN
 
 # Cloudflare tunnel domain
@@ -152,6 +155,11 @@ syncthing_thorwsl_tsip: 100.x.x.x
 pve_host_ip: 100.64.0.99
 # MAC of the pve uplink NIC (vmbr0 bridge port) — used by bridge-selfheal
 pve_uplink_mac: "aa:bb:cc:dd:ee:ff"
+# NIC name pins (systemd .link, MAC match), replacing udev 70-persistent-net.
+# First entry = the vmbr0 bridge port under its /etc/network/interfaces name.
+pve_nic_pins:
+  - { name: eno2, mac: "{{ pve_uplink_mac }}" }
+  - { name: nic1, mac: "aa:bb:cc:dd:ee:00" }
 
 # NetBox Discovery eval (playbook 24) — custom image with diode plugin
 # (k8s/netbox/Dockerfile.diode); diode server = docker compose on the GPU node

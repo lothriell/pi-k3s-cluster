@@ -30,8 +30,18 @@
 - name: Proxmox host patching (userspace default; -e reboot=true for window)
   hosts: proxmox_hosts
   become: true
+  # A failed task must not drop a pending initramfs rebuild (NIC naming) —
+  # seen on the first #85 pre-work run.
+  force_handlers: true
   vars:
     do_reboot: "{{ reboot | default(false) | bool }}"
+    # -e release_upgrade=true (with reboot=true): PVE major upgrade inside the
+    # window — VMs are already down, the host reboots into the new release.
+    # 8 → 9 = Debian bookworm → trixie (#85). Bump the three below for 9 → 10.
+    do_release_upgrade: "{{ release_upgrade | default(false) | bool }}"
+    pve_release_from: bookworm
+    pve_release_to: trixie
+    pve_release_major: 9
     # -e placement_override=true runs the window even though some volume would
     # lose ALL its replicas while the host is down (accepted-fault mode).
     placement_ok_override: "{{ placement_override | default(false) | bool }}"
@@ -41,6 +51,11 @@
     # Desktop VMs (104/105) are shut down too but autostart is not asserted.
     pve_critical_vmids: [110, 111, 112]
   tasks:
+    - name: release_upgrade needs the reboot window
+      ansible.builtin.assert:
+        that: do_reboot or not do_release_upgrade
+        fail_msg: "-e release_upgrade=true only runs inside the window: add -e reboot=true"
+
     # ------------------------------------------------------------------------
     # Always: keep the uplink self-heal units codified. Planted manually
     # during the 2026-07-25 incident (kernel upgrade renamed the NICs and
@@ -74,9 +89,158 @@
       when: pve_uplink_mac is defined
 
     # ------------------------------------------------------------------------
+    # PVE 9 / trixie pre-work (#85) — all safe with VMs running; the NIC and
+    # interfaces changes take effect at the next reboot, so prove them with a
+    # plain 8.x window reboot BEFORE the release upgrade (no OOB console).
+    # ------------------------------------------------------------------------
+    - name: Snapshot host config (tar on host, copy to the controller)
+      ansible.builtin.shell: >
+        tar czf /root/pve-config-{{ ansible_date_time.date }}.tgz
+        /etc/pve /etc/network /etc/hosts /etc/apt /etc/systemd/network
+        /etc/udev/rules.d /etc/default/grub /etc/lvm /etc/kernel
+      args:
+        creates: /root/pve-config-{{ ansible_date_time.date }}.tgz
+      tags: [pve-prep]
+
+    - name: Fetch config snapshot to ~/backups/pve-1 on the controller
+      ansible.builtin.fetch:
+        src: /root/pve-config-{{ ansible_date_time.date }}.tgz
+        dest: "{{ lookup('env', 'HOME') }}/backups/{{ inventory_hostname }}/"
+        flat: true
+      tags: [pve-prep]
+
+    # pve8to9 FAIL: the node name must resolve to an address the host has.
+    # Was a pre-move 192.168.x address until 2026-10-19.
+    - name: /etc/hosts — node name resolves to the vmbr0 address
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: '^\S+\s+(\S+\s+)*{{ ansible_hostname }}(\s|$)'
+        line: "{{ pve_lan_ip }} {{ ansible_hostname }}.local {{ ansible_hostname }}"
+      tags: [pve-prep]
+
+    # pve8to9 FAIL: the host boots GRUB-EFI; the unused systemd-boot
+    # meta-package breaks other boot-related package upgrades on trixie.
+    - name: Remove systemd-boot meta-package
+      ansible.builtin.apt:
+        name: systemd-boot
+        state: absent
+      tags: [pve-prep]
+
+    # Not hypervisor software: ucaresystem-core comes from an Ubuntu jammy PPA,
+    # Docker had 0 containers; its only data was a 2024-11 macOS-in-Docker
+    # experiment (3 volumes, ~18 GB) — deleted with the user's go-ahead.
+    - name: Remove stray packages from the hypervisor
+      ansible.builtin.apt:
+        name:
+          - ucaresystem-core
+          - docker.io
+          - docker-compose
+          - docker
+          - wmdocker
+          - containerd
+          - python3-docker
+          - python3-dockerpty
+        state: absent
+      tags: [pve-prep]
+
+    - name: Delete leftover Docker / containerd data
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/docker
+        - /var/lib/containerd
+      tags: [pve-prep]
+
+    - name: Drop the Ubuntu PPA repo + key
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/sources.list.d/utappia.list
+        - /etc/apt/keyrings/utappia-archive-keyring.gpg
+      tags: [pve-prep]
+
+    # pve8to9 WARN: legacy udev NIC pinning. The uplink's kernel name is eno1
+    # (altname); only the udev rule makes it eno2, which vmbr0 bridge-ports
+    # uses — removing the rule without a .link pin would strand the site.
+    - name: Pin NIC names with systemd .link files (MAC match)
+      ansible.builtin.template:
+        src: templates/pve-nic-pin.link.j2
+        dest: "/etc/systemd/network/10-pve-{{ item.name }}.link"
+        mode: "0644"
+      loop: "{{ pve_nic_pins }}"
+      when: pve_nic_pins is defined
+      notify: Regenerate initramfs
+      tags: [pve-prep]
+
+    - name: Check for the legacy udev NIC rule
+      ansible.builtin.stat:
+        path: /etc/udev/rules.d/70-persistent-net.rules
+      register: legacy_udev_rule
+      tags: [pve-prep]
+
+    - name: Retire the legacy udev NIC rule (kept in /root)
+      ansible.builtin.shell: >
+        mv /etc/udev/rules.d/70-persistent-net.rules
+        /root/70-persistent-net.rules.pre-pve9
+      when:
+        - pve_nic_pins is defined
+        - legacy_udev_rule.stat.exists
+      notify: Regenerate initramfs
+      tags: [pve-prep]
+
+    # Stale stanzas: eno1 was the igb's old pinned name (now nic1); vmbr1 has
+    # no VM users and bridges eth1, which does not exist. Live vmbr1 goes away
+    # at the next reboot — no ifreload on a host without OOB access.
+    - name: /etc/network/interfaces — igb stanza under its pinned name
+      ansible.builtin.replace:
+        path: /etc/network/interfaces
+        regexp: '^iface eno1 inet manual$'
+        replace: 'iface nic1 inet manual'
+        backup: true
+      when: pve_nic_pins is defined
+      tags: [pve-prep]
+
+    - name: /etc/network/interfaces — drop the dead eth1 / vmbr1 stanzas
+      ansible.builtin.replace:
+        path: /etc/network/interfaces
+        regexp: '\niface eth1 inet manual\n\nauto vmbr1\niface vmbr1 inet manual\n(\t.*\n)+'
+        replace: ''
+        backup: true
+      tags: [pve-prep]
+
+    # pve8to9 NOTICE: PVE 9 disables LVM autoactivation for new guest volumes;
+    # the shipped migration flips existing ones (metadata only, idempotent).
+    - name: Disable LVM autoactivation on existing guest volumes
+      ansible.builtin.command: /usr/share/pve-manager/migrations/pve-lvm-disable-autoactivation --assume-yes
+      args:
+        removes: /usr/share/pve-manager/migrations/pve-lvm-disable-autoactivation
+      register: lvm_autoact
+      changed_when: "'Disable autoactivation on' in lvm_autoact.stdout"
+      tags: [pve-prep]
+
+    # The initramfs carries the NIC naming (udev rule / .link files): it must
+    # be rebuilt before the window reboot below, not at end of play.
+    - name: Rebuild initramfs now if NIC naming changed
+      ansible.builtin.meta: flush_handlers
+
+    # ------------------------------------------------------------------------
     # Userspace patching — Proxmox needs dist-upgrade (plain upgrade can hold
     # back pve-* meta-packages and break dependencies).
     # ------------------------------------------------------------------------
+    - name: Check for the deb822 PVE enterprise repo
+      ansible.builtin.stat:
+        path: /etc/apt/sources.list.d/pve-enterprise.sources
+      register: pve_ent_sources
+
+    - name: Keep the PVE enterprise repo disabled (no subscription)
+      ansible.builtin.lineinfile:
+        path: /etc/apt/sources.list.d/pve-enterprise.sources
+        regexp: '^Enabled:'
+        line: "Enabled: no"
+      when: pve_ent_sources.stat.exists
+
     - name: apt update + dist-upgrade (kernel staged, not activated)
       ansible.builtin.apt:
         update_cache: yes
@@ -96,6 +260,21 @@
              + '). Activate in a planned window: -e reboot=true'
              if newest_kernel.stdout != ansible_kernel
              else 'Running kernel ' + ansible_kernel + ' is current — no reboot pending.' }}
+
+    - name: PVE major-upgrade checklist (pve8to9, report only)
+      ansible.builtin.shell: >
+        command -v pve8to9 >/dev/null || exit 0;
+        pve8to9 --full 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
+        | grep -E '^(FAIL|WARN|NOTICE):|^(TOTAL|PASSED|WARNINGS|FAILURES):' || true
+      register: pve8to9
+      changed_when: false
+      tags: [pve-prep]
+
+    - name: Report pve8to9 findings
+      ansible.builtin.debug:
+        var: pve8to9.stdout_lines
+      when: pve8to9.stdout | length > 0
+      tags: [pve-prep]
 
     # ------------------------------------------------------------------------
     # Reboot window
@@ -122,9 +301,11 @@
         - name: Pre-flight — replica-placement audit
           delegate_to: localhost
           become: false
-          ansible.builtin.shell: >
-            kubectl get replicas.longhorn.io -n longhorn-system -o json
-            | jq -r --argjson pve '{{ pve_k3s_nodes | to_json }}'
+          # `|` + backslashes, not `>`: folded scalars keep more-indented lines
+          # as real newlines, which split the jq filter into a new shell command.
+          ansible.builtin.shell: |
+            kubectl get replicas.longhorn.io -n longhorn-system -o json \
+            | jq -r --argjson pve '{{ pve_k3s_nodes | to_json }}' \
               '[.items | group_by(.spec.volumeName)[]
                 | select(all(.[]; .spec.nodeID as $n | $pve | index($n) != null))
                 | .[0].spec.volumeName] | join(",")'
@@ -146,11 +327,11 @@
         - name: Pre-flight — check R2 backup freshness (warn only)
           delegate_to: localhost
           become: false
-          ansible.builtin.shell: >
-            live=$(kubectl get volumes.longhorn.io -n longhorn-system -o json
-            | jq -c '[.items[].metadata.name]');
-            kubectl get backupvolumes.longhorn.io -n longhorn-system -o json
-            | jq -r --argjson live "$live"
+          ansible.builtin.shell: |
+            live=$(kubectl get volumes.longhorn.io -n longhorn-system -o json \
+            | jq -c '[.items[].metadata.name]')
+            kubectl get backupvolumes.longhorn.io -n longhorn-system -o json \
+            | jq -r --argjson live "$live" \
               '[.items[] | select(.spec.volumeName as $v | $live | index($v))
                 | select(.status.lastBackupAt != null and
                   (.status.lastBackupAt | fromdateiso8601) < (now - 172800))
@@ -226,6 +407,110 @@
           retries: 36
           delay: 10
           changed_when: false
+
+        # ------------------------------------------------------------------
+        # Release upgrade (-e release_upgrade=true) — VMs are down by now.
+        # Runs DETACHED (systemd-run): Ansible reaches the host over the
+        # tailnet, and an SSH drop mid-dpkg must not kill the upgrade.
+        # tailscale is held for the same reason (its postinst restarts
+        # tailscaled); it moves to the new suite after the reboot.
+        # Config prompts: confdef (maintainer's version where the file is
+        # unmodified) + confold (keep local edits: grub, lvm, hosts …).
+        # ------------------------------------------------------------------
+        - name: Current PVE major version
+          ansible.builtin.shell: pveversion | sed -E 's|pve-manager/([0-9]+)\..*|\1|'
+          register: pve_major_before
+          changed_when: false
+          when: do_release_upgrade
+
+        - name: Release upgrade to PVE {{ pve_release_major }}
+          when:
+            - do_release_upgrade
+            - pve_major_before.stdout | int < pve_release_major
+          block:
+            - name: pve{{ pve_release_major - 1 }}to{{ pve_release_major }} must report no FAIL
+              ansible.builtin.shell: >
+                pve{{ pve_release_major - 1 }}to{{ pve_release_major }} --full 2>&1
+                | sed 's/\x1b\[[0-9;]*m//g' | grep '^FAIL:' || true
+              register: release_check
+              changed_when: false
+              failed_when: release_check.stdout | length > 0
+
+            - name: Hold tailscale during the upgrade
+              ansible.builtin.dpkg_selections:
+                name: tailscale
+                selection: hold
+
+            - name: Switch Debian + PVE repos to {{ pve_release_to }}
+              ansible.builtin.replace:
+                path: "{{ item }}"
+                regexp: '\b{{ pve_release_from }}\b'
+                replace: "{{ pve_release_to }}"
+              loop:
+                - /etc/apt/sources.list
+                - /etc/apt/sources.list.d/pve-install-repo.list
+
+            # ceph-fuse is a client package only (no hyper-converged Ceph);
+            # the wiki still wants the matching Ceph repo for its upgrades.
+            - name: Ceph client repo for {{ pve_release_to }}
+              ansible.builtin.copy:
+                dest: /etc/apt/sources.list.d/ceph.list
+                content: |
+                  # Managed by Ansible (81-upgrade-proxmox.yml)
+                  deb http://download.proxmox.com/debian/ceph-squid {{ pve_release_to }} no-subscription
+                mode: "0644"
+
+            - name: Start the dist-upgrade detached
+              ansible.builtin.shell: >
+                systemd-run --unit=pve-release-upgrade --collect
+                --setenv=DEBIAN_FRONTEND=noninteractive
+                --setenv=APT_LISTCHANGES_FRONTEND=none
+                /bin/bash -c 'exec >/root/pve-release-upgrade.log 2>&1;
+                apt-get update && apt-get -y
+                -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
+                dist-upgrade; echo "RESULT rc=$?"'
+              changed_when: true
+
+            # Poll the RESULT line, not `systemctl is-active`: mid-upgrade the
+            # old libssl3 is gone before libssl3t64 lands and systemctl itself
+            # fails to load libcrypto — the first 8→9 run read that as "done".
+            - name: Wait for the dist-upgrade to finish (up to 90 min)
+              ansible.builtin.command: grep -c '^RESULT' /root/pve-release-upgrade.log
+              register: upgrade_done
+              until: upgrade_done.stdout | trim == "1"
+              retries: 270
+              delay: 20
+              changed_when: false
+              failed_when: false
+
+            - name: Upgrade log tail
+              ansible.builtin.command: tail -25 /root/pve-release-upgrade.log
+              register: upgrade_log
+              changed_when: false
+
+            - name: Fail (no reboot) unless the dist-upgrade succeeded
+              ansible.builtin.assert:
+                that: "'RESULT rc=0' in upgrade_log.stdout"
+                fail_msg: >-
+                  dist-upgrade failed — host NOT rebooted, VMs still down. Fix on
+                  the host (log: /root/pve-release-upgrade.log), then reboot:
+                  {{ upgrade_log.stdout_lines }}
+
+            # The new release ships its enterprise repo as deb822 `.sources`,
+            # ENABLED — without a subscription apt update then 401s (8→9 did).
+            - name: Disable the PVE enterprise repo (no subscription)
+              ansible.builtin.lineinfile:
+                path: /etc/apt/sources.list.d/pve-enterprise.sources
+                regexp: '^Enabled:'
+                line: "Enabled: no"
+                create: false
+              failed_when: false
+
+            - name: pveversion reports PVE {{ pve_release_major }}
+              ansible.builtin.shell: pveversion
+              register: pve_after
+              changed_when: false
+              failed_when: "('pve-manager/' ~ pve_release_major ~ '.') not in pve_after.stdout"
 
         - name: Reboot Proxmox host (kernel activation)
           ansible.builtin.reboot:
@@ -309,3 +594,39 @@
           retries: 30
           delay: 10
           changed_when: false
+
+        - name: tailscale onto the {{ pve_release_to }} repo + unhold
+          when: do_release_upgrade
+          block:
+            - name: Switch the tailscale repo suite
+              ansible.builtin.replace:
+                path: /etc/apt/sources.list.d/tailscale.list
+                regexp: '\b{{ pve_release_from }}\b'
+                replace: "{{ pve_release_to }}"
+
+            - name: Unhold tailscale
+              ansible.builtin.dpkg_selections:
+                name: tailscale
+                selection: install
+
+            # Detached: the postinst restarts tailscaled under our SSH session.
+            - name: Upgrade tailscale (detached)
+              ansible.builtin.shell: >
+                systemd-run --unit=tailscale-upgrade --collect
+                --setenv=DEBIAN_FRONTEND=noninteractive
+                /bin/bash -c 'apt-get update && apt-get install -y tailscale'
+              changed_when: true
+
+            - name: Wait for tailscale upgrade
+              ansible.builtin.command: systemctl is-active tailscale-upgrade
+              register: ts_unit
+              until: ts_unit.stdout != 'active'
+              retries: 30
+              delay: 10
+              changed_when: false
+              failed_when: false
+
+  handlers:
+    - name: Regenerate initramfs
+      ansible.builtin.command: update-initramfs -u -k all
+      changed_when: true

@@ -12,7 +12,7 @@
 #        ansible-playbook ansible/playbooks/00-setup-ssh-aliases.yml
 
 - name: Distribute fleet ssh aliases
-  hosts: k3s_cluster:sff_nodes:desktops:windows_wsl_nodes:display_nodes:macos_nodes:security_stack
+  hosts: k3s_cluster:sff_nodes:desktops:windows_wsl_nodes:display_nodes:macos_nodes:security_stack:game_servers
   become: true
   gather_facts: true
   vars:

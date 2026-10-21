@@ -666,10 +666,14 @@ serverFiles:
               description: "Approaching the 2 GiB quota — etcd goes read-only at quota. Compact/defrag or find the writer."
       - name: trivy
         rules:
-          # Delta-based: fires when the cluster-wide CRITICAL count rises vs
-          # 6 h ago. Avoids paging on the existing baseline (~88 CVEs in
-          # upstream-managed workloads). Resolves automatically when a chart
-          # upgrade or image rebuild drives the count back down.
+          # Fires when the cluster-wide CRITICAL count exceeds its MAX over the
+          # previous 24 h (window ends 2 h ago, so a real rise pages ~30 min in
+          # and auto-resolves ~2 h later). Avoids paging on the existing baseline
+          # (~74 CVEs in upstream-managed workloads).
+          # Max-over-window, not a point-vs-offset delta: trivy-operator deletes
+          # and regenerates each report on its TTL rescan, so a report briefly
+          # vanishes; with `now - offset 6h` the RECOVERY from that dip paged 6 h
+          # later (metallb-controller gap 12:10-12:55 → false page 2026-10-18 18:40Z).
           # Reports on scaled-down ReplicaSets are excluded: trivy-operator
           # normally deletes them on rollout, but a rescan racing a rollout
           # left the old open-webui RS report behind and the SAME 3 CVEs were
@@ -680,16 +684,16 @@ serverFiles:
                 unless on (namespace, resource_name)
                 label_replace(kube_replicaset_spec_replicas == 0, "resource_name", "$1", "replicaset", "(.*)"))
               -
-              sum(trivy_image_vulnerabilities{severity="Critical"} offset 6h
+              max_over_time((sum(trivy_image_vulnerabilities{severity="Critical"}
                 unless on (namespace, resource_name)
-                label_replace(kube_replicaset_spec_replicas offset 6h == 0, "resource_name", "$1", "replicaset", "(.*)"))
+                label_replace(kube_replicaset_spec_replicas == 0, "resource_name", "$1", "replicaset", "(.*)")))[24h:5m] offset 2h)
               > 0
             for: 30m
             labels:
               severity: critical
             annotations:
               summary: "{{ '{{' }} $value {{ '}}' }} new critical CVE(s) detected in cluster images"
-              description: "Cluster-wide Trivy CRITICAL count rose vs 6h ago. Inspect: kubectl get vulnerabilityreports -A -o json | jq '[.items[] | select(.report.summary.criticalCount > 0)]'"
+              description: "Cluster-wide Trivy CRITICAL count rose above its 24h max. Inspect: kubectl get vulnerabilityreports -A -o json | jq '[.items[] | select(.report.summary.criticalCount > 0)]'"
       # Off-site backup pipeline health (DR-2 mirror; DR-4 adds Longhorn/etcd
       # backup-age rules here). kube-state-metrics job metrics: completed Jobs
       # stay visible for ttlSecondsAfterFinished (7d) on the mirror CronJob.

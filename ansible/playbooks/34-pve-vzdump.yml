@@ -1,0 +1,126 @@
+# =============================================================================
+# Playbook 34: Proxmox vzdump backups of the stateful VMs (#85)
+# =============================================================================
+# No vzdump had run on pve-1 since 2024. The K3s VMs are rebuildable (Longhorn
+# data is in R2 + B2); the VMs that hold state of their own are backed up here:
+# wazuh-server (indexer, agent registry, keys) and ubuntu-g-01 (AMP + game
+# worlds). Also the safety net for the PVE 8 → 9 upgrade.
+#
+# Target: a thin LV in the `pve` VG (local-lvm pool `data`, otherwise unused).
+# That VG lives on the boot SSD, a DIFFERENT physical disk from the VM disks
+# (VMdata and gamehost01 are each on their own SSD), so a dead VM disk doesn't
+# take its backups with it. Same box though — not offsite.
+#
+# Mode snapshot + guest agent (fs-freeze): the VMs keep running.
+#
+# Usage:  make pve-vzdump                       (storage + weekly job, idempotent)
+#         make pve-vzdump ARGS="-e run_now=true" (also start a backup now)
+# =============================================================================
+
+- name: Proxmox vzdump backups
+  hosts: proxmox_hosts
+  become: true
+  gather_facts: false
+  vars:
+    vzdump_vg: pve
+    vzdump_thinpool: data
+    vzdump_lv: vzdump
+    vzdump_lv_size: 320g
+    vzdump_mount: /mnt/vzdump
+    vzdump_storage: backup-local
+    vzdump_job_id: vzdump-stateful
+    # 101 = ubuntu-g-01 (AMP target, game worlds), 112 = wazuh-server.
+    vzdump_vmids: [101, 112]
+    # Host-local time (Europe/Bratislava). Before AMP's own 04:00 UTC backup.
+    vzdump_schedule: "sun 02:00"
+    vzdump_prune: "keep-last=1"
+    # Weekly, one copy kept (decided after the PVE 9 upgrade, #85.1): ~50 GB of
+    # the 320G LV; the previous dump is pruned only after the new one succeeds.
+    vzdump_job_enabled: true
+    # PVE's own template syntax — !unsafe keeps Ansible from rendering it.
+    vzdump_notes: !unsafe '{{guestname}}'
+    run_now: false
+  tasks:
+    - name: Thin LV for backups in the local-lvm pool
+      community.general.lvol:
+        vg: "{{ vzdump_vg }}"
+        thinpool: "{{ vzdump_thinpool }}"
+        lv: "{{ vzdump_lv }}"
+        size: "{{ vzdump_lv_size }}"
+
+    - name: ext4 on the backup LV (never reformats an existing fs)
+      community.general.filesystem:
+        dev: "/dev/{{ vzdump_vg }}/{{ vzdump_lv }}"
+        fstype: ext4
+
+    - name: Mount backup LV
+      ansible.posix.mount:
+        path: "{{ vzdump_mount }}"
+        src: "/dev/{{ vzdump_vg }}/{{ vzdump_lv }}"
+        fstype: ext4
+        opts: defaults,nofail
+        state: mounted
+
+    - name: Check for the backup storage
+      ansible.builtin.command: pvesm status --storage {{ vzdump_storage }}
+      register: storage_status
+      changed_when: false
+      failed_when: false
+
+    # is_mountpoint: PVE refuses to write when the LV isn't mounted, instead
+    # of silently filling the root filesystem.
+    - name: Register the directory storage for backups
+      ansible.builtin.command: >
+        pvesm add dir {{ vzdump_storage }}
+        --path {{ vzdump_mount }} --content backup --is_mountpoint yes
+      when: storage_status.rc != 0
+      changed_when: true
+
+    - name: Check for the backup job
+      ansible.builtin.command: pvesh get /cluster/backup/{{ vzdump_job_id }} --output-format json
+      register: job_status
+      changed_when: false
+      failed_when: false
+
+    - name: Create or update the backup job
+      ansible.builtin.command:
+        argv: >-
+          {{ ['pvesh', 'create' if job_status.rc != 0 else 'set',
+              '/cluster/backup' if job_status.rc != 0 else '/cluster/backup/' + vzdump_job_id]
+             + (['--id', vzdump_job_id] if job_status.rc != 0 else [])
+             + ['--schedule', vzdump_schedule,
+                '--storage', vzdump_storage,
+                '--vmid', vzdump_vmids | join(','),
+                '--mode', 'snapshot',
+                '--compress', 'zstd',
+                '--prune-backups', vzdump_prune,
+                '--notes-template', vzdump_notes,
+                '--enabled', vzdump_job_enabled | bool | ternary('1', '0')] }}
+      when: >-
+        job_status.rc != 0 or
+        (job_status.stdout | from_json).schedule != vzdump_schedule or
+        (job_status.stdout | from_json).vmid != (vzdump_vmids | join(',')) or
+        ((job_status.stdout | from_json)['prune-backups'] | default({})).items()
+          | map('join', '=') | join(',') != vzdump_prune or
+        ((job_status.stdout | from_json).enabled | default(1) | int) != (vzdump_job_enabled | bool | int)
+      changed_when: true
+
+    - name: Run the backup job now (-e run_now=true)
+      ansible.builtin.command: >
+        vzdump {{ vzdump_vmids | join(' ') }}
+        --storage {{ vzdump_storage }} --mode snapshot --compress zstd
+        --prune-backups {{ vzdump_prune }} --notes-template '{{ vzdump_notes }}'
+      when: run_now | bool
+      changed_when: true
+      async: 10800
+      poll: 30
+
+    - name: Backups on the storage
+      ansible.builtin.shell: >
+        pvesm list {{ vzdump_storage }}; df -h {{ vzdump_mount }} | tail -1
+      register: backups
+      changed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        var: backups.stdout_lines
