@@ -138,6 +138,23 @@ data:
       note "⬆ forgejo: chart $dep_fj → $lat_fj (app $lat_fj_app)"
     fi
 
+    # --- 2b. netbox OCI chart + custom netbox-diode image ---------------------
+    # Image tag is ours (v<netbox>-plugin<diode>, k8s/netbox/Dockerfile.diode),
+    # so compare both halves against upstream releases — a rebuild is the update.
+    dep_nb=$(jq -r '.[] | select(.name=="netbox") | .chart' /tmp/releases.json | sed 's/^netbox-//')
+    lat_nb=$(helm show chart oci://ghcr.io/netbox-community/netbox-chart/netbox 2>/dev/null | awk '/^version:/{print $2}')
+    if [ -n "$dep_nb" ] && [ -n "$lat_nb" ] && [ "$dep_nb" != "$lat_nb" ]; then
+      note "⬆ netbox: chart $dep_nb → $lat_nb"
+    fi
+    nb_tag=$(kubectl -n netbox get deployment netbox -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed 's/.*://')
+    if [ -n "$nb_tag" ]; then
+      nb_app=$(echo "${nb_tag%%-plugin*}" | sed 's/^v//'); nb_plugin=${nb_tag##*-plugin}
+      lat_app=$(curl -sf --max-time 20 "https://api.github.com/repos/netbox-community/netbox/releases/latest" | jq -r '.tag_name // empty' | sed 's/^v//')
+      lat_plugin=$(curl -sf --max-time 20 "https://api.github.com/repos/netboxlabs/diode-netbox-plugin/releases/latest" | jq -r '.tag_name // empty' | sed 's/^v//')
+      [ -n "$lat_app" ] && [ "$nb_app" != "$lat_app" ] && note "⬆ netbox-diode image: NetBox $nb_app → $lat_app (rebuild Dockerfile.diode)"
+      [ -n "$lat_plugin" ] && [ "$nb_plugin" != "$lat_plugin" ] && note "⬆ netbox-diode image: plugin $nb_plugin → $lat_plugin (rebuild Dockerfile.diode)"
+    fi
+
     # --- 3. raw-manifest images vs github releases --------------------------
     while read -r ns kind name cmatch ghrepo; do
       [ -z "$ns" ] && continue
@@ -158,6 +175,18 @@ data:
     k3s_latest=$(curl -sf --max-time 20 "https://update.k3s.io/v1-release/channels/stable" -o /dev/null -w '%{redirect_url}' | sed 's|.*/||')
     if [ -n "$k3s_latest" ] && [ "$k3s_now" != "$k3s_latest" ]; then
       note "⬆ k3s: $k3s_now → $k3s_latest (serial upgrade, see CLAUDE.md pitfalls)"
+    fi
+
+    # --- 4b. tailscale (fleet, outside the cluster) ---------------------------
+    # Tailscale bulletins (TS-YYYY-NNN) mostly carry NO CVE ids, so Wazuh/Trivy
+    # never flag it (2026-10-27: TS-2026-013 unseen, Macs' daemons months old).
+    # The fleet isn't visible from here — compare stable against the version the
+    # fleet was last brought to (tailscale_fleet_version in main.yml), then audit
+    # with `make tailscale-versions`.
+    ts_fleet="{{ tailscale_fleet_version }}"
+    ts_latest=$(curl -sf --max-time 20 "https://pkgs.tailscale.com/stable/?mode=json" | jq -r '.TarballsVersion // empty')
+    if [ -n "$ts_latest" ] && [ "$ts_fleet" != "$ts_latest" ]; then
+      note "⬆ tailscale (fleet): $ts_fleet → $ts_latest (make tailscale-versions; bulletins tailscale.com/security-bulletins)"
     fi
 
     # --- send digest ---------------------------------------------------------

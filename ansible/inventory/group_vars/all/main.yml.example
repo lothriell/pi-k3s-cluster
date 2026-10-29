@@ -74,6 +74,7 @@ tailscale_hel: 100.x.x.x
 # SSH sources allowed through ufw on desktops (playbook 25)
 desktop_ssh_allowed_cidrs: ["192.168.0.0/16", "100.64.0.0/10", "fd7a:115c:a1e0::/48"]   # home LAN + tailnet (v4/v6)
 tailscale_macmini: 100.x.x.x
+tailscale_nemesis: 100.x.x.x   # MacBook Air (usually also the controller)
 tailscale_wazuh_server: 100.x.x.x
 tailscale_thorwsl: 100.64.0.15
 # Fleet tailnet IPs for the distributed ssh aliases (00-setup-ssh-aliases.yml)
@@ -164,7 +165,7 @@ pve_nic_pins:
 # NetBox Discovery eval (playbook 24) — custom image with diode plugin
 # (k8s/netbox/Dockerfile.diode); diode server = docker compose on the GPU node
 netbox_image_repository: "your-ghcr-namespace/netbox-diode"
-netbox_image_tag: "v4.7.3-plugin1.18.1"
+netbox_image_tag: "v4.7.4-plugin1.18.3"
 netbox_diode_target: "grpc://<gpu-node-ip>:8080/diode"
 
 # Diode + orb-agent (playbook 27 / roles/diode) — discovery scope
@@ -175,3 +176,7 @@ orb_snmp_policies:
   - name: unifi_snmp_home
     site: home
     targets: ["<home-cluster-subnet>/24"]
+
+# Tailscale version the whole fleet was last brought to — release-watcher
+# (section 4b) flags a newer stable; audit with `make tailscale-versions`.
+tailscale_fleet_version: "1.104.4"

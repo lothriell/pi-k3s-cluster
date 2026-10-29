@@ -252,6 +252,10 @@ diode: ## Deploy the diode server + orb-agent on the GPU node (NetBox Discovery;
 control-keys: ## Authorize extra controller keys (control_pubkeys, e.g. macmini) for ansible fleet-wide + personal user on gpu_servers
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/28-authorize-control-keys.yml
 
+.PHONY: mac-upgrade
+mac-upgrade: ## Upgrade the Macs (macmini + Air): brew formulae + tailscaled system daemon refresh (playbook 80, macOS phases only)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/80-upgrade-packages.yml --limit macos_nodes
+
 .PHONY: on-macmini
 on-macmini: ## Run a long job on the macmini in tmux (survives Air lid-close): make on-macmini CMD="ansible-playbook ansible/playbooks/80-upgrade-packages.yml"
 	@scripts/on-macmini.sh $(if $(NAME),-n $(NAME),) -- $(CMD)
@@ -264,10 +268,14 @@ netbox: ## Deploy NetBox (IPAM/DCIM eval) at netbox.<local_domain>
 wazuh-dojo-export: ## Deploy daily Wazuh→DefectDojo vulnerability export (timer on the Wazuh VM)
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/22-deploy-wazuh-dojo-export.yml
 
+.PHONY: tailscale-versions
+tailscale-versions: ## Audit the RUNNING tailscaled version on every host (+ this Mac) vs latest stable — Mac daemons lag brew (see script header)
+	@scripts/tailscale-versions.sh
+
 .PHONY: open-webui
-open-webui: ## Deploy Open WebUI (chat UI for Ollama) — plain manifest + local ingress; PVC comes from restore-volumes on a rebuild
+open-webui: ## Deploy Open WebUI (chat UI for Ollama) — plain manifest; PVC only if absent (restore-volumes creates it on a rebuild); ingress = open-webui-local from playbook 03
 	kubectl apply -f k8s/open-webui/open-webui.yml
-	@[ -f k8s/open-webui/ingress.local.yml ] && kubectl apply -f k8s/open-webui/ingress.local.yml || echo "k8s/open-webui/ingress.local.yml missing (copy from .example) — no ingress applied"
+	@kubectl -n open-webui get pvc open-webui-data >/dev/null 2>&1 && echo "pvc open-webui-data exists — left as is" || kubectl apply -f k8s/open-webui/pvc.yml
 
 .PHONY: services
 services: authentik forgejo vaultwarden netbox defectdojo backup-mirror open-webui backup-relabel ## Post-`all` service tier (everything live that is NOT in the base chain), ends with backup-relabel so restored PVCs enrol

@@ -22,7 +22,7 @@ Browser → chat.<local_domain> → Traefik (MetalLB VIP)
 ## Deployment
 
 ```bash
-kubectl apply -f k8s/open-webui/open-webui.yml
+make open-webui   # open-webui.yml + pvc.yml (PVC only if absent)
 ```
 
 This creates:
@@ -84,7 +84,7 @@ print('Password updated')
 On `make nuke && make all`, Open WebUI is NOT part of the Ansible chain. Redeploy manually:
 
 ```bash
-kubectl apply -f k8s/open-webui/open-webui.yml
+make open-webui   # open-webui.yml + pvc.yml (PVC only if absent)
 ```
 
 Conversation history survives if the Longhorn PVC is preserved. If starting fresh, create a new admin account and disable signup again.

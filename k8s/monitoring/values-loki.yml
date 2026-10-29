@@ -139,4 +139,4 @@ gateway:
 sidecar:
   image:
     repository: quay.io/kiwigrid/k8s-sidecar
-    tag: 2.8.1
+    tag: 2.14.1

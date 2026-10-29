@@ -158,7 +158,7 @@ Node-exporter is scraped by a dedicated `node-exporter` job in `extraScrapeConfi
 ### Open WebUI (K8s)
 - ChatGPT-like web interface for Ollama
 - Namespace: `open-webui`
-- Manifest: `k8s/open-webui/open-webui.yml`
+- Manifest: `k8s/open-webui/open-webui.yml` (+ `pvc.yml`, created by `make open-webui` only when absent — a restored claim is bound/immutable)
 - Connects to Ollama via `ollama-external.default.svc.cluster.local:11434`
 - SQLite conversation history on a 2Gi PVC
 - Pinned to amd64 nodes (`nodeSelector`) since 2026-09-11 — ~4 GB unpacked image, see the leaked-layers quirk

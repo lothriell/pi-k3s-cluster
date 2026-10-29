@@ -5,7 +5,10 @@
 # SQLite conversation history persisted on a PVC.
 # Access via: http://chat.example.local
 #
-# Apply with: kubectl apply -f k8s/open-webui/open-webui.yml
+# Apply with: make open-webui (this file + pvc.yml only if the claim is absent)
+# The PVC lives in pvc.yml: on a rebuild playbook 12 restores it bound to a
+# restored-pv-* volume, and re-applying a PVC spec to that bound claim fails
+# (spec immutable).
 # =============================================================================
 
 ---
@@ -13,19 +16,6 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: open-webui
-
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: open-webui-data
-  namespace: open-webui
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 2Gi
 
 ---
 apiVersion: apps/v1
@@ -68,7 +58,7 @@ spec:
       # Accepts 1 × KSV-0014 finding on open-webui.
       containers:
         - name: open-webui
-          image: ghcr.io/open-webui/open-webui:v0.12.3
+          image: ghcr.io/open-webui/open-webui:v0.12.4
           ports:
             - containerPort: 8080
           env:
@@ -134,11 +124,7 @@ spec:
       targetPort: 8080
 
 
-# NOTE: the Ingress for this service lives in a sibling file
-# `ingress.local.yml` (gitignored) so your private hostname doesn't leak to
-# the committed repo. See `ingress.local.yml.example` for the template and
-# copy it to `ingress.local.yml` with your actual domain:
-#
-#     cp k8s/open-webui/ingress.local.yml.example k8s/open-webui/ingress.local.yml
-#     # edit the host field, then
-#     kubectl apply -f k8s/open-webui/ingress.local.yml
+# NOTE: the Ingress (chat.<local_domain>, HTTPS via cert-manager) is
+# `open-webui-local` in k8s/ingress/local-ingress.yml.j2, applied by
+# playbook 03 (--tags ingress). The old plain-HTTP ingress.local.yml was
+# retired 2026-10-26.

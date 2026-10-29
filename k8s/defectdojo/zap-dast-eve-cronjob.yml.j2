@@ -106,6 +106,9 @@ spec:
           initContainers:
             - name: zap
               image: ghcr.io/zaproxy/zaproxy:stable
+              # Floating tag: default policy for non-:latest is IfNotPresent, so the
+              # node kept a stale :stable forever (2 CRITICAL in the old pull).
+              imagePullPolicy: Always
               command: ["/bin/sh", "/scripts/scan.sh"]
               env:
                 - name: TARGET

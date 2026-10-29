@@ -309,7 +309,7 @@
       ansible.builtin.shell: |
         helm upgrade --install loki grafana/loki \
           --namespace monitoring \
-          --version 7.3.0 \
+          --version 7.5.0 \
           -f {{ playbook_dir }}/../../k8s/monitoring/values-loki.yml
       register: loki_helm
       changed_when: "'STATUS: deployed' in loki_helm.stdout or 'has been upgraded' in loki_helm.stdout"

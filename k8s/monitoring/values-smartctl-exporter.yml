@@ -12,12 +12,8 @@
 #     -n monitoring -f values-smartctl-exporter.yml
 # =============================================================================
 
-# Image ahead of the chart: chart 0.17.1 (latest, 2026-10-16) still ships
-# app v0.14.0 (3 criticals: Go stdlib + openssl) while upstream released
-# v0.15.0. Drop this once the chart's appVersion catches up — release-watcher
-# images.map flags newer upstream tags, its repos.map line flags the chart.
-image:
-  tag: v0.15.0
+# Image: chart default (0.18.0 ships app v0.15.0, 2026-10-28) — the v0.15.0
+# override that ran ahead of chart 0.17.1 is gone.
 
 # Pin to the 3 amd64 nodes (k3s-x86-1, k3s-x86-2, minisforum-c) — same
 # pool as the Longhorn `storage` tag.

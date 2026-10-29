@@ -31,6 +31,14 @@ defectDojoApiCredentials:
 operator:
   replicas: 1
   trivyDojoReportOperator:
+    # Re-patched upstream 0.11.0 (apt upgrade + certifi floor; 9 CRITICAL → 0,
+    # 2026-10-24) — k8s/defectdojo/Dockerfile.trivy-dojo-operator. Return to
+    # upstream ghcr.io/telekom-mms/docker-trivy-dojo-operator on its next release.
+    image:
+      repository: ghcr.io/lothriell/trivy-dojo-operator
+      tag: 0.11.0-patch1
+    imagePullSecrets:
+      - name: ghcr-registry
     env:
       reports: vulnerabilityreports
       defectDojoActive: "true"

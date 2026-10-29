@@ -1,0 +1,15 @@
+# Open WebUI data PVC — applied by `make open-webui` ONLY when the claim is
+# absent. On a rebuild playbook 12 (restore-volumes) creates it from backup,
+# bound to a restored-pv-* volume; a bound claim's spec is immutable, so
+# re-applying this file would fail (make open-webui exited 1 until 2026-10-26).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: open-webui-data
+  namespace: open-webui
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi

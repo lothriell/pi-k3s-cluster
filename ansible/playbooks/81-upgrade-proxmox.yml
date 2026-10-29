@@ -357,6 +357,22 @@
           register: running_vms
           changed_when: false
 
+        # Both K3s VMs going down = indistinguishable from a Site Magic drop:
+        # without these the window pages RemoteSiteLinkDown + NodeDown +
+        # KubeNodeNotReady and leaves RemoteSiteLinkFlapping firing 6h
+        # (2026-10-19). 4h is the safety cap; the always: below expires them.
+        - name: Silence remote-site + pve-hosted node alerts for the window
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            argv: ["{{ playbook_dir }}/../../scripts/maint-silence.sh", add, "pve-window-{{ inventory_hostname }}", 4h, "{{ item }}"]
+          loop:
+            - 'alertname=~"RemoteSiteLinkDown|RemoteSiteLinkFlapping"'
+            - 'instance=~"{{ pve_k3s_nodes | join("|") }}"'
+            - 'node=~"{{ pve_k3s_nodes | join("|") }}"'
+          register: pve_silenced
+          changed_when: true
+
         # Drain BEFORE shutdown: evicts pods and detaches Longhorn volumes
         # while the engines are still alive (same rationale as playbook 80).
         # Longhorn's PDB blocks instance-manager eviction while it hosts the
@@ -625,6 +641,25 @@
               delay: 10
               changed_when: false
               failed_when: false
+      always:
+        # RemoteSiteLinkFlapping looks back 6h, so it can fire after the window
+        # (two windows in a row, e.g. proving reboot + release upgrade). The rest
+        # comes back now — also on failure, so a broken window still pages.
+        - name: Keep RemoteSiteLinkFlapping silenced 6h past the window
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            argv: ["{{ playbook_dir }}/../../scripts/maint-silence.sh", add, "pve-flap-{{ inventory_hostname }}", 6h, alertname=RemoteSiteLinkFlapping]
+          changed_when: true
+          when: pve_silenced is defined and pve_silenced is not skipped
+
+        - name: Expire the window silences
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            argv: ["{{ playbook_dir }}/../../scripts/maint-silence.sh", expire, "pve-window-{{ inventory_hostname }}"]
+          register: pve_unsilence
+          changed_when: pve_unsilence.stdout | length > 0
 
   handlers:
     - name: Regenerate initramfs

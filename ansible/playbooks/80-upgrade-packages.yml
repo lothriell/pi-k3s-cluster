@@ -10,7 +10,8 @@
 #   2. K3s agents (serial=1): preserves workload availability, kubectl wait
 #   3. K3s servers (serial=1): preserves etcd quorum, kubectl wait
 #   4. Arch/CachyOS desktops (parallel): pacman -Syu + reboot
-#   5. macmini: brew update+upgrade (no reboot)
+#   5. macOS (macmini, nemesis/Air): brew update+upgrade (no reboot), then
+#      re-install the tailscaled system daemon if brew moved past it
 #   6. Registry DNS assert on all K3s nodes
 #   7. Proxmox host userspace pass (imported 81-upgrade-proxmox.yml, no reboot)
 #
@@ -142,6 +143,20 @@
          (reboot_required_deb.stat.exists or
           (newest_kernel.stdout | default(ansible_kernel)) != ansible_kernel))
 
+    # Silence this node's own alerts (NodeDown/KubeNodeNotReady/… carry
+    # instance= or node=) for the drain + reboot; expired in the always: below.
+    # 1h is the safety cap. Same gate as the guard: only when it reboots.
+    - name: Silence this node's alerts for the reboot
+      delegate_to: localhost
+      become: false
+      ansible.builtin.command:
+        argv: ["{{ playbook_dir }}/../../scripts/maint-silence.sh", add, "reboot-{{ inventory_hostname }}", 1h, "{{ item }}"]
+      loop:
+        - 'instance="{{ inventory_hostname }}"'
+        - 'node="{{ inventory_hostname }}"'
+      changed_when: true
+      when: lh_guard is not skipped
+
     - name: Drain, reboot, uncordon
       block:
         # Drain BEFORE reboot (2026-07-24, minisforum hang #2): systemd kills the
@@ -169,6 +184,19 @@
           register: drained
           changed_when: true
 
+        # Stale-Ready guard (2026-10-24, #82.1): `kubectl wait --for=condition=Ready`
+        # passed on the node object's PRE-reboot Ready (minisforum-c booted in
+        # <1 min, faster than the 40 s NotReady grace) → uncordon, guard restore
+        # and silence expiry ran 3 min before the node was really back. Wait for
+        # a NEW kubelet bootID + Ready instead.
+        - name: Record pre-reboot kubelet bootID
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            argv: [kubectl, get, node, "{{ inventory_hostname }}", -o, "jsonpath={.status.nodeInfo.bootID}"]
+          register: pre_boot_id
+          changed_when: false
+
         - name: Reboot Debian if flagged
           ansible.builtin.reboot:
             msg: "Reboot triggered by apt upgrade"
@@ -189,17 +217,24 @@
           when: ansible_os_family == 'Archlinux'
           register: rebooted_arch
 
-        - name: Wait for node Ready in Kubernetes
+        - name: Wait for node Ready in Kubernetes (new bootID + Ready)
           delegate_to: localhost
           become: false
           ansible.builtin.command:
             argv:
               - kubectl
-              - wait
+              - get
               - node
               - "{{ inventory_hostname }}"
-              - --for=condition=Ready
-              - --timeout=300s
+              - -o
+              - 'jsonpath={.status.nodeInfo.bootID} {.status.conditions[?(@.type=="Ready")].status}'
+          register: node_state
+          until: >-
+            (node_state.stdout.split() | length) == 2 and
+            node_state.stdout.split()[0] != pre_boot_id.stdout and
+            node_state.stdout.split()[1] == 'True'
+          retries: 60
+          delay: 5
           when: (rebooted_deb is defined and rebooted_deb.changed) or (rebooted_arch is defined and rebooted_arch.changed)
           changed_when: false
 
@@ -223,6 +258,14 @@
             argv: ["{{ playbook_dir }}/../../scripts/longhorn-drain-guard.sh", post]
           register: lh_guard_post
           changed_when: lh_guard_post.stdout | length > 0
+
+        - name: Expire this node's reboot silences
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            argv: ["{{ playbook_dir }}/../../scripts/maint-silence.sh", expire, "reboot-{{ inventory_hostname }}"]
+          register: node_unsilence
+          changed_when: node_unsilence.stdout | length > 0
 
     # Node Ready is NOT enough: Longhorn replicas on the rebooted node need
     # time to rebuild. Rebooting the next storage node while volumes are
@@ -294,6 +337,31 @@
       changed_when: "'scaled' in lh_guard.stdout or 'node-drain-policy' in lh_guard.stdout"
       when: reboot_required.stat.exists or (newest_kernel.stdout | default(ansible_kernel)) != ansible_kernel
 
+    # Silence this node's own alerts (NodeDown/KubeNodeNotReady/… carry
+    # instance= or node=) for the drain + reboot; expired in the always: below.
+    # 1h is the safety cap. Same gate as the guard: only when it reboots.
+    - name: Silence this node's alerts for the reboot
+      delegate_to: localhost
+      become: false
+      ansible.builtin.command:
+        argv: ["{{ playbook_dir }}/../../scripts/maint-silence.sh", add, "reboot-{{ inventory_hostname }}", 1h, "{{ item }}"]
+      loop:
+        - 'instance="{{ inventory_hostname }}"'
+        - 'node="{{ inventory_hostname }}"'
+      changed_when: true
+      when: lh_guard is not skipped
+
+    # Rebooting an etcd voter moves the leader; EtcdLeaderChanges
+    # (increase[1h] > 2) then fires on all three servers (2026-10-15 fleet run).
+    # Not expired: 2h covers the reboot plus the 1h lookback.
+    - name: Silence EtcdLeaderChanges across the server reboot
+      delegate_to: localhost
+      become: false
+      ansible.builtin.command:
+        argv: ["{{ playbook_dir }}/../../scripts/maint-silence.sh", add, "etcd-{{ inventory_hostname }}", 2h, alertname=EtcdLeaderChanges]
+      changed_when: true
+      when: lh_guard is not skipped
+
     - name: Drain, reboot, uncordon
       block:
         - name: Drain node before reboot (clean Longhorn detach)
@@ -311,6 +379,19 @@
           register: drained
           changed_when: true
 
+        # Stale-Ready guard (2026-10-24, #82.1): `kubectl wait --for=condition=Ready`
+        # passed on the node object's PRE-reboot Ready (minisforum-c booted in
+        # <1 min, faster than the 40 s NotReady grace) → uncordon, guard restore
+        # and silence expiry ran 3 min before the node was really back. Wait for
+        # a NEW kubelet bootID + Ready instead.
+        - name: Record pre-reboot kubelet bootID
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            argv: [kubectl, get, node, "{{ inventory_hostname }}", -o, "jsonpath={.status.nodeInfo.bootID}"]
+          register: pre_boot_id
+          changed_when: false
+
         - name: Reboot if flagged
           ansible.builtin.reboot:
             msg: "Reboot triggered by apt upgrade (etcd voter)"
@@ -319,17 +400,24 @@
             reboot_timeout: 600
           when: reboot_required.stat.exists or (newest_kernel.stdout | default(ansible_kernel)) != ansible_kernel
 
-        - name: Wait for node Ready in Kubernetes
+        - name: Wait for node Ready in Kubernetes (new bootID + Ready)
           delegate_to: localhost
           become: false
           ansible.builtin.command:
             argv:
               - kubectl
-              - wait
+              - get
               - node
               - "{{ inventory_hostname }}"
-              - --for=condition=Ready
-              - --timeout=300s
+              - -o
+              - 'jsonpath={.status.nodeInfo.bootID} {.status.conditions[?(@.type=="Ready")].status}'
+          register: node_state
+          until: >-
+            (node_state.stdout.split() | length) == 2 and
+            node_state.stdout.split()[0] != pre_boot_id.stdout and
+            node_state.stdout.split()[1] == 'True'
+          retries: 60
+          delay: 5
           when: reboot_required.stat.exists or (newest_kernel.stdout | default(ansible_kernel)) != ansible_kernel
           changed_when: false
 
@@ -353,6 +441,14 @@
             argv: ["{{ playbook_dir }}/../../scripts/longhorn-drain-guard.sh", post]
           register: lh_guard_post
           changed_when: lh_guard_post.stdout | length > 0
+
+        - name: Expire this node's reboot silences
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            argv: ["{{ playbook_dir }}/../../scripts/maint-silence.sh", expire, "reboot-{{ inventory_hostname }}"]
+          register: node_unsilence
+          changed_when: node_unsilence.stdout | length > 0
 
     - name: Wait for Longhorn volumes to regain full redundancy
       delegate_to: localhost
@@ -467,14 +563,18 @@
         msg: "{{ inventory_hostname }}: upgraded, NOT rebooted ({{ desktop_luks.stdout | trim }}). Reboot by hand at the keyboard."
       when: desktop_luks.stdout != "" and not (desktop_reboot_encrypted | default(false) | bool)
 
-- name: Phase 5 — macmini (brew, no reboot)
+- name: Phase 5 — macOS (brew, no reboot)
   # /opt/homebrew is owned by the personal user, not the ansible service
-  # account. Connect as that user and skip become (brew refuses to run as
-  # root anyway).
+  # account, and brew refuses to run as root. Connect as ansible (the only
+  # account the controller keys are trusted for — a macmini-run 2026-10-29
+  # got "Permission denied" SSHing as the personal user) and become the personal user.
   hosts: macos_nodes
-  remote_user: "{{ personal_user }}"
-  become: false
+  become: true
+  become_user: "{{ personal_user }}"
   gather_facts: false
+  # A sleeping Air (lid closed) must not abort phases 6/7: when every host of
+  # a play is unreachable Ansible ends the whole run (2026-10-29).
+  ignore_unreachable: true
   tasks:
     - name: brew update
       community.general.homebrew:
@@ -484,10 +584,75 @@
     # casks, and cask uninstall phases shell out to `sudo pkgutil` which
     # prompts for a password — a headless run hangs forever (2026-07-11:
     # 2.5h hang mid-cask before the run was killed). Casks stay manual.
+    # The controller's own ansible is a brew formula: upgrading it (or the
+    # python@ it runs on) mid-play breaks module resolution for every later
+    # task (2026-10-29: "Cannot resolve 'ansible.builtin.shell'"). On the Mac
+    # running this play, hold those back — they upgrade whenever the other
+    # Mac is the controller (make on-macmini / a run from the Air).
+    - name: Controller tailnet IP
+      ansible.builtin.command: tailscale ip -4
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: controller_ip
+      changed_when: false
+      failed_when: false
+
     - name: brew upgrade (formulae only — casks need interactive sudo)
-      ansible.builtin.command: /opt/homebrew/bin/brew upgrade --formula
+      ansible.builtin.shell: |
+        if [ "{{ ansible_host }}" = "{{ controller_ip.stdout | default('') | trim }}" ]; then
+          pkgs=$(/opt/homebrew/bin/brew outdated --formula --quiet | grep -vxE 'ansible|python@[0-9.]+' || true)
+          echo "held back on controller: $(/opt/homebrew/bin/brew outdated --formula --quiet | grep -xE 'ansible|python@[0-9.]+' | tr '\n' ' ')"
+          if [ -n "$pkgs" ]; then /opt/homebrew/bin/brew upgrade --formula $pkgs; fi
+        else
+          /opt/homebrew/bin/brew upgrade --formula
+        fi
       register: brew_upgrade
-      changed_when: "'Upgrading' in brew_upgrade.stdout or 'Pouring' in brew_upgrade.stdout"
+      changed_when: "'Upgrading' in (brew_upgrade.stdout | default('')) or 'Pouring' in (brew_upgrade.stdout | default(''))"
+
+- name: Phase 5b — macOS tailscaled system daemon
+  # The LaunchDaemon runs a COPY at /usr/local/bin/tailscaled made by
+  # install-system-daemon, so `brew upgrade` alone leaves the old daemon
+  # running (2026-10-27: CLI 1.104.x, daemons 1.96.4 / 1.98.5). Re-copy when
+  # the brew binary is newer. Never symlink instead — launchd kills it
+  # (OS_REASON_CODESIGNING). Runs as the ansible account (passwordless sudo).
+  hosts: macos_nodes
+  become: true
+  gather_facts: false
+  ignore_unreachable: true
+  vars:
+    brew_tailscaled: /opt/homebrew/opt/tailscale/bin/tailscaled
+  tasks:
+    - name: Compare brew tailscaled with the installed daemon
+      ansible.builtin.shell: |
+        [ -x {{ brew_tailscaled }} ] || exit 0
+        echo "$({{ brew_tailscaled }} --version | head -1) $(/usr/local/bin/tailscaled --version 2>/dev/null | head -1)"
+      register: tsd_versions
+      changed_when: false
+
+    # The daemon restart drops tailnet SSH (= this connection) for a few
+    # seconds: fire-and-forget, then wait for the host to come back.
+    - name: Re-install tailscaled system daemon from brew
+      ansible.builtin.command: "{{ brew_tailscaled }} install-system-daemon"
+      async: 120
+      poll: 0
+      when:
+        - tsd_versions.stdout | length > 0
+        - tsd_versions.stdout.split() | length < 2 or tsd_versions.stdout.split()[0] != tsd_versions.stdout.split()[1]
+      register: tsd_install
+
+    - name: Wait for the host to rejoin the tailnet
+      ansible.builtin.wait_for_connection:
+        delay: 10
+        timeout: 180
+      when: tsd_install is changed
+
+    - name: Daemon version now running
+      ansible.builtin.shell: /usr/local/bin/tailscaled --version | head -1
+      register: tsd_now
+      changed_when: false
+      when: tsd_install is changed
+      failed_when: tsd_now.stdout != tsd_versions.stdout.split()[0]
 
 - name: Phase 6 — Assert registry DNS resolves on all K3s nodes
   hosts: k3s_cluster

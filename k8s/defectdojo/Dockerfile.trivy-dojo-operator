@@ -1,0 +1,18 @@
+# trivy-dojo-report-operator, re-patched (2026-10-24)
+# Upstream ghcr.io/telekom-mms/docker-trivy-dojo-operator:0.11.0 (2026-03-12) has
+# had no release since; its trixie base + venv carried 9 CRITICAL (openssl,
+# gnutls, perl-base, certifi). Same image, just apt upgrade + certifi floor —
+# drop this and return to upstream once a newer release lands (release-watcher).
+# Build/push (multi-arch — the operator has no nodeSelector):
+#   podman build --platform linux/amd64,linux/arm64 \
+#     -f k8s/defectdojo/Dockerfile.trivy-dojo-operator \
+#     --manifest ghcr.io/lothriell/trivy-dojo-operator:0.11.0-patch1 k8s/defectdojo
+#   podman manifest push --all ghcr.io/lothriell/trivy-dojo-operator:0.11.0-patch1
+FROM ghcr.io/telekom-mms/docker-trivy-dojo-operator:0.11.0
+USER root
+RUN apt-get update -qq \
+ && apt-get upgrade -y -qq --no-install-recommends \
+ && apt-get dist-clean
+# A floor, not a pin: keeps whatever is newer.
+RUN /app/.venv/bin/python -m pip install --no-cache-dir -q -U "certifi>=2026.10.19"
+USER app
