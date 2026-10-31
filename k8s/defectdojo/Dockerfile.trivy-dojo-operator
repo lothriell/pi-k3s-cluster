@@ -1,14 +1,14 @@
-# trivy-dojo-report-operator, re-patched (2026-10-24)
-# Upstream ghcr.io/telekom-mms/docker-trivy-dojo-operator:0.11.0 (2026-03-12) has
-# had no release since; its trixie base + venv carried 9 CRITICAL (openssl,
-# gnutls, perl-base, certifi). Same image, just apt upgrade + certifi floor —
+# trivy-dojo-report-operator, re-patched (2026-10-24; rebased on 0.11.1 2026-10-29)
+# Upstream 0.11.0 carried 9 CRITICAL (openssl, gnutls, perl-base, certifi);
+# upstream 0.11.1 fixed the OS ones but still ships certifi 2026.4.22
+# (GHSA-6q48-6c7w-9gw2, 1 CRITICAL). Same image, just apt upgrade + certifi floor —
 # drop this and return to upstream once a newer release lands (release-watcher).
 # Build/push (multi-arch — the operator has no nodeSelector):
 #   podman build --platform linux/amd64,linux/arm64 \
 #     -f k8s/defectdojo/Dockerfile.trivy-dojo-operator \
-#     --manifest ghcr.io/lothriell/trivy-dojo-operator:0.11.0-patch1 k8s/defectdojo
-#   podman manifest push --all ghcr.io/lothriell/trivy-dojo-operator:0.11.0-patch1
-FROM ghcr.io/telekom-mms/docker-trivy-dojo-operator:0.11.0
+#     --manifest ghcr.io/lothriell/trivy-dojo-operator:0.11.1-patch1 k8s/defectdojo
+#   podman manifest push --all ghcr.io/lothriell/trivy-dojo-operator:0.11.1-patch1
+FROM ghcr.io/telekom-mms/docker-trivy-dojo-operator:0.11.1
 USER root
 RUN apt-get update -qq \
  && apt-get upgrade -y -qq --no-install-recommends \

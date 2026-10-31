@@ -26,10 +26,10 @@
   become: false
 
   vars:
-    defectdojo_chart_version: "1.9.62"   # app 3.4.301 (2026-10-28; was 1.9.61 / 3.4.300)
+    defectdojo_chart_version: "1.9.63"   # app 3.4.303 (2026-10-29; was 1.9.62 / 3.4.301)
     defectdojo_values: "{{ playbook_dir }}/../../k8s/defectdojo/values-defectdojo.yml"
     defectdojo_postgres_manifest: "{{ playbook_dir }}/../../k8s/defectdojo/postgres.yml"
-    trivy_dojo_operator_chart_version: "0.11.0"
+    trivy_dojo_operator_chart_version: "0.11.1"
     trivy_dojo_operator_values: "{{ playbook_dir }}/../../k8s/defectdojo/values-trivy-dojo-operator.yml"
     zap_dast_template: "{{ playbook_dir }}/../../k8s/defectdojo/zap-dast-eve-cronjob.yml.j2"
     zap_dast_rendered: "/tmp/zap-dast-eve.rendered.yml"
