@@ -24,6 +24,16 @@ config:
         preferred_ip_protocol: "ip4"
         fail_if_ssl: false
         fail_if_not_ssl: true         # every eve URL is https behind Cloudflare
+    # Plain-HTTP LAN panels (AMP ADS on the game VMs, `blackbox-amp` job) —
+    # same as http_2xx minus the SSL requirement, which would fail them.
+    http_2xx_plain:
+      prober: http
+      timeout: 10s
+      http:
+        valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+        valid_status_codes: []        # default: 2xx
+        follow_redirects: true
+        preferred_ip_protocol: "ip4"
 
 resources:
   requests:

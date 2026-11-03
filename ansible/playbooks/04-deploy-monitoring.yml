@@ -204,6 +204,52 @@
       changed_when: false
       tags: [alertmanager-ntfy]
 
+    # -- amp-exporter (task #84): AMP game-server state via the controller API --
+    # Auto-discovers every AMP instance (see the header of amp-exporter.yml.j2).
+    # Same checksum-annotation pattern as alertmanager-ntfy: a changed script or
+    # vault credential rolls the pod; nothing changed = no restart.
+
+    - name: Compute amp-exporter config checksum (template + vault inputs)
+      ansible.builtin.set_fact:
+        amp_exporter_checksum: >-
+          {{
+            (
+              lookup('file', playbook_dir ~ '/../../k8s/monitoring/amp-exporter.yml.j2')
+              + game_gm01_ip
+              + amp_monitor_user
+              + amp_monitor_password
+            ) | hash('sha256')
+          }}
+      no_log: true
+      tags: [amp-exporter]
+
+    - name: Render amp-exporter manifest from template
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../k8s/monitoring/amp-exporter.yml.j2"
+        dest: /tmp/amp-exporter.rendered.yml
+        mode: "0600"
+      tags: [amp-exporter]
+
+    - name: Apply amp-exporter manifest
+      ansible.builtin.command: kubectl apply -f /tmp/amp-exporter.rendered.yml
+      register: amp_exporter_apply
+      changed_when: "'configured' in amp_exporter_apply.stdout or 'created' in amp_exporter_apply.stdout"
+      tags: [amp-exporter]
+
+    - name: Remove rendered amp-exporter manifest (contains the AMP password)
+      ansible.builtin.file:
+        path: /tmp/amp-exporter.rendered.yml
+        state: absent
+      tags: [amp-exporter]
+
+    - name: Wait for amp-exporter to be ready
+      ansible.builtin.command: >
+        kubectl rollout status deployment/amp-exporter
+        --namespace monitoring
+        --timeout=120s
+      changed_when: false
+      tags: [amp-exporter]
+
     # -- Grafana ---------------------------------------------------------------
 
     - name: Deploy Grafana via Helm

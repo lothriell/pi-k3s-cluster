@@ -72,6 +72,17 @@ alertmanager:
         target_matchers:
           - alertname="NodeDown"
           - instance=~"k3s-x86-.*"
+      # Same for the AMP game VMs — they sit on the remote site too.
+      - source_matchers:
+          - alertname="RemoteSiteLinkDown"
+        target_matchers:
+          - alertname=~"Amp.*"
+      # A dead ADS already pages as AmpAdsDown; the controller losing that
+      # target (and its game instances going stale) is the same event.
+      - source_matchers:
+          - alertname="AmpAdsDown"
+        target_matchers:
+          - alertname=~"AmpTargetUnreachable|AmpGameDown"
     receivers:
       - name: 'null'
       - name: heartbeat
@@ -392,6 +403,43 @@ extraScrapeConfigs: |
         target_label: instance
       - target_label: __address__
         replacement: prometheus-blackbox-exporter.monitoring.svc.cluster.local:9115
+
+  # blackbox-amp (2026-11-03): AMP ADS web panels on the game VMs (task #84).
+  # g-01's ADS stopped itself daily via a self-targeting schedule and sat dead
+  # for 14 days unseen ("controller can't see gamehost01"). instance = host
+  # name (not the IP) so ntfy pages stay readable; AmpAdsDown pages after 15m.
+  - job_name: blackbox-amp
+    scrape_interval: 60s
+    scrape_timeout: 15s
+    metrics_path: /probe
+    params:
+      module: [http_2xx_plain]
+    static_configs:
+      - targets: ["http://{{ game_gm01_ip }}:8080/"]
+        labels:
+          host: ubuntu-gm-01
+      - targets: ["http://{{ game_g01_ip }}:8080/"]
+        labels:
+          host: ubuntu-g-01
+      - targets: ["http://{{ game_g02_ip }}:8081/"]
+        labels:
+          host: ubuntu-g-02
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [host]
+        target_label: instance
+      - target_label: __address__
+        replacement: prometheus-blackbox-exporter.monitoring.svc.cluster.local:9115
+
+  # amp-exporter (2026-11-03): every AMP instance on every target, discovered
+  # from the controller API (k8s/monitoring/amp-exporter.yml.j2). New instances
+  # appear here with no config change. Labels come from the exporter.
+  - job_name: amp-exporter
+    scrape_interval: 60s
+    scrape_timeout: 20s
+    static_configs:
+      - targets: ["amp-exporter.monitoring.svc.cluster.local:9877"]
 
   # smartctl-exporter DaemonSet on the 3 storage-tagged amd64 nodes
   # (k3s-x86-1, k3s-x86-2, minisforum-c). The chart's Service annotation
@@ -892,6 +940,71 @@ serverFiles:
             annotations:
               summary: "eve PROD {{ '{{' }} $labels.deployment {{ '}}' }} has no available replicas"
               description: "Available < desired for 3 minutes — the app is down or stuck rolling (ContainerCreating, CrashLoop, image pull)."
+      - name: amp
+        rules:
+          - alert: AmpAdsDown
+            # 15m rides out a VM reboot (pve-1 window / playbook 80) — ADS
+            # autostarts at boot; a panel still dead after that is real.
+            expr: probe_success{job="blackbox-amp"} == 0
+            for: 15m
+            labels:
+              severity: critical
+            annotations:
+              summary: "AMP panel down on {{ '{{' }} $labels.instance {{ '}}' }}"
+              description: "ADS web panel unreachable for 15 minutes — the controller can't manage this host. Check `sudo -u amp ampinstmgr status` and ADS01/AMP_Logs (a 04:00 'Goodbye!' = self-targeting schedule); start with `ampinstmgr start ADS01`."
+          - alert: AmpAdsProbeMissing
+            # Catches the probe itself vanishing (job dropped / blackbox down),
+            # which would otherwise make AmpAdsDown silently never fire.
+            expr: absent(probe_success{job="blackbox-amp"})
+            for: 15m
+            labels:
+              severity: critical
+            annotations:
+              summary: "AMP panel probes missing"
+              description: "No probe_success series for job blackbox-amp for 15 minutes — check the blackbox exporter and the scrape job."
+          # --- Game instances, auto-discovered by amp-exporter -------------------
+          # "Supposed to be up" = DaemonAutostart on and not suspended. A new AMP
+          # instance with start-on-boot is covered automatically; turn autostart
+          # off (or suspend) to keep a server down without pages. ADS instances
+          # report AppState -1 and are covered by AmpAdsDown instead.
+          - alert: AmpGameDown
+            # Both `or` branches are amp_instance_app_state (so they de-dup and
+            # $value is always the app state), the 2nd catching a dead instance
+            # process whose last-known state is still 20.
+            expr: |
+              (
+                (amp_instance_app_state{module!="ADS"} != 20)
+                or (amp_instance_app_state{module!="ADS"} and on(target, amp_instance) amp_instance_running == 0)
+              )
+              and on(target, amp_instance) amp_instance_autostart == 1
+              and on(target, amp_instance) amp_instance_suspended == 0
+            for: 15m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Game server down: {{ '{{' }} $labels.friendly_name {{ '}}' }} on {{ '{{' }} $labels.target {{ '}}' }}"
+              description: "AMP instance {{ '{{' }} $labels.amp_instance {{ '}}' }} has not been Ready for 15 minutes (app state {{ '{{' }} $value {{ '}}' }}: 0 Stopped, 10 Starting, 75 Updating, 100 Failed). Check its console in the AMP panel. Meant to be off? Disable its autostart."
+          - alert: AmpTargetUnreachable
+            # The controller's own view of a game host: it stopped checking in.
+            # Overlaps AmpAdsDown when ADS itself is dead (inhibited then), but
+            # also catches controller↔target link/auth trouble with ADS still up.
+            expr: |
+              (amp_target_state{remote="true"} != 20)
+              or (amp_target_state{remote="true"} and on(target) amp_target_last_update_age_seconds > 300)
+            for: 15m
+            labels:
+              severity: critical
+            annotations:
+              summary: "AMP controller lost target {{ '{{' }} $labels.target {{ '}}' }}"
+              description: "Target not Ready or no check-in for 5+ minutes, sustained 15 minutes — the controller can't manage it. Check the target's ADS (`ampinstmgr status`) and its link to the controller."
+          - alert: AmpExporterDown
+            expr: amp_api_up == 0 or up{job="amp-exporter"} == 0 or absent(up{job="amp-exporter"})
+            for: 15m
+            labels:
+              severity: critical
+            annotations:
+              summary: "AMP exporter can't read the controller API"
+              description: "Login or GetInstances failing for 15 minutes — game-server alerts are blind. `kubectl -n monitoring logs deploy/amp-exporter`; check the `monitoring` AMP user (role must keep Instances.*) and the controller ADS on ubuntu-gm-01."
       - name: watchdog
         rules:
           # Dead-man's-switch. Always firing by design — its job is to be

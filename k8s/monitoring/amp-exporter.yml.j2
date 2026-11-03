@@ -1,0 +1,243 @@
+# =============================================================================
+# amp-exporter — CubeCoders AMP game-server state → Prometheus (task #84)
+# =============================================================================
+# Logs into the AMP CONTROLLER's ADS API (ubuntu-gm-01) as the `monitoring`
+# user and turns ADSModule/GetInstances into metrics. The controller already
+# knows every target and every instance on it, so this is AUTO-DISCOVERY:
+#
+#   deploy a new instance in AMP with "start on boot" (DaemonAutostart) on
+#   → it is scraped AND alerting (AmpGameDown) on the next 60 s scrape.
+#   Deliberately off? Turn its autostart off (or suspend it) → no pages.
+#   No list to maintain, no config change, no playbook run.
+#
+# This works because the `monitoring` user's role grants `Instances.*` (ALL
+# instances, incl. future ones) — a per-instance grant would silently hide new
+# instances. Settings.* must stay NOT granted (read-only bot). Created by hand
+# in the controller UI 2026-11-03; password in vault `amp_monitor_password`.
+#
+# Metrics (labels: target = AMP target name e.g. GameHost01, amp_instance,
+# friendly_name, module):
+#   amp_api_up                       1 = last login+GetInstances succeeded
+#   amp_target_state                 20 = Ready (per target)
+#   amp_target_last_update_age_seconds  controller's last check-in from target
+#   amp_instance_running             AMP instance process up
+#   amp_instance_app_state           20 Ready, 0 Stopped, 10 Starting, 30
+#                                    Restarting, 40 Stopping, 75 Updating,
+#                                    100 Failed, -1 n/a (ADS instances)
+#   amp_instance_autostart / amp_instance_suspended
+#   amp_instance_active_users / amp_instance_max_users
+#   amp_instance_cpu_percent / amp_instance_memory_mb / amp_instance_memory_max_mb
+#
+# Deployed by: ansible/playbooks/04-deploy-monitoring.yml (tag: amp-exporter).
+# Scraped by: the `amp-exporter` job in values-prometheus.yml.j2.
+# Rendered file contains the AMP password — the playbook deletes it after apply.
+# =============================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: amp-exporter
+  namespace: monitoring
+type: Opaque
+stringData:
+  AMP_URL: "http://{{ game_gm01_ip }}:8080"
+  AMP_USER: "{{ amp_monitor_user }}"
+  AMP_PASSWORD: "{{ amp_monitor_password }}"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: amp-exporter-script
+  namespace: monitoring
+data:
+  amp_exporter.py: |
+{% raw %}
+    # Stdlib only — no image build. One AMP session is cached and reused;
+    # re-login happens only when a call stops returning instance data, so the
+    # controller's Active Sessions list doesn't grow by one per scrape.
+    import json, os, re, sys, threading, urllib.request
+    from datetime import datetime, timezone
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    URL = os.environ["AMP_URL"].rstrip("/") + "/API"
+    USER, PASSWORD = os.environ["AMP_USER"], os.environ["AMP_PASSWORD"]
+    PORT = int(os.environ.get("PORT", "9877"))
+    lock = threading.Lock()
+    session = {"id": None}
+
+    def call(method, body):
+        req = urllib.request.Request(
+            f"{URL}/{method}", data=json.dumps(body).encode(),
+            headers={"Accept": "application/json", "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.load(r)
+
+    def login():
+        r = call("Core/Login", {"username": USER, "password": PASSWORD,
+                                "token": "", "rememberMe": False})
+        if not r.get("success") or not r.get("sessionID"):
+            raise RuntimeError(f"login failed: {r.get('resultReason') or r.get('result')}")
+        session["id"] = r["sessionID"]
+
+    def get_instances():
+        for attempt in (1, 2):
+            if not session["id"]:
+                login()
+            r = call("ADSModule/GetInstances", {"SESSIONID": session["id"], "ForceIncludeSelf": True})
+            if isinstance(r, list):
+                return r
+            session["id"] = None   # expired/invalid session → one fresh login
+        raise RuntimeError(f"GetInstances returned no instance list: {str(r)[:200]}")
+
+    def esc(v):
+        return str(v).replace("\\", "\\\\").replace("\n", " ").replace('"', '\\"')
+
+    def age_seconds(ts):
+        # AMP sends e.g. 2026-11-03T23:02:00.9363332Z (7 fractional digits, UTC)
+        try:
+            t = datetime.strptime(re.sub(r"\.\d+", "", ts).rstrip("Z"), "%Y-%m-%dT%H:%M:%S")
+            return max(0.0, (datetime.now(timezone.utc).replace(tzinfo=None) - t).total_seconds())
+        except Exception:
+            return float("nan")
+
+    def render():
+        out = []
+        def m(name, labels, value):
+            lab = ",".join(f'{k}="{esc(v)}"' for k, v in labels.items())
+            out.append(f"{name}{{{lab}}} {value}")
+        try:
+            with lock:
+                targets = get_instances()
+            up = 1
+        except Exception as e:
+            print(f"scrape error: {e}", file=sys.stderr, flush=True)
+            targets, up = [], 0
+        out.append(f"amp_api_up {up}")
+        for t in targets:
+            tl = {"target": t.get("FriendlyName", "?"),
+                  "remote": str(bool(t.get("IsRemote"))).lower()}
+            m("amp_target_state", tl, t.get("State", -1))
+            if t.get("LastUpdated"):
+                m("amp_target_last_update_age_seconds", tl, age_seconds(t["LastUpdated"]))
+            for i in t.get("AvailableInstances") or []:
+                il = {"target": tl["target"], "amp_instance": i.get("InstanceName", "?"),
+                      "friendly_name": i.get("FriendlyName", ""), "module": i.get("Module", "")}
+                m("amp_instance_running", il, int(bool(i.get("Running"))))
+                m("amp_instance_app_state", il, i.get("AppState", -1))
+                m("amp_instance_autostart", il, int(bool(i.get("DaemonAutostart"))))
+                m("amp_instance_suspended", il, int(bool(i.get("Suspended"))))
+                met = i.get("Metrics") or {}
+                for key, name, field in (("Active Users", "amp_instance_active_users", "RawValue"),
+                                         ("Active Users", "amp_instance_max_users", "MaxValue"),
+                                         ("CPU Usage", "amp_instance_cpu_percent", "RawValue"),
+                                         ("Memory Usage", "amp_instance_memory_mb", "RawValue"),
+                                         ("Memory Usage", "amp_instance_memory_max_mb", "MaxValue")):
+                    if key in met and met[key].get(field) is not None:
+                        m(name, il, met[key][field])
+        return "\n".join(out) + "\n"
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.startswith("/metrics"):
+                body, code = render().encode(), 200
+            elif self.path.startswith("/healthz"):
+                body, code = b"ok\n", 200
+            else:
+                body, code = b"not found\n", 404
+            self.send_response(code)
+            self.send_header("Content-Type", "text/plain; version=0.0.4")
+            self.end_headers()
+            self.wfile.write(body)
+        def log_message(self, *a):
+            pass
+
+    print(f"amp-exporter on :{PORT} → {URL}", flush=True)
+    ThreadingHTTPServer(("", PORT), H).serve_forever()
+{% endraw %}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amp-exporter
+  namespace: monitoring
+  labels:
+    app: amp-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: amp-exporter
+  template:
+    metadata:
+      labels:
+        app: amp-exporter
+      annotations:
+        checksum/config: "{{ amp_exporter_checksum }}"
+    spec:
+      # Tiny, but keep it off the etcd Pis like the other exporters.
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: exporter
+          image: python:3.14.10-alpine3.24
+          command: ["python", "-u", "/app/amp_exporter.py"]
+          envFrom:
+            - secretRef:
+                name: amp-exporter
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          ports:
+            - name: metrics
+              containerPort: 9877
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 30
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 60
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 10m
+              memory: 24Mi
+            limits:
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: script
+              mountPath: /app
+              readOnly: true
+      volumes:
+        - name: script
+          configMap:
+            name: amp-exporter-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: amp-exporter
+  namespace: monitoring
+  labels:
+    app: amp-exporter
+spec:
+  selector:
+    app: amp-exporter
+  ports:
+    - name: metrics
+      port: 9877
+      targetPort: metrics

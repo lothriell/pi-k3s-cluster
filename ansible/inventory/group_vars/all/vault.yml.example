@@ -112,3 +112,9 @@ orb_snmp_community: "changeme"
 # line. Optional: when set, playbook 06 uses it instead of the local file (DR: any machine
 # with the vault can redeploy the tunnel).
 # cloudflare_tunnel_credentials_json: '{"AccountTag":"...","TunnelSecret":"...","TunnelID":"..."}'
+
+# AMP (CubeCoders) API user for amp-exporter (playbook 04, tag amp-exporter). Create it by hand
+# in the controller panel: Configuration → User Management; its user permissions must ALLOW
+# `Instances.*` (all instances, so new ones are auto-discovered) and must NOT grant Settings.*.
+amp_monitor_user: "monitoring"
+amp_monitor_password: "changeme-use-a-real-password"
