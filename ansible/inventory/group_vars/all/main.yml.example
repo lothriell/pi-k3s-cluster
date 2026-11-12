@@ -165,7 +165,7 @@ pve_nic_pins:
 # NetBox Discovery eval (playbook 24) — custom image with diode plugin
 # (k8s/netbox/Dockerfile.diode); diode server = docker compose on the GPU node
 netbox_image_repository: "your-ghcr-namespace/netbox-diode"
-netbox_image_tag: "v4.7.4-plugin1.18.3"
+netbox_image_tag: "v4.7.5-plugin1.19.0"
 netbox_diode_target: "grpc://<gpu-node-ip>:8080/diode"
 
 # Diode + orb-agent (playbook 27 / roles/diode) — discovery scope

@@ -14,6 +14,9 @@
 # ---------------------------------------------------------------------------
 alertmanager:
   enabled: true
+  configmapReload:
+    image:
+      tag: v0.95.2   # chart default v0.95.1 has no arm64, see configmapReload below
   persistence:
     size: 1Gi
   resources:
@@ -466,6 +469,11 @@ extraScrapeConfigs: |
 # ---------------------------------------------------------------------------
 configmapReload:
   prometheus:
+    # Pinned: the chart's default config-reloader v0.95.1 has NO arm64 image ("no match
+    # for platform") — prometheus + alertmanager are arm64-pinned. 2026-11-09 pinned v0.94.2;
+    # 2026-11-12 moved to v0.95.2 (multi-arch). Drop once the chart default is >= v0.95.2.
+    image:
+      tag: v0.95.2
     resources:
       requests:
         cpu: 10m

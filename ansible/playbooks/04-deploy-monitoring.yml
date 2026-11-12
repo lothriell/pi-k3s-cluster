@@ -12,6 +12,9 @@
   gather_facts: false
 
   vars:
+    # Pinned 2026-11-12 (was unpinned): 29.46.0 → 29.47.0 landed mid-run on 11-09 because the
+    # deploy does `helm repo update`. Bump deliberately after a render-diff.
+    prometheus_chart_version: "29.47.2"   # app v3.16.0
     prometheus_values_template: "{{ playbook_dir }}/../../k8s/monitoring/values-prometheus.yml.j2"
     prometheus_values_rendered: "/tmp/values-prometheus.rendered.yml"
     grafana_values: "{{ playbook_dir }}/../../k8s/monitoring/values-grafana.yml"
@@ -98,6 +101,7 @@
       ansible.builtin.command: >
         helm upgrade --install prometheus
         prometheus-community/prometheus
+        --version {{ prometheus_chart_version }}
         --namespace monitoring
         --values {{ prometheus_values_rendered }}
         --wait
@@ -355,7 +359,7 @@
       ansible.builtin.shell: |
         helm upgrade --install loki grafana/loki \
           --namespace monitoring \
-          --version 7.5.0 \
+          --version 7.6.0 \
           -f {{ playbook_dir }}/../../k8s/monitoring/values-loki.yml
       register: loki_helm
       changed_when: "'STATUS: deployed' in loki_helm.stdout or 'has been upgraded' in loki_helm.stdout"

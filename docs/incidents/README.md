@@ -30,6 +30,7 @@ Each file follows the template at the bottom of this document. To open a new one
 | 2026-06-04 | High | Resolved | [Gitea/Prometheus Longhorn attach storm — snapshot-OOM trigger + k3s-x86-2 dead resolver](2026-06-04-longhorn-attach-storm-dns-oom.md) |
 | 2026-06-16 | High | Resolved | [Post-power-outage recovery — Longhorn csi mount-propagation wedge + k3s-x86-2 dead journald](2026-06-16-power-outage-recovery.md) |
 | 2026-07-26 | Med  | Resolved | [`--tags config` roll wiped agent join config; 4 agents NotReady + lease-suicide cascade](2026-07-26-agent-join-config-wipe.md) |
+| 2026-11-10 | High | Resolved | [Site Magic down ~27 h — home ISP router flipped bridge → router mode (UCG lost public IP)](2026-11-10-site-magic-home-router-mode.md) |
 
 ## Template
 

@@ -32,7 +32,7 @@
   become: false
 
   vars:
-    netbox_chart_version: "8.3.98"   # app v4.7.4 (2026-10-28: 8.3.97 → 8.3.98)
+    netbox_chart_version: "8.3.101"  # app v4.7.5 image (2026-11-12: 8.3.100 → 8.3.101)
     # image (netbox_image_repository/tag in main.yml) pins NetBox v4.7.4 +
     # diode plugin 1.18.3 (4.7.x needs plugin >= 1.17.0).
     netbox_values: "{{ playbook_dir }}/../../k8s/netbox/values-netbox.yml"

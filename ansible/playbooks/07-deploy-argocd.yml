@@ -11,6 +11,10 @@
   gather_facts: false
 
   vars:
+    # Pinned 2026-11-04 (was unpinned = whatever argo/argo-cd is latest): the
+    # 10.11.7 digest run would otherwise have jumped straight to 10.12.x =
+    # ArgoCD v3.6 (minor). Bump deliberately after reading the upgrade notes.
+    argocd_chart_version: "10.11.7"   # app v3.5.7
     argocd_values: "{{ playbook_dir }}/../../k8s/argocd/values-argocd.yml"
     image_updater_values: "{{ playbook_dir }}/../../k8s/argocd/values-image-updater.yml"
 
@@ -65,6 +69,7 @@
       ansible.builtin.command: >
         helm upgrade --install argocd
         argo/argo-cd
+        --version {{ argocd_chart_version }}
         --namespace argocd
         --values {{ argocd_values }}
         --set configs.secret.argocdServerAdminPassword={{ argocd_password_hash }}
