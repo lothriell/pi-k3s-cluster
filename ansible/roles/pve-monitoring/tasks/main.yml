@@ -1,0 +1,135 @@
+---
+# --- node-exporter + SMART -------------------------------------------------------
+- name: Install node-exporter, its textfile collectors, smartmontools and python venv
+  ansible.builtin.apt:
+    name:
+      - prometheus-node-exporter
+      - prometheus-node-exporter-collectors
+      - smartmontools
+      - python3-venv
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Enable node-exporter
+  ansible.builtin.systemd:
+    name: prometheus-node-exporter
+    state: started
+    enabled: true
+
+- name: Enable the smartmon textfile collector timer
+  ansible.builtin.systemd:
+    name: prometheus-node-exporter-smartmon.timer
+    state: started
+    enabled: true
+
+# --- prometheus-pve-exporter ---------------------------------------------------
+- name: Exporter system user
+  ansible.builtin.user:
+    name: "{{ pve_exporter_system_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Install prometheus-pve-exporter into its venv (pinned)
+  ansible.builtin.pip:
+    name: "prometheus-pve-exporter=={{ pve_exporter_version }}"
+    virtualenv: "{{ pve_exporter_venv }}"
+    virtualenv_command: python3 -m venv
+  notify: Restart pve-exporter
+
+- name: List PVE users
+  ansible.builtin.command: pveum user list --output-format json
+  register: pve_users
+  changed_when: false
+
+- name: Create read-only PVE user for the exporter
+  ansible.builtin.command: >-
+    pveum user add {{ pve_exporter_pve_user }}
+    --comment "Prometheus pve-exporter (read-only, Ansible role pve-monitoring)"
+  when: pve_exporter_pve_user not in (pve_users.stdout | from_json | map(attribute='userid') | list)
+
+- name: Grant PVEAuditor on / (idempotent)
+  ansible.builtin.command: pveum acl modify / --users {{ pve_exporter_pve_user }} --roles PVEAuditor
+  changed_when: false
+
+- name: Config dir
+  ansible.builtin.file:
+    path: "{{ pve_exporter_config_dir }}"
+    state: directory
+    owner: root
+    group: "{{ pve_exporter_system_user }}"
+    mode: "0750"
+
+- name: Check for an existing exporter config (holds the token)
+  ansible.builtin.stat:
+    path: "{{ pve_exporter_config_file }}"
+  register: pve_exporter_cfg
+
+- name: Mint a fresh API token when there is no config
+  when: not pve_exporter_cfg.stat.exists
+  block:
+    - name: Drop any old token of the same name
+      ansible.builtin.command: pveum user token remove {{ pve_exporter_pve_user }} {{ pve_exporter_token_name }}
+      register: tok_rm
+      changed_when: tok_rm.rc == 0
+      failed_when: false
+
+    - name: Create token (privsep off — inherits the user's PVEAuditor)
+      ansible.builtin.command: >-
+        pveum user token add {{ pve_exporter_pve_user }} {{ pve_exporter_token_name }}
+        --privsep 0 --comment "pve-exporter" --output-format json
+      register: tok_add
+      no_log: true
+
+    - name: Write exporter config
+      ansible.builtin.copy:
+        dest: "{{ pve_exporter_config_file }}"
+        owner: root
+        group: "{{ pve_exporter_system_user }}"
+        mode: "0640"
+        content: |
+          # Managed by Ansible (role pve-monitoring). Delete to mint a new token.
+          default:
+            user: {{ pve_exporter_pve_user }}
+            token_name: {{ pve_exporter_token_name }}
+            token_value: {{ (tok_add.stdout | from_json).value }}
+            verify_ssl: false
+      no_log: true
+      notify: Restart pve-exporter
+
+- name: systemd unit
+  ansible.builtin.template:
+    src: prometheus-pve-exporter.service.j2
+    dest: /etc/systemd/system/prometheus-pve-exporter.service
+    mode: "0644"
+  notify: Restart pve-exporter
+
+- name: Enable pve-exporter
+  ansible.builtin.systemd:
+    name: prometheus-pve-exporter
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Flush handlers before verifying
+  ansible.builtin.meta: flush_handlers
+
+# --- verify --------------------------------------------------------------------
+- name: node-exporter answers
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:9100/metrics"
+    return_content: false
+  register: ne
+  retries: 6
+  delay: 5
+  until: ne.status == 200
+
+- name: pve-exporter answers with guest metrics
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ pve_exporter_port }}/pve?target=localhost&cluster=1&node=1"
+    return_content: true
+  register: pe
+  retries: 6
+  delay: 5
+  until: pe.status == 200 and 'pve_up{' in pe.content

@@ -462,6 +462,31 @@ extraScrapeConfigs: |
       - source_labels: [__meta_kubernetes_pod_node_name]
         target_label: instance
 
+  # Proxmox host pve-1 (task #87.1, role pve-monitoring / playbook 35). Scraped
+  # over its tailnet IP (pve_host_ip): the cluster has no route to the remote
+  # Servers VLAN, and the tailnet path also survives a Site Magic outage.
+  # node-exporter carries the smartmon textfile collector (SSD health/wear);
+  # the generic NodeDiskFull/NodeMemoryPressure rules apply to it as well.
+  - job_name: pve-node
+    scrape_interval: 60s
+    static_configs:
+      - targets: ['{{ pve_host_ip }}:9100']
+        labels:
+          instance: pve-1
+  # prometheus-pve-exporter: per-guest + storage metrics from the PVE API.
+  - job_name: pve
+    scrape_interval: 60s
+    scrape_timeout: 30s
+    metrics_path: /pve
+    params:
+      target: [localhost]
+      cluster: ['1']
+      node: ['1']
+    static_configs:
+      - targets: ['{{ pve_host_ip }}:9221']
+        labels:
+          instance: pve-1
+
 # ---------------------------------------------------------------------------
 # ConfigMap reload sidecar -- watches for config changes and triggers a
 # reload without restarting the pod. Very lightweight. Hardened container
@@ -1013,6 +1038,204 @@ serverFiles:
             annotations:
               summary: "AMP exporter can't read the controller API"
               description: "Login or GetInstances failing for 15 minutes — game-server alerts are blind. `kubectl -n monitoring logs deploy/amp-exporter`; check the `monitoring` AMP user (role must keep Instances.*) and the controller ADS on ubuntu-gm-01."
+      - name: proxmox
+        rules:
+          # Host RAM + root disk are covered by the generic NodeMemoryPressure /
+          # NodeDiskFull rules (no job filter), so only PVE-specific rules here.
+          - alert: PveExporterDown
+            expr: up{job=~"pve-node|pve"} == 0 or absent(up{job="pve-node"}) or absent(up{job="pve"})
+            for: 15m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Proxmox metrics missing ({{ '{{' }} $labels.job {{ '}}' }})"
+              description: "pve-1 exporter unreachable for 15 minutes — host/VM alerts are blind. On pve-1: `systemctl status prometheus-node-exporter prometheus-pve-exporter`; re-run `make pve-monitoring`. Host down? Check the tailnet (`tailscale ping lab`)."
+          - alert: PveGuestDown
+            # Start-on-boot VMs only — templates, the Windows mgmt VM and other
+            # deliberately-off guests have onboot=0 and never page.
+            expr: |
+              (pve_up{job="pve",id=~"qemu/.+"} == 0)
+              and on(id) (pve_onboot_status == 1)
+              unless on(id) (pve_guest_info{template="1"})
+            for: 15m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Proxmox VM {{ '{{' }} $labels.id {{ '}}' }} is stopped"
+              description: "A start-on-boot guest on pve-1 has been down for 15 minutes (name: see pve_guest_info{id=\"{{ '{{' }} $labels.id {{ '}}' }}\"}). `qm status <vmid>` / `qm start <vmid>` on pve-1. Meant to be off? Set its 'Start at boot' to No."
+          - alert: PveMemoryOvercommit
+            # RAM allocated to RUNNING guests vs host RAM. Ballooning is off on
+            # most VMs, so > 100 % means a memory-hungry moment can OOM the host.
+            expr: |
+              sum(pve_memory_size_bytes{job="pve",id=~"qemu/.+"} and on(id) (pve_up == 1))
+                / on() sum(pve_memory_size_bytes{job="pve",id=~"node/.+"}) > 1.0
+            for: 30m
+            labels:
+              severity: warning
+            annotations:
+              summary: "pve-1 RAM overcommitted ({{ '{{' }} $value | humanizePercentage {{ '}}' }} allocated)"
+              description: "Running VMs are allocated more RAM than the host has. Real usage may still be fine (NodeMemoryPressure fires on actual pressure) — trim VM allocations or enable ballooning before adding guests."
+          - alert: PveStorageFilling
+            expr: |
+              (pve_disk_usage_bytes{job="pve",id=~"storage/.+"} / pve_disk_size_bytes{job="pve",id=~"storage/.+"} > 0.85)
+              and pve_disk_size_bytes{job="pve",id=~"storage/.+"} > 0
+            for: 30m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Proxmox storage {{ '{{' }} $labels.id {{ '}}' }} at {{ '{{' }} $value | humanizePercentage {{ '}}' }}"
+              description: "A pve-1 storage pool is over 85 % full. A full LVM-thin pool pauses or corrupts every VM on it — free space (old vzdumps, snapshots) or grow the pool."
+          - alert: PveStorageCritical
+            expr: |
+              (pve_disk_usage_bytes{job="pve",id=~"storage/.+"} / pve_disk_size_bytes{job="pve",id=~"storage/.+"} > 0.95)
+              and pve_disk_size_bytes{job="pve",id=~"storage/.+"} > 0
+            for: 10m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Proxmox storage {{ '{{' }} $labels.id {{ '}}' }} at {{ '{{' }} $value | humanizePercentage {{ '}}' }}"
+              description: "pve-1 storage pool over 95 % — VMs on it are at risk of I/O errors now."
+          # Disk SMART health/wear/errors + temperatures for pve-1 live in the fleet-wide
+          # `hardware` group below (DiskSmartFailed, DiskWearHigh, DiskErrorsIncreasing,
+          # DiskTemperatureHigh, CpuTemperature*) — pve-1's smartmon_* metrics are mapped
+          # onto the same rules as the cluster's smartctl-exporter.
+          - alert: PveSmartDataStale
+            # The smartmon collector is a 15-min systemd timer writing a textfile;
+            # if it stops, the hardware-group disk rules silently go blind for pve-1.
+            expr: time() - node_textfile_mtime_seconds{job="pve-node",file=~".*smartmon.prom"} > 7200
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "pve-1 SMART data is stale"
+              description: "smartmon.prom not updated for 2 h — `systemctl status prometheus-node-exporter-smartmon.timer` on pve-1."
+      - name: hardware
+        rules:
+          # Fleet-wide temperature + disk health (#87). Sources:
+          #   node-exporter (job node-exporter: 4 Pis + minisforum-c; job pve-node: pve-1)
+          #     thermal zones + hwmon (CPU, NVMe, DDR5 SPD, GPU sensors with kernel crit limits)
+          #   smartctl-exporter (job smartctl-exporter, DaemonSet on the amd64 nodes)
+          #   smartmon textfile collector on pve-1 (job pve-node, metric prefix smartmon_*)
+          # The x86 K3s nodes are VMs (QEMU virtual disk, no sensors): their physical disks
+          # are pve-1's SSDs, covered here via smartmon. minisforum-c's sda..sdl are Longhorn
+          # iSCSI virtual disks ("IET VIRTUAL-DISK") — excluded from SMART rules.
+          # 30-day baseline (11-13): Pi CPU ≤ 58 °C, minisforum k10temp ≤ 79.5 °C (GPU/LLM
+          # load), pve-1 cores ≤ 58 °C, NVMe ≤ 45 °C.
+          - alert: CpuTemperatureHigh
+            # Pi 5 / CM5 starts soft-throttling at 80 °C; x86 well below Tjmax (pve-1 Xeon
+            # coretemp max 80/crit 90, Ryzen k10temp Tctl ~95).
+            expr: |
+              max by (instance) (node_thermal_zone_temp{job="node-exporter",type="cpu-thermal"}) > 80
+              or
+              max by (instance) (node_hwmon_temp_celsius and on(instance,chip) node_hwmon_chip_names{chip_name="k10temp"}) > 88
+              or
+              max by (instance) (node_hwmon_temp_celsius and on(instance,chip) node_hwmon_chip_names{chip_name="coretemp"}) > 80
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "{{ '{{' }} $labels.instance {{ '}}' }} CPU at {{ '{{' }} $value | printf \"%.0f\" {{ '}}' }} °C"
+              description: "Sustained high CPU temperature for 10 minutes — the CPU is (or soon will be) throttling. Check fans/airflow/dust and what is loading the node (`kubectl top pods -A --sort-by=cpu`; minisforum-c: Ollama on the GPU heats the case)."
+          - alert: CpuTemperatureCritical
+            # Pi 5 hard-throttles at 85 °C; x86 near Tjmax/crit.
+            expr: |
+              max by (instance) (node_thermal_zone_temp{job="node-exporter",type="cpu-thermal"}) > 85
+              or
+              max by (instance) (node_hwmon_temp_celsius and on(instance,chip) node_hwmon_chip_names{chip_name="k10temp"}) > 94
+              or
+              max by (instance) (node_hwmon_temp_celsius and on(instance,chip) node_hwmon_chip_names{chip_name="coretemp"}) > 87
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "{{ '{{' }} $labels.instance {{ '}}' }} CPU at {{ '{{' }} $value | printf \"%.0f\" {{ '}}' }} °C — critical"
+              description: "CPU at its throttle/shutdown limit for 5 minutes. On a Pi server this stalls etcd fsyncs (lease loss, see etcd alerts). Cool it now: check the fan, then drain workloads off it if it persists."
+          - alert: HardwareTemperatureNearCritical
+            # Every other hwmon sensor that publishes a kernel crit limit: NVMe drives,
+            # DDR5 SPD (spd5118), GPU (nouveau on pve-1). Fires within 5 °C of crit.
+            # CPU chips excluded — the two CpuTemperature rules own them.
+            expr: |
+              (node_hwmon_temp_celsius - on(instance,job,chip,sensor) node_hwmon_temp_crit_celsius > -5)
+              and on(instance,job,chip,sensor) (node_hwmon_temp_crit_celsius > 0)
+              unless on(instance,chip) node_hwmon_chip_names{chip_name=~"k10temp|coretemp|cpu_thermal"}
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "{{ '{{' }} $labels.instance {{ '}}' }} {{ '{{' }} $labels.chip {{ '}}' }}/{{ '{{' }} $labels.sensor {{ '}}' }} at {{ '{{' }} $value | printf \"%+.0f\" {{ '}}' }} °C vs its critical limit"
+              description: "A hardware sensor (NVMe, RAM, GPU…) is about to hit its critical temperature — the device will throttle or shut down. Chip name: node_hwmon_chip_names{instance=\"{{ '{{' }} $labels.instance {{ '}}' }}\",chip=\"{{ '{{' }} $labels.chip {{ '}}' }}\"}."
+          - alert: DiskTemperatureHigh
+            # SATA SSDs on pve-1 (smartmon attr 194/190). NVMe drives are covered by
+            # HardwareTemperatureNearCritical via hwmon crit limits.
+            expr: |
+              max by (instance, disk) (smartmon_temperature_celsius_raw_value or smartmon_airflow_temperature_cel_raw_value) > 60
+            for: 30m
+            labels:
+              severity: warning
+            annotations:
+              summary: "{{ '{{' }} $labels.instance {{ '}}' }} disk {{ '{{' }} $labels.disk {{ '}}' }} at {{ '{{' }} $value {{ '}}' }} °C"
+              description: "SSD above 60 °C for 30 minutes (baseline 21–27 °C) — check the server's fans/airflow."
+          - alert: DiskSmartFailed
+            # Overall SMART health FAILED. Physical disks only.
+            expr: |
+              (smartctl_device_smart_status{job="smartctl-exporter"} == 0
+                and on(instance,device) smartctl_device{model_name!~"IET VIRTUAL-DISK|QEMU.*"})
+              or
+              label_replace(smartmon_device_smart_healthy == 0, "device", "$1", "disk", "/dev/(.+)")
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "{{ '{{' }} $labels.instance {{ '}}' }} disk {{ '{{' }} $labels.device {{ '}}' }} fails SMART health"
+              description: "smartctl reports overall health FAILED — replace the disk. Check `smartctl -a /dev/{{ '{{' }} $labels.device {{ '}}' }}` on the host and that backups are current (Longhorn R2/B2; pve-1: vzdump)."
+          - alert: NvmeCriticalWarning
+            # NVMe critical_warning bitfield: spare below threshold, temperature,
+            # reliability degraded, read-only, volatile-backup failed. Any bit = page.
+            expr: smartctl_device_critical_warning{job="smartctl-exporter"} > 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "{{ '{{' }} $labels.instance {{ '}}' }} {{ '{{' }} $labels.device {{ '}}' }} NVMe critical warning {{ '{{' }} $value {{ '}}' }}"
+              description: "The drive raised its critical_warning flag (bit 0 spare low, 1 temperature, 2 reliability degraded, 3 read-only, 4 backup). `smartctl -a /dev/{{ '{{' }} $labels.device {{ '}}' }}` on the host; plan a replacement."
+          - alert: DiskWearHigh
+            # Remaining endurance < 20 %. NVMe reports percentage_used (0 = new);
+            # pve-1's SATA SSDs report normalised wear-leveling (100 = new).
+            expr: |
+              (100 - smartctl_device_percentage_used{job="smartctl-exporter"}) < 20
+              or
+              label_replace(smartmon_wear_leveling_count_value < 20, "device", "$1", "disk", "/dev/(.+)")
+            for: 1h
+            labels:
+              severity: warning
+            annotations:
+              summary: "{{ '{{' }} $labels.instance {{ '}}' }} SSD {{ '{{' }} $labels.device {{ '}}' }} has {{ '{{' }} $value {{ '}}' }} % endurance left"
+              description: "SSD endurance nearly used up — plan a replacement before it goes read-only."
+          - alert: DiskErrorsIncreasing
+            # NVMe media/data-integrity errors, or SATA reallocated / pending /
+            # offline-uncorrectable sectors growing in the last day.
+            expr: |
+              increase(smartctl_device_media_errors{job="smartctl-exporter"}[1d]) > 0
+              or
+              label_replace(
+                increase(smartmon_reallocated_sector_ct_raw_value[1d]) > 0
+                or smartmon_current_pending_sector_raw_value > 0
+                or smartmon_offline_uncorrectable_raw_value > 0,
+                "device", "$1", "disk", "/dev/(.+)")
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "{{ '{{' }} $labels.instance {{ '}}' }} disk {{ '{{' }} $labels.device {{ '}}' }} is accumulating errors"
+              description: "Media errors / reallocated or pending sectors are appearing — the disk is starting to fail. Check `smartctl -a`, watch the trend, and replace if it keeps rising. (NVMe num_err_log_entries is NOT used: nvme0 on minisforum-c carries 3748 benign entries from unsupported-log probes.)"
+          - alert: SmartctlExporterDown
+            expr: up{job="smartctl-exporter"} == 0 or absent(up{job="smartctl-exporter"})
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "smartctl-exporter down on {{ '{{' }} $labels.instance {{ '}}' }}"
+              description: "Disk SMART metrics missing for 15 minutes — DiskSmartFailed/NvmeCriticalWarning/DiskWearHigh are blind for this node. `kubectl -n monitoring get pods -l app.kubernetes.io/name=prometheus-smartctl-exporter -o wide`."
       - name: watchdog
         rules:
           # Dead-man's-switch. Always firing by design — its job is to be

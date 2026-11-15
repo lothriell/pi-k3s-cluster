@@ -14,7 +14,7 @@
     # Pinned 2026-11-04 (was unpinned = whatever argo/argo-cd is latest): the
     # 10.11.7 digest run would otherwise have jumped straight to 10.12.x =
     # ArgoCD v3.6 (minor). Bump deliberately after reading the upgrade notes.
-    argocd_chart_version: "10.11.7"   # app v3.5.7
+    argocd_chart_version: "10.18.0"   # app v3.6.1 (2026-11-12: 3.5 → 3.6 after reading the upgrade notes)
     argocd_values: "{{ playbook_dir }}/../../k8s/argocd/values-argocd.yml"
     image_updater_values: "{{ playbook_dir }}/../../k8s/argocd/values-image-updater.yml"
 

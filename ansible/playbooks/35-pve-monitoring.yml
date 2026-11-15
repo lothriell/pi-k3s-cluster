@@ -1,0 +1,10 @@
+---
+# Proxmox host metrics (task #87.1): node-exporter + smartmon collector + prometheus-pve-exporter.
+# Scraped by Prometheus jobs pve-node / pve (values-prometheus.yml.j2) over the host's tailnet IP.
+#   make pve-monitoring
+- name: Proxmox host monitoring exporters
+  hosts: proxmox_hosts
+  become: true
+  gather_facts: false
+  roles:
+    - role: ../roles/pve-monitoring

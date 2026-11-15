@@ -97,6 +97,10 @@ harden-server-ssh: ## sshd key-only baseline (role ssh-hardening) on every non-d
 amp-update: ## CubeCoders AMP update on the game servers — controller first, then targets (playbook 33) — optional HOST=<name>
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/33-amp-update.yml $(if $(HOST),--limit $(HOST),)
 
+.PHONY: pve-monitoring
+pve-monitoring: ## Proxmox host exporters — node-exporter + SMART collector + prometheus-pve-exporter (playbook 35, task #87.1)
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/35-pve-monitoring.yml
+
 .PHONY: pve-vzdump
 pve-vzdump: ## Proxmox vzdump of the stateful VMs (wazuh, g-01) to a thin LV on the boot SSD, job defined but off (playbook 34) — ARGS="-e run_now=true" backs up now
 	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/34-pve-vzdump.yml $(ARGS)

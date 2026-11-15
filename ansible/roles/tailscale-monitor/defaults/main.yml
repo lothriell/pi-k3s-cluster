@@ -23,6 +23,7 @@ tailscale_monitor_peers:
   - macminis
   - wazuh-server
   - artemis
+  - lab            # pve-1, the Proxmox host (tailnet HostName 'lab') — #87.1
 
 # Page only after a peer has been offline this long. Keep comfortably above
 # a single reboot cycle so the rolling-upgrade playbook (80-upgrade-packages)

@@ -1,0 +1,18 @@
+---
+# pve-monitoring: metrics for the Proxmox host(s) (task #87.1).
+#   - prometheus-node-exporter (Debian package, :9100) + the -collectors package's
+#     smartmon textfile collector → host CPU/RAM/disk + SSD SMART health/wear
+#   - prometheus-pve-exporter (pip, pinned, own venv, :9221) → per-VM CPU/RAM/disk,
+#     storage pools, guest up/down, from the PVE API
+# The exporter authenticates with an API token of a read-only PVE user
+# (PVEAuditor on /). The token is created ON the host and written straight into
+# the exporter config there — it never leaves the box, so it is not in vault.
+# Delete pve_exporter_config_file to force a new token on the next run.
+pve_exporter_version: "3.11.0"
+pve_exporter_port: 9221
+pve_exporter_venv: /opt/prometheus-pve-exporter
+pve_exporter_config_dir: /etc/prometheus-pve-exporter
+pve_exporter_config_file: "{{ pve_exporter_config_dir }}/pve.yml"
+pve_exporter_system_user: pve-exporter
+pve_exporter_pve_user: prometheus@pve
+pve_exporter_token_name: exporter

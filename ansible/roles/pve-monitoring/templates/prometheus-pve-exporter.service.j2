@@ -1,0 +1,19 @@
+# Managed by Ansible (role pve-monitoring) — task #87.1
+[Unit]
+Description=Prometheus exporter for Proxmox VE
+After=network-online.target pveproxy.service
+Wants=network-online.target
+
+[Service]
+User={{ pve_exporter_system_user }}
+Group={{ pve_exporter_system_user }}
+ExecStart={{ pve_exporter_venv }}/bin/pve_exporter --config.file={{ pve_exporter_config_file }} --web.listen-address=[::]:{{ pve_exporter_port }}
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
